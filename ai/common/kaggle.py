@@ -16,7 +16,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -171,27 +170,28 @@ def wait_for_kernel(
 
 
 def download_output(owner: str, slug: str, credentials: Credentials, destination: Path) -> list:
-    """Fetch a finished kernel's output files."""
+    """Fetch a finished kernel's output files.
+
+    /kernels/output returns per-file signed kaggleusercontent URLs; there
+    is no bulk-download endpoint, and the signed URLs must be fetched
+    without the Authorization header.
+    """
     destination.mkdir(parents=True, exist_ok=True)
-    content = request(
-        "GET",
-        "/kernels/output/download",
-        credentials,
+    listing = request(
+        "GET", "/kernels/output", credentials,
         params={"userName": owner, "kernelSlug": slug},
-        raw=True,
     )
 
-    archive = destination / f"{slug}-output.zip"
-    archive.write_bytes(content)
-
     written = []
-    try:
-        with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(destination)
-            written = bundle.namelist()
-        archive.unlink()
-    except zipfile.BadZipFile:
-        # Some kernels return a single uncompressed file.
-        written = [archive.name]
+    for entry in listing.get("files") or []:
+        name = entry.get("fileName") or entry.get("fileNameNullable")
+        url = entry.get("url") or entry.get("urlNullable")
+        if not name or not url:
+            continue
+
+        req = urllib.request.Request(url, headers={"User-Agent": "ai-document-intelligence/0.1"})
+        with urllib.request.urlopen(req, timeout=600) as response:
+            (destination / name).write_bytes(response.read())
+        written.append(name)
 
     return written
