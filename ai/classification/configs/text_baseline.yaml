@@ -1,0 +1,68 @@
+# Text baseline: TF-IDF over QS-OCR text into a linear classifier.
+#
+# Chosen because it is the only approach in the literature's accuracy
+# tiers that trains to completion on this machine (no GPU, 4 physical
+# cores, ~7 GiB usable RAM), and because it has a directly comparable
+# published number to check against.
+
+model_name: document-classifier
+model_version: 0.1.0
+architecture: tfidf_logistic_regression
+
+dataset:
+  name: qs-ocr-large
+  version: v1.0
+  manifest_dir: ai/classification/data/manifests/qs_ocr
+  # 500/class train, 125/class validation and test. Proven to run
+  # end-to-end; scale up once the lifecycle is validated.
+  per_class: 500
+  seed: 0
+
+preprocessing:
+  # Deliberately conservative. Invoice numbers, dates, amounts, course
+  # codes and document IDs are signal for this task, so numbers and
+  # punctuation are NOT stripped.
+  unicode_normalization: NFKC
+  collapse_whitespace: true
+  lowercase: true
+  # 3.8% of the balanced training subset has no OCR text at all
+  # (26% for "file folder"). These must be handled explicitly, not
+  # silently dropped, or the class distribution shifts underneath us.
+  empty_document_policy: keep_as_empty_string
+
+features:
+  vectorizer: tfidf
+  analyzer: word
+  ngram_range: [1, 2]
+  min_df: 3
+  max_features: 200000
+  sublinear_tf: true
+
+classifier:
+  estimator: logistic_regression
+  # Probabilities are needed for the confidence field and for the
+  # abstention threshold, so a probabilistic estimator is preferred over
+  # a plain hinge-loss SVM here.
+  C: 1.0
+  max_iter: 1000
+  class_weight: balanced
+
+evaluation:
+  # The abstention threshold is fitted on validation, never guessed.
+  select_unknown_threshold_on: validation
+  report_per_class: true
+  confusion_matrix: true
+
+# Published anchors for sanity-checking only - NOT targets to claim.
+# Bag-of-words over Tesseract OCR: 82.23% on the official 40k test split
+# (Dauphinee et al.); the same paper's VGG16 image model: 90.24%.
+# Our numbers are not comparable to these until we train on the full
+# official split - a 500/class subset is a different experiment.
+reference:
+  published_text_bow_accuracy: 0.8223
+  published_image_vgg16_accuracy: 0.9024
+  comparable: false
+  comparability_caveats:
+    - trained on a 500/class subset, not the official 320k train split
+    - evaluated on a 125/class subset, not the official 40k test split
+    - QS-OCR text quality differs from the OCR used in published work

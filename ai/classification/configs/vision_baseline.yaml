@@ -1,0 +1,44 @@
+# Vision baseline: BLOCKED on this machine. Not a design preference -
+# a measured hardware limit.
+#
+#   GPU            : none. Intel UHD Graphics 620 integrated only.
+#                    nvidia-smi absent on host and in container; no
+#                    /dev/dxg, no /dev/nvidia*, no CUDA libraries.
+#                    This is not a Docker passthrough misconfiguration.
+#   CPU            : i5-8350U, 4 physical cores / 8 threads @ 1.7 GHz
+#   RAM            : ~7.1 GiB usable in the container
+#   Image dataset  : 38.76 GB, single tar.gz, no partial download
+#                    (a shardable mirror exists: chainyo/rvl-cdip,
+#                    149 parquet shards, 45.66 GB total)
+#
+# Fine-tuning any pretrained vision model (ResNet / EfficientNet /
+# MobileNet / ViT / DiT) over 320k images on 4 CPU cores is not a
+# long run, it is an infeasible one. This config is therefore a
+# placeholder recording the decision, not a runnable recipe.
+#
+# To unblock, one of:
+#   1. Rent a cloud GPU and run training there, shipping back only the
+#      artifact. The DocumentClassifier contract already isolates the
+#      pipeline from where inference happens.
+#   2. Reduce scope drastically - e.g. MobileNetV3 at low resolution on
+#      a few thousand images - and report it explicitly as a smoke test,
+#      not as an RVL-CDIP benchmark result.
+#
+# Until then the text baseline is the only one that can be honestly
+# trained and evaluated here.
+
+status: blocked
+blocked_reason: no_gpu_available
+model_name: document-classifier-vision
+model_version: null
+
+dataset:
+  name: rvl-cdip
+  images_bytes: 38762320458
+  shardable_mirror: chainyo/rvl-cdip
+
+hardware_required:
+  gpu: true
+  note: >-
+    Revisit only with a CUDA-capable device or a rented GPU instance.
+    Do not attempt CPU fine-tuning on the full split.

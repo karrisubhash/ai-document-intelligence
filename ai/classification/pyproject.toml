@@ -1,0 +1,24 @@
+[project]
+name = "document-classification"
+version = "0.1.0"
+description = "Training and evaluation for document classification. Kept out of Django on purpose."
+requires-python = ">=3.11"
+
+# Batch 1 (datasets, manifests, integrity) is deliberately stdlib-only,
+# so the dataset layer runs anywhere without an ML install.
+dependencies = []
+
+[project.optional-dependencies]
+# Batch 2 - the text baseline. Measured to install in ~166 s / 201 MB.
+text = [
+    "scikit-learn>=1.4",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "joblib>=1.3",
+    "pyyaml>=6.0",
+    "matplotlib>=3.8",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
