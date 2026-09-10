@@ -1,0 +1,17 @@
+.env
+*.pyc
+__pycache__/
+venv/
+.venv/
+db.sqlite3
+media/
+staticfiles/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ML datasets, model artifacts and training runs - reproduced from
+# configs and manifests, never committed.
+ai/classification/data/
+ai/classification/artifacts/
+ai/classification/runs/
