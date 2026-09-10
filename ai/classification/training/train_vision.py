@@ -26,6 +26,15 @@ except ImportError:  # pragma: no cover - vendored path
 
 
 IMAGE_SUFFIXES = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+
+# The image mirrors preserve RVL-CDIP's original imagesX/... paths but
+# none of them ship the official split files. Those are small and live
+# at the canonical source, so they are fetched rather than mirrored -
+# which also keeps the 320k/40k/40k protocol exactly as published.
+OFFICIAL_SPLIT_BASE = (
+    "https://huggingface.co/datasets/aharley/rvl_cdip/resolve/main/data"
+)
+OFFICIAL_SPLIT_FILES = {"train": "train.txt", "validation": "val.txt", "test": "test.txt"}
 SPLIT_FILE_NAMES = {
     "train": ("train.txt", "text_train.txt"),
     "validation": ("val.txt", "validation.txt", "text_val.txt"),
@@ -36,16 +45,81 @@ SPLIT_FILE_NAMES = {
 # --- data discovery ---------------------------------------------------------
 
 
-def find_split_files(root: Path) -> dict:
-    """Locate official split files anywhere under `root`."""
-    found = {}
-    for split, candidates in SPLIT_FILE_NAMES.items():
-        for name in candidates:
-            matches = sorted(root.rglob(name))
-            if matches:
-                found[split] = matches[0]
-                break
+def iter_dirs(root: Path, max_depth: int):
+    """Directories down to `max_depth`, breadth-first.
+
+    Bounded on purpose: an unbounded rglob over a mounted RVL-CDIP
+    mirror walks 400k files and took 23 minutes of a GPU session before
+    training even started.
+    """
+    frontier = [(root, 0)]
+    while frontier:
+        directory, depth = frontier.pop(0)
+        yield directory
+        if depth >= max_depth:
+            continue
+        try:
+            children = sorted(p for p in directory.iterdir() if p.is_dir())
+        except (OSError, PermissionError):
+            continue
+        frontier.extend((child, depth + 1) for child in children)
+
+
+def find_split_files(root: Path, max_depth: int = 3) -> dict:
+    """Locate official split files within a few levels of `root`."""
+    found: dict = {}
+
+    for directory in iter_dirs(root, max_depth):
+        for split, candidates in SPLIT_FILE_NAMES.items():
+            if split in found:
+                continue
+            for name in candidates:
+                candidate = directory / name
+                if candidate.is_file():
+                    found[split] = candidate
+                    break
+        if len(found) == len(SPLIT_FILE_NAMES):
+            break
+
     return found
+
+
+def locate_canonical_images(root: Path, max_depth: int = 4) -> Path | None:
+    """Find the parent of RVL-CDIP's original imagesa/ .. imagesz/ tree.
+
+    Mirrors wrap it differently (images/imagesa/..., rvl-cdip/images/
+    imagesa/...), but if the tree is intact the official split files
+    apply verbatim.
+    """
+    for directory in iter_dirs(root, max_depth):
+        try:
+            names = {child.name for child in directory.iterdir() if child.is_dir()}
+        except (OSError, PermissionError):
+            continue
+        if len({name for name in names if name.startswith("images")}) >= 2:
+            return directory
+    return None
+
+
+def fetch_official_splits(destination: Path) -> dict:
+    import urllib.request
+
+    destination.mkdir(parents=True, exist_ok=True)
+    fetched = {}
+
+    for split, filename in OFFICIAL_SPLIT_FILES.items():
+        target = destination / filename
+        if not target.exists():
+            request = urllib.request.Request(
+                f"{OFFICIAL_SPLIT_BASE}/{filename}",
+                headers={"User-Agent": "ai-document-intelligence/0.1"},
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                target.write_bytes(response.read())
+        fetched[split] = target
+        print(f"  official split {split}: {target.stat().st_size / 1e6:.2f} MB")
+
+    return fetched
 
 
 def normalize_label(name: str) -> str:
@@ -74,7 +148,7 @@ def find_imagefolder_splits(root: Path) -> dict:
     canonical = {normalize_label(label): label for label in LABELS}
     found: dict = {}
 
-    for candidate in [root, *(p for p in root.rglob("*") if p.is_dir())]:
+    for candidate in iter_dirs(root, max_depth=3):
         split_dirs = {
             aliases[normalize_label(child.name)]: child
             for child in candidate.iterdir()
@@ -117,15 +191,16 @@ def load_imagefolder_split(classes: dict, limit_per_class: int | None):
     return items
 
 
-def find_image_root(root: Path, sample_relative: str) -> Path:
-    """Find the directory that `sample_relative` is actually relative to."""
-    if (root / sample_relative).exists():
-        return root
+def find_image_root(root: Path, sample_relative: str, max_depth: int = 4) -> Path:
+    """Find the directory that `sample_relative` is actually relative to.
 
-    head = Path(sample_relative).parts[0]
-    for candidate in sorted(root.rglob(head)):
-        if candidate.is_dir() and (candidate.parent / sample_relative).exists():
-            return candidate.parent
+    Mirrors nest the canonical tree differently - images/imagesa/... or
+    rvl-cdip/images/imagesa/... - so the prefix is discovered rather
+    than assumed.
+    """
+    for directory in iter_dirs(root, max_depth):
+        if (directory / sample_relative).exists():
+            return directory
 
     raise FileNotFoundError(
         f"Could not locate image root for {sample_relative!r} under {root}. "
@@ -164,6 +239,36 @@ def load_split(split_file: Path, image_root: Path, limit_per_class: int | None):
 
 
 # --- training ---------------------------------------------------------------
+
+
+def select_device(torch, *, allow_cpu_fallback: bool = True):
+    """Pick a device that actually works.
+
+    `torch.cuda.is_available()` returns True on a Kaggle P100 even when
+    the preinstalled PyTorch has dropped that compute capability
+    (sm_60), and the failure only surfaces on the first real kernel
+    launch - after the data has loaded. So prove the GPU with a tiny
+    matmul before committing a session to it.
+    """
+    if not torch.cuda.is_available():
+        return torch.device("cpu"), "no CUDA device"
+
+    name = torch.cuda.get_device_name(0)
+    try:
+        probe = torch.zeros(8, 8, device="cuda")
+        (probe @ probe).sum().item()
+        torch.cuda.synchronize()
+        return torch.device("cuda"), name
+    except Exception as exc:
+        capability = ".".join(str(x) for x in torch.cuda.get_device_capability(0))
+        message = (
+            f"{name} (sm_{capability.replace('.', '')}) is unusable with "
+            f"torch {torch.__version__}: {type(exc).__name__}: {str(exc)[:200]}"
+        )
+        if not allow_cpu_fallback:
+            raise SystemExit(f"GPU required but unusable. {message}")
+        print(f"WARNING: {message}\n  falling back to CPU")
+        return torch.device("cpu"), f"CPU fallback ({name} unusable)"
 
 
 def build_model(architecture: str, num_classes: int):
@@ -327,6 +432,11 @@ def main():
         action="store_true",
         help="Tiny run that proves the whole path works before spending GPU hours.",
     )
+    parser.add_argument(
+        "--require-gpu",
+        action="store_true",
+        help="Fail instead of silently falling back to CPU. Use for real runs.",
+    )
     args = parser.parse_args()
 
     if args.smoke:
@@ -334,19 +444,29 @@ def main():
 
     import torch
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device, gpu_note = select_device(torch, allow_cpu_fallback=not args.require_gpu)
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
     print(f"python {platform.python_version()} | torch {torch.__version__}")
-    print(f"device: {device}"
-          f"{' - ' + torch.cuda.get_device_name(0) if device.type == 'cuda' else ''}")
+    print(f"device: {device} - {gpu_note}")
 
     root = Path(args.input_root)
     print(describe_input(root))
 
     eval_limit = None if args.per_class is None else max(1, args.per_class // 4)
     split_files = find_split_files(root)
+    canonical_images = None
+
+    if "train" not in split_files:
+        # No split files shipped - but if the original image tree is
+        # intact, the official ones apply and are worth fetching so the
+        # protocol stays the published 320k/40k/40k.
+        canonical_images = locate_canonical_images(root)
+        if canonical_images is not None:
+            print(f"canonical image tree at {canonical_images}; "
+                  f"fetching official split files")
+            split_files = fetch_official_splits(Path(args.output_dir) / "splits")
 
     if "train" in split_files:
         # Canonical RVL-CDIP: split files plus relative image paths.
@@ -356,7 +476,12 @@ def main():
         first_line = split_files["train"].read_text(
             encoding="utf-8", errors="replace"
         ).splitlines()[0]
-        image_root = find_image_root(root, first_line.rsplit(" ", 1)[0])
+        relative = first_line.rsplit(" ", 1)[0]
+        image_root = (
+            canonical_images
+            if canonical_images is not None and (canonical_images / relative).exists()
+            else find_image_root(root, relative)
+        )
         print(f"image root: {image_root}")
 
         train_items = load_split(split_files["train"], image_root, args.per_class)

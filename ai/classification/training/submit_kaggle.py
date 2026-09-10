@@ -94,13 +94,19 @@ def training_argv(args) -> list:
         argv += ["--per-class", str(args.per_class)]
     if args.smoke:
         argv.append("--smoke")
+    if args.require_gpu:
+        argv.append("--require-gpu")
     return argv
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", default="chan814/rvl-cdip",
-                        help="Kaggle dataset to mount at /kaggle/input.")
+    parser.add_argument("--dataset", action="append", dest="datasets", default=None,
+                        help="Kaggle dataset to mount at /kaggle/input (repeatable). "
+                             "Defaults to a canonical-path image mirror plus the "
+                             "official split files.")
+    parser.add_argument("--require-gpu", action="store_true",
+                        help="Fail rather than fall back to CPU.")
     parser.add_argument("--slug", default="rvlcdip-vision-baseline")
     parser.add_argument("--title", default="RVL-CDIP vision baseline")
     parser.add_argument("--arch", default="resnet50")
@@ -130,6 +136,9 @@ def main():
         return
 
     credentials = load_credentials()
+    # Canonical imagesX/... paths preserved, so the official split files
+    # apply; the kernel fetches those itself over its internet access.
+    datasets = args.datasets or ["ducktard/rvlcdip"]
     metadata = {
         "id": f"{credentials.username}/{args.slug}",
         "title": args.title,
@@ -139,10 +148,12 @@ def main():
         "is_private": True,
         "enable_gpu": True,
         "enable_internet": True,
-        "dataset_sources": [args.dataset],
+        "dataset_sources": datasets,
     }
 
-    print(f"pushing {metadata['id']} (gpu=True, dataset={args.dataset})")
+    print(f"pushing {metadata['id']} (gpu=True)")
+    for dataset in datasets:
+        print(f"  dataset: {dataset}")
     response = push_kernel(metadata, source, credentials)
     print(f"  {response.get('url') or response}")
 
