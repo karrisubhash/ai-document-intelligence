@@ -1,44 +1,82 @@
-# Vision baseline: BLOCKED on this machine. Not a design preference -
-# a measured hardware limit.
+# Vision baseline: trains on Kaggle's free GPU, not on this machine.
 #
-#   GPU            : none. Intel UHD Graphics 620 integrated only.
-#                    nvidia-smi absent on host and in container; no
-#                    /dev/dxg, no /dev/nvidia*, no CUDA libraries.
-#                    This is not a Docker passthrough misconfiguration.
-#   CPU            : i5-8350U, 4 physical cores / 8 threads @ 1.7 GHz
-#   RAM            : ~7.1 GiB usable in the container
-#   Image dataset  : 38.76 GB, single tar.gz, no partial download
-#                    (a shardable mirror exists: chainyo/rvl-cdip,
-#                    149 parquet shards, 45.66 GB total)
+# Local hardware, measured:
+#   GPU  : none. Intel UHD Graphics 620 only; nvidia-smi absent on host
+#          and container, no /dev/dxg, no /dev/nvidia*, no CUDA.
+#   CPU  : i5-8350U, 4 physical cores / 8 threads @ 1.7 GHz
+#   RAM  : ~7.1 GiB usable in the container
 #
-# Fine-tuning any pretrained vision model (ResNet / EfficientNet /
-# MobileNet / ViT / DiT) over 320k images on 4 CPU cores is not a
-# long run, it is an infeasible one. This config is therefore a
-# placeholder recording the decision, not a runnable recipe.
+# So training runs remotely and only the artifact comes back. The
+# DocumentClassifier contract already isolates the Django pipeline from
+# where inference happens, so this changes nothing downstream.
 #
-# To unblock, one of:
-#   1. Rent a cloud GPU and run training there, shipping back only the
-#      artifact. The DocumentClassifier contract already isolates the
-#      pipeline from where inference happens.
-#   2. Reduce scope drastically - e.g. MobileNetV3 at low resolution on
-#      a few thousand images - and report it explicitly as a smoke test,
-#      not as an RVL-CDIP benchmark result.
+#   ai/classification/training/  --submit-->  Kaggle GPU kernel
+#                                                   |
+#                                            model.pt + metrics.json
+#                                                   |
+#                             ai/classification/artifacts/<name>/<version>/
+#                                                   |
+#                                    inference adapter -> Django
 #
-# Until then the text baseline is the only one that can be honestly
-# trained and evaluated here.
+# Run it:
+#   python -m ai.classification.training.submit_kaggle --smoke   # cheap proof
+#   python -m ai.classification.training.submit_kaggle --epochs 5
+#
+# Needs KAGGLE_USERNAME + KAGGLE_KEY, or ~/.kaggle/kaggle.json.
 
-status: blocked
-blocked_reason: no_gpu_available
+status: ready_untrained
 model_name: document-classifier-vision
-model_version: null
+model_version: 0.1.0
+architecture: resnet50
+
+# ImageNet-pretrained ResNet-50 fine-tuned, rather than a CNN from
+# scratch or a document transformer. It is the first baseline because it
+# trains in a single Kaggle session and sits next to a published anchor
+# (VGG16 at 90.24% on the official split, from the same paper as our
+# 82.23% text anchor). DiT/LayoutLMv3 score higher and are the sensible
+# second step, not the first.
+compute:
+  provider: kaggle
+  accelerator: gpu
+  session_limit_hours: 12
+  weekly_quota_hours: 30
 
 dataset:
-  name: rvl-cdip
-  images_bytes: 38762320458
-  shardable_mirror: chainyo/rvl-cdip
+  # Community re-uploads: convenient, but licence metadata is mostly
+  # "Unknown" and the internal layout is NOT verified from here. The
+  # training script therefore discovers the layout at runtime and fails
+  # loudly rather than assuming a structure.
+  kaggle_ref: chan814/rvl-cdip
+  size_bytes: 38762871002
+  alternatives:
+    - shregar/doc-rvl-cdip-full     # 38.81 GB
+    - uditamin/rvl-cdip-small       # 4.66 GB, faster first pass
+    - gowtamsingulur/rvlcdip        # 4.66 GB, CC0
+  canonical_source: https://huggingface.co/datasets/aharley/rvl_cdip
+  licence_note: >-
+    RVL-CDIP derives from IIT-CDIP / the UCSF Industry Documents Library.
+    Verify the mirror's provenance before any redistribution.
 
-hardware_required:
-  gpu: true
-  note: >-
-    Revisit only with a CUDA-capable device or a rented GPU instance.
-    Do not attempt CPU fine-tuning on the full split.
+training:
+  epochs: 5
+  batch_size: 64
+  image_size: 224
+  learning_rate: 0.0003
+  optimizer: adamw
+  scheduler: cosine
+  mixed_precision: true
+  # Scans are grayscale; replicated to 3 channels so ImageNet weights
+  # stay usable rather than retraining the stem.
+  grayscale_to_rgb: true
+
+evaluation:
+  report_per_class: true
+  confusion_matrix: true
+  measure_inference_latency: true
+
+reference:
+  published_image_vgg16_accuracy: 0.9024
+  published_dit_large_accuracy: 0.9269
+  # A subset or smoke run is a different experiment and is flagged
+  # comparable=false in the emitted metadata automatically.
+  comparable: false

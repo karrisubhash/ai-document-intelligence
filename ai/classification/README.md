@@ -44,6 +44,36 @@ loosely-related subsets.
 RVL-CDIP's split files are small and fetched separately, so manifests
 can be built and inspected without downloading 38.76 GB of images.
 
+## Training on Kaggle GPU
+
+There is no GPU on this machine, so vision training runs remotely and
+only the artifact comes back. Kaggle takes one source file per kernel,
+so the submitter vendors the shared modules into a single script at
+submit time — one source of truth, no notebook drifting out of sync.
+
+```bash
+# One-off: credentials from https://www.kaggle.com/settings -> API
+export KAGGLE_USERNAME=... KAGGLE_KEY=...      # or ~/.kaggle/kaggle.json
+
+# Inspect exactly what would be sent, without pushing
+python -m ai.classification.training.submit_kaggle --smoke --dry-run
+
+# Cheap proof the whole path works (1 epoch, 20 images/class)
+python -m ai.classification.training.submit_kaggle --smoke
+
+# Real run
+python -m ai.classification.training.submit_kaggle --epochs 5
+```
+
+The submitter pushes, polls to completion, and downloads `model.pt`,
+`metrics.json`, `metadata.json` and `labels.json` into
+`artifacts/<model-name>/v<version>/`.
+
+Kaggle's RVL-CDIP datasets are community re-uploads whose layout is not
+verified from here, so `train_vision.py` discovers the split files and
+image root at runtime and fails with a directory listing rather than a
+`FileNotFoundError` deep in a dataloader.
+
 ## Measured facts
 
 Established by running commands on this machine, not assumed:
