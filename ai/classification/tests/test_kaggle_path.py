@@ -96,6 +96,83 @@ class LayoutDiscoveryTests(unittest.TestCase):
         self.assertIn("images", described)
 
 
+class ImageFolderLayoutTests(unittest.TestCase):
+    """The Kaggle mirrors ship <split>/<class>/<image> and no split files.
+
+    Layout replicated from the real listing of chan814/rvl-cdip:
+        RVL_Classification/train/advertisement/0000000466.tif
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def build(self, splits=("train", "test"), class_names=None, wrapper="RVL_Classification"):
+        class_names = class_names or ["advertisement", "letter", "scientific_report"]
+        base = self.root / wrapper if wrapper else self.root
+        for split in splits:
+            for name in class_names:
+                directory = base / split / name
+                directory.mkdir(parents=True, exist_ok=True)
+                for i in range(4):
+                    (directory / f"{i:010d}.tif").write_bytes(b"\x00")
+        return base
+
+    def test_finds_splits_and_classes(self):
+        self.build()
+        found = train_vision.find_imagefolder_splits(self.root)
+
+        self.assertEqual(sorted(found), ["test", "train"])
+        self.assertIn("advertisement", found["train"])
+
+    def test_underscored_directory_names_map_to_schema_labels(self):
+        self.build(class_names=["scientific_report", "file_folder", "news_article"])
+        found = train_vision.find_imagefolder_splits(self.root)
+
+        self.assertEqual(
+            sorted(found["train"]),
+            ["file folder", "news article", "scientific report"],
+        )
+
+    def test_val_is_normalised_to_validation(self):
+        self.build(splits=("train", "val", "test"))
+        found = train_vision.find_imagefolder_splits(self.root)
+
+        self.assertIn("validation", found)
+
+    def test_loads_items_with_correct_label_indices(self):
+        from ai.classification.datasets.base import LABELS
+
+        self.build(class_names=["letter", "advertisement"])
+        found = train_vision.find_imagefolder_splits(self.root)
+        items = train_vision.load_imagefolder_split(found["train"], None)
+
+        self.assertEqual(len(items), 8)
+        labels = {label for _, label in items}
+        self.assertEqual(
+            labels, {LABELS.index("letter"), LABELS.index("advertisement")}
+        )
+
+    def test_per_class_cap_applies(self):
+        self.build()
+        found = train_vision.find_imagefolder_splits(self.root)
+        items = train_vision.load_imagefolder_split(found["train"], 2)
+
+        self.assertEqual(len(items), 6)  # 3 classes x 2
+
+    def test_directories_outside_the_schema_are_ignored(self):
+        base = self.build()
+        (base / "train" / "not_a_document_class").mkdir()
+        found = train_vision.find_imagefolder_splits(self.root)
+
+        self.assertNotIn("not a document class", found["train"])
+
+    def test_no_layout_at_all_returns_empty(self):
+        (self.root / "random").mkdir()
+        self.assertEqual(train_vision.find_imagefolder_splits(self.root), {})
+
+
 class KernelAssemblyTests(unittest.TestCase):
     def test_assembled_kernel_is_self_contained(self):
         source = submit_kaggle.build_kernel_source(["--smoke"])

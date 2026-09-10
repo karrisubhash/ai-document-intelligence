@@ -48,6 +48,75 @@ def find_split_files(root: Path) -> dict:
     return found
 
 
+def normalize_label(name: str) -> str:
+    """Map a directory name onto a canonical label.
+
+    Mirrors use scientific_report / file-folder / NewsArticle for what
+    the label schema calls "scientific report". Matching on a normalized
+    form avoids hard-coding one mirror's spelling.
+    """
+    cleaned = name.strip().lower().replace("_", " ").replace("-", " ")
+    return " ".join(cleaned.split())
+
+
+def find_imagefolder_splits(root: Path) -> dict:
+    """Locate <split>/<class>/<image> layouts, as used by the Kaggle
+    mirrors, which ship no split files."""
+    aliases = {
+        "train": "train",
+        "training": "train",
+        "val": "validation",
+        "valid": "validation",
+        "validation": "validation",
+        "test": "test",
+        "testing": "test",
+    }
+    canonical = {normalize_label(label): label for label in LABELS}
+    found: dict = {}
+
+    for candidate in [root, *(p for p in root.rglob("*") if p.is_dir())]:
+        split_dirs = {
+            aliases[normalize_label(child.name)]: child
+            for child in candidate.iterdir()
+            if child.is_dir() and normalize_label(child.name) in aliases
+        }
+        if not split_dirs:
+            continue
+
+        # Only accept it if the split directories really contain class
+        # folders from our schema.
+        for split, directory in split_dirs.items():
+            classes = {
+                canonical[normalize_label(sub.name)]: sub
+                for sub in directory.iterdir()
+                if sub.is_dir() and normalize_label(sub.name) in canonical
+            }
+            if len(classes) >= 2:
+                found[split] = classes
+
+        if found:
+            return found
+
+    return found
+
+
+def load_imagefolder_split(classes: dict, limit_per_class: int | None):
+    index = {label: i for i, label in enumerate(LABELS)}
+    items = []
+
+    for label, directory in sorted(classes.items()):
+        files = sorted(
+            path
+            for path in directory.iterdir()
+            if path.suffix.lower() in IMAGE_SUFFIXES
+        )
+        if limit_per_class is not None:
+            files = files[:limit_per_class]
+        items.extend((path, index[label]) for path in files)
+
+    return items
+
+
 def find_image_root(root: Path, sample_relative: str) -> Path:
     """Find the directory that `sample_relative` is actually relative to."""
     if (root / sample_relative).exists():
@@ -276,27 +345,53 @@ def main():
     root = Path(args.input_root)
     print(describe_input(root))
 
-    split_files = find_split_files(root)
-    if "train" not in split_files or "test" not in split_files:
-        raise SystemExit(
-            f"Could not find split files under {root}. Found: {split_files}. "
-            f"Attach a dataset that ships train.txt/val.txt/test.txt."
-        )
-    print(f"split files: { {k: str(v) for k, v in split_files.items()} }")
-
-    first_line = split_files["train"].read_text(
-        encoding="utf-8", errors="replace"
-    ).splitlines()[0]
-    image_root = find_image_root(root, first_line.rsplit(" ", 1)[0])
-    print(f"image root: {image_root}")
-
-    train_items = load_split(split_files["train"], image_root, args.per_class)
     eval_limit = None if args.per_class is None else max(1, args.per_class // 4)
-    eval_items = {
-        name: load_split(split_files[name], image_root, eval_limit)
-        for name in ("validation", "test")
-        if name in split_files
-    }
+    split_files = find_split_files(root)
+
+    if "train" in split_files:
+        # Canonical RVL-CDIP: split files plus relative image paths.
+        layout = "split_files"
+        print(f"layout: split files { {k: str(v) for k, v in split_files.items()} }")
+
+        first_line = split_files["train"].read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()[0]
+        image_root = find_image_root(root, first_line.rsplit(" ", 1)[0])
+        print(f"image root: {image_root}")
+
+        train_items = load_split(split_files["train"], image_root, args.per_class)
+        eval_items = {
+            name: load_split(split_files[name], image_root, eval_limit)
+            for name in ("validation", "test")
+            if name in split_files
+        }
+    else:
+        # Kaggle mirrors ship <split>/<class>/<image> instead.
+        folders = find_imagefolder_splits(root)
+        if "train" not in folders:
+            raise SystemExit(
+                f"Could not find either split files or a <split>/<class>/ layout "
+                f"under {root}. Found splits: {sorted(folders)}.\n{describe_input(root)}"
+            )
+
+        layout = "imagefolder"
+        print(f"layout: imagefolder, splits={sorted(folders)}, "
+              f"train classes={len(folders['train'])}")
+
+        train_items = load_imagefolder_split(folders["train"], args.per_class)
+        eval_items = {
+            name: load_imagefolder_split(folders[name], eval_limit)
+            for name in ("validation", "test")
+            if name in folders
+        }
+
+    if not train_items:
+        raise SystemExit(f"No training images found under {root}.")
+    if not eval_items:
+        raise SystemExit(
+            "No validation or test split found - refusing to train a model "
+            "that cannot be evaluated."
+        )
     print(f"train {len(train_items)} | "
           f"{ {k: len(v) for k, v in eval_items.items()} }")
 
@@ -360,6 +455,7 @@ def main():
         "learning_rate": args.lr,
         "per_class_cap": args.per_class,
         "smoke_run": args.smoke,
+        "dataset_layout": layout,
         "train_samples": len(train_items),
         "eval_samples": {k: len(v) for k, v in eval_items.items()},
         "training_seconds": round(training_seconds, 1),

@@ -35,6 +35,12 @@ class CredentialsMissing(KaggleError):
     pass
 
 
+# Newer Kaggle tokens are bearer tokens and are rejected by basic auth;
+# classic kaggle.json keys still use username:key basic. Detected by
+# prefix so both keep working.
+BEARER_PREFIX = "KGAT_"
+
+
 @dataclass(frozen=True)
 class Credentials:
     username: str
@@ -42,6 +48,8 @@ class Credentials:
 
     @property
     def header(self) -> str:
+        if self.key.startswith(BEARER_PREFIX):
+            return f"Bearer {self.key}"
         token = base64.b64encode(f"{self.username}:{self.key}".encode()).decode()
         return f"Basic {token}"
 
@@ -107,10 +115,11 @@ def push_kernel(metadata: dict, source: str, credentials: Credentials) -> dict:
     `source` is the notebook/script body; Kaggle takes it inline, so no
     file upload dance is required.
     """
+    # `id` is a numeric kernel id used only when updating by id; new or
+    # slug-addressed kernels use `slug` plus `newTitle`.
     payload = {
-        "id": f"{credentials.username}/{metadata['id'].split('/')[-1]}",
-        "title": metadata["title"],
-        "codeFile": metadata.get("code_file", "main.py"),
+        "slug": f"{credentials.username}/{metadata['id'].split('/')[-1]}",
+        "newTitle": metadata["title"],
         "language": metadata.get("language", "python"),
         "kernelType": metadata.get("kernel_type", "script"),
         "isPrivate": metadata.get("is_private", True),
@@ -119,6 +128,7 @@ def push_kernel(metadata: dict, source: str, credentials: Credentials) -> dict:
         "datasetDataSources": metadata.get("dataset_sources", []),
         "kernelDataSources": metadata.get("kernel_sources", []),
         "competitionDataSources": metadata.get("competition_sources", []),
+        "categoryIds": metadata.get("category_ids", []),
         "text": source,
     }
     return request("POST", "/kernels/push", credentials, payload=payload)
