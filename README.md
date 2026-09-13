@@ -45,7 +45,10 @@ for** and **what is actually built today**, and never conflates the two.
 | Table detection + table-aware retrieval | 11.3 | ✅ Built — span-verified cells, columns travel with the rows |
 | Figures located (not described) | 11.3 | ✅ Built — an abstention that says which page to look at |
 | Multi-part question planning | 12 | ✅ Built — 4-part questions went from a flat abstention to 4 of 4 |
-| Object storage (S3), Prometheus/Grafana deployment, product frontend | 15, 20, 26 | ⬜ Not started |
+| Object storage (S3-compatible) | 15 | ✅ Built — opt-in; the pipeline is storage-agnostic either way |
+| Prometheus + Grafana, multiprocess metrics | 20 | ✅ Built — `/metrics` now aggregates across gunicorn workers |
+| Governed evaluation dataset + regression gate | 19 | ✅ Built — 13 cases, a committed baseline, and it can fail |
+| Product frontend (Next.js), FastAPI AI services | 26 | ⬜ Not started |
 
 `infrastructure/` holds the nginx and deployment configuration; `docs/` and `tests/` are
 still placeholders. `frontend/` holds the testing console, not the product frontend §26 describes.
@@ -688,6 +691,66 @@ python manage.py evaluate --dataset institutional-qa --as-user alice     --compa
 | Citations | citation accuracy, source coverage |
 | System | latency mean / p50 / p95 / max |
 
+### The regression gate (§19.2)
+
+```bash
+python manage.py seed_evaluation          # ingest the corpus, resolve the benchmark
+python manage.py evaluate --load evaluation/benchmark.json \
+  --dataset institutional-seed --dataset-version v1 \
+  --as-user ci-evaluator \
+  --baseline evaluation/baseline.json --fail-on-regression
+```
+
+**This gate could not fail, for two separate reasons.** The first was known: no dataset
+existed, so the CI step skipped. The second was not, and it would have survived fixing the
+first — `--fail-on-regression` only does anything alongside `--compare-to <run id>`, and a
+fresh CI database has no previous run. The job would have run the benchmark and passed
+whatever the scores were. A gate that cannot fail is worse than no gate: it occupies the
+slot, and everyone downstream believes quality is being checked.
+
+So the comparison is now against a **committed baseline file**, and the baseline records the
+configuration beside the scores — a baseline set with a semantic embedder is not a baseline
+for a lexical one.
+
+**Why the benchmark is generated, not committed.** Cases name `relevant_documents`, and those
+are database ids. A committed benchmark with hardcoded ids would score retrieval against rows
+a fresh database does not have and report a confident zero. What is governed is
+`benchmark.template.json`, which refers to documents by slug (`@fee-structure`);
+`seed_evaluation` ingests the corpus **through the real pipeline** — so the score covers
+extraction, chunking, table detection and retrieval as configured — and substitutes the ids
+it created. Document ids stay stable across re-seeds, because a dataset is immutable once
+loaded and a recreated corpus would leave it pointing at rows that no longer exist.
+
+Current baseline, lexical retrieval and the extractive answerer:
+
+| | |
+|---|---|
+| recall@1, MRR, MAP | 1.0 |
+| groundedness | 0.9704 |
+| citation accuracy | 0.9444 |
+| abstention accuracy | 0.9231 |
+| coverage | 0.6923 |
+| false abstentions | **1** |
+| missed abstentions | 0 |
+
+**The benchmark earned its keep on the first run** by finding that false abstention:
+*"What is the deadline for applying for revaluation?"* The clause says "within 15 days of the
+publication of results" — `deadline` appears nowhere in it, and no stemmer unifies
+`applying` with `application`, so one query term of three matches: 0.33 coverage against a
+0.34 floor. Retrieval finds the right document; the answerer will not quote from it.
+
+That case is **kept and documented rather than fixed**, because the fix would be to lower a
+threshold until the benchmark passes, which is fitting the system to the exam. It is the
+lexical-matching limit this README already describes, and it is exactly what a real semantic
+embedding model would resolve — so leaving it in means that improvement will register as
+one.
+
+**Latency is excluded from the gate by default.** Found by proving the gate could fail:
+inflating one quality metric in the baseline correctly failed the run — and so did four
+latency metrics, on an otherwise identical system, because wall-clock timing differs every
+run. A gate that fails every time gets disabled, taking the real check with it. Latency
+still lands in the run record and on the dashboard; `--gate-latency` opts back in.
+
 ### Choices that keep the numbers honest
 
 **Evaluation runs through `rag.ask`, not a parallel path.** An evaluation that reimplements
@@ -754,15 +817,43 @@ Every response carries `X-Request-ID`; a caller-supplied one is adopted, but san
 first — the header lands in JSON lines other tools parse, so a caller must not be able to
 smuggle quotes or newlines into them.
 
-### Metrics are per process — a real limitation
+### Monitoring stack (§20)
 
-`prometheus_client` keeps one registry per process. The API and the Celery worker are
-separate processes, so `/metrics` served by the API shows **API** counters, while pipeline
-counters live in the worker. A complete picture needs a scrape target per process or
-multiprocess mode with a shared directory.
+Prometheus and Grafana are part of the production overlay. Grafana is bound to **loopback
+only** — a Grafana on the open internet with a default password is a bigger hole than
+anything it monitors:
 
-The structured logs have no such split — every process writes the same JSON lines to
-stdout, so pipeline telemetry is fully observable there today.
+```bash
+ssh -L 3000:localhost:3000 <host>     # then http://localhost:3000
+```
+
+Prometheus discovers backend replicas by **DNS**, not a static host list, so
+`--scale backend=3` is picked up without editing anything. A static target would resolve to
+whichever container the resolver felt like and silently monitor a third of the fleet.
+
+### `/metrics` under gunicorn
+
+`prometheus_client` keeps one registry per process, and gunicorn runs several. A scrape was
+answered by whichever worker accepted the connection and reported roughly **1/N** of the
+traffic. That is not noise — it is wrong in the flattering direction: every error count and
+latency read low while nothing appeared broken.
+
+`PROMETHEUS_MULTIPROC_DIR` makes each worker write its samples to a shared directory that the
+scrape aggregates across. Two hooks in
+[`backend/gunicorn.conf.py`](backend/gunicorn.conf.py) keep that correct over time, and both
+are easy to omit:
+
+- **dead workers are reaped** (`child_exit`), or a worker recycled by `--max-requests` leaves
+  its counters behind forever and its traffic is counted twice;
+- **the directory starts empty** (`on_starting`), or a restarted container serves the
+  previous run's samples — including counters for a build no longer deployed.
+
+Proven with real subprocesses rather than mocks, since process boundaries are the entire
+point: two processes incrementing by 3 and 4 produce **7**, not 3 or 4.
+
+The Celery workers are a different matter and deliberately so — they are separate
+*containers*, and the right answer there is a scrape target per container, which is what
+Prometheus already does. Their pipeline telemetry is also on stdout as structured JSON.
 
 ### Label cardinality is bounded on purpose
 
@@ -847,6 +938,38 @@ parsing `docker compose config` — Compose's own merge, not a reimplementation 
 It was verified by reverting the fix and confirming it fails. It runs in CI after the image
 build.
 
+### Object storage (§15)
+
+```bash
+pip install -r backend/requirements-s3.txt
+export AWS_STORAGE_BUCKET_NAME=adi-documents      # switches every FileField
+export AWS_S3_ENDPOINT_URL=https://minio.internal # for MinIO or Ceph; omit for AWS
+```
+
+Local disk is the default and is genuinely sufficient for one node. It stops being
+sufficient the moment there are two: `--scale backend=3` writes an upload to whichever
+container answered the request, and the other two — and every worker — get a
+`FileNotFoundError` for a document that plainly exists.
+
+**The blocker was not configuration, it was a single line.** `run_pipeline` read
+`document_version.file.path`, and `Storage.path()` raises `NotImplementedError` on S3, GCS,
+Azure and every other remote backend. So the platform could not be pointed at object storage
+*at all*, however it was configured: the first stage raised before any document was looked
+at, and §15's "S3-compatible object storage" was unreachable from the code rather than
+merely unconfigured.
+
+Every extractor genuinely needs a filesystem path — poppler, tesseract and python-docx are
+subprocesses, not Python file objects — so the fix is not to abstract that away.
+[`documents/storage.py`](backend/documents/storage.py) materializes the object **once per
+job**: on local storage it hands back the real path and copies nothing; on a remote one it
+streams the object to a temporary file and deletes it afterwards, including when a stage
+raises. A pipeline that fails mid-OCR must not leave a confidential document in `/tmp`.
+
+Tested against a storage that refuses `path()` — which is what S3 is — so the seam is
+proven without a bucket, credentials or a network. One of those tests asserts the object is
+fetched **once**, not once per stage; it is also what caught the first version of these tests
+passing vacuously, because `run_pipeline` re-fetches the job and rebuilt the default storage.
+
 ### Backups (§21.3)
 
 ```bash
@@ -889,9 +1012,8 @@ checks for a 200 cannot tell a working deploy from one with authentication switc
 
 **This workflow has never executed.** Its YAML is validated and its commands mirror what the
 local stack runs, but GitHub Actions cannot run in this environment. Treat the first real
-run as the test. The AI-regression job is wired to `--fail-on-regression` but skips until a
-governed `evaluation/benchmark.json` exists — inventing one would produce a number that
-looks like a quality gate and is not.
+run as the test. The AI-regression job seeds the corpus and gates on a committed baseline
+— see [the regression gate](#the-regression-gate-192).
 
 ---
 
@@ -1308,10 +1430,11 @@ point for a 16-class problem whose interesting failures are the small, low-text 
 ## Testing
 
 ```bash
-# Backend: 570 tests across documents, ingestion, classification, field
+# Backend: 602 tests across documents, ingestion, classification, field
 #          extraction, DOCX, search, RAG, tables, figures, agents,
-#          storage, security, evaluation, observability, scale,
-#          backup, regressions and accounts
+#          storage, object storage, security, evaluation gate,
+#          observability, multiprocess metrics, scale, backup,
+#          regressions and accounts
 cd backend
 python manage.py test
 
@@ -1347,9 +1470,12 @@ end-to-end, load, security and AI-regression suites in §23 arrive with the phas
 Also in use: **Nginx** (TLS termination and load balancing, `docker-compose.prod.yml`)
 and **GitHub Actions** (`.github/workflows/ci.yml`, written but never executed).
 
-Still planned per specification: S3-compatible object storage, FastAPI for AI services, a
-Next.js product frontend, Prometheus + Grafana, OpenTelemetry. (pgvector is in use; the
-React console above is a testing tool, not that product frontend.)
+Also in use: **S3-compatible object storage** (opt-in, `AWS_STORAGE_BUCKET_NAME`) and
+**Prometheus + Grafana** in the production overlay.
+
+Still planned per specification: FastAPI for AI services, a Next.js product frontend, and
+OpenTelemetry tracing. (pgvector is in use; the React console above is a testing tool, not
+that product frontend.)
 
 LLM and embedding providers remain model-agnostic by design — provider clients are to be
 isolated behind gateway interfaces so models stay replaceable (§26).
@@ -1366,8 +1492,9 @@ not the same as "complete", and three items inside them are **not built**:
   retrieval and no chart understanding.
 - **Phase 9 lists traces.** There are correlation ids on every log line and no tracing
   backend, no spans and no OpenTelemetry.
-- **Phase 8's regression gate has never scored real data**, because no governed benchmark
-  dataset exists. The harness is built and wired into CI; it skips.
+- **Phase 8's benchmark is synthetic.** The regression gate now runs and can fail, over a
+  governed 13-case dataset — but the corpus is five documents written for it. A score there
+  says the pipeline works, not that it works on your regulations.
 
 What each phase does **not** claim is stated in its own section rather than left to be
 discovered.
