@@ -18,3 +18,8 @@ ai/classification/runs/
 
 # Database dumps. Never committed: they contain every document.
 backups/
+
+# Resolved from evaluation/benchmark.template.json by `manage.py
+# seed_evaluation`. Its document ids are specific to one database, so it is
+# a build artifact - the TEMPLATE and the BASELINE are what is governed.
+evaluation/benchmark.json

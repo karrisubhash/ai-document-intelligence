@@ -1,0 +1,11 @@
+FEE STRUCTURE 2024-25
+Institute of Technology - Office of the Bursar
+
+Programme	Tuition	Exam Fee	Hostel
+B.Tech CSE	85000	2500	60000
+B.Tech ECE	82000	2500	60000
+B.Tech MECH	78000	2500	58000
+M.Tech CSE	95000	3000	60000
+
+All fees are payable before the last working day of July. A late payment
+surcharge of 500 rupees per week applies after that date.

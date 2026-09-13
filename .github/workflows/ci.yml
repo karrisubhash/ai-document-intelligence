@@ -202,19 +202,27 @@ jobs:
       # The harness, the metrics and --fail-on-regression are all built and
       # tested; what is missing is a dataset, and inventing one here would
       # produce a number that looks like a quality gate and is not.
-      - name: Evaluate against the benchmark
+      # The corpus is ingested through the REAL pipeline, so the benchmark
+      # scores extraction, chunking, table detection and retrieval as they
+      # are actually configured - not a fixture inserted straight into the
+      # database. It also resolves benchmark.template.json into document
+      # ids, which cannot be committed because a fresh database has none.
+      - name: Seed the evaluation corpus
+        run: python backend/manage.py seed_evaluation
+
+      # --baseline, not --compare-to. --compare-to takes a RUN ID, and a
+      # fresh CI database has no previous run - so the gate ran the
+      # benchmark and could never fail, whatever the scores were.
+      - name: Evaluate against the committed baseline
         run: |
-          if [ -f evaluation/benchmark.json ]; then
-            python backend/manage.py evaluate \
-              --load evaluation/benchmark.json \
-              --dataset "$(python -c 'import json;print(json.load(open("evaluation/benchmark.json"))["name"])')" \
-              --as-user ci-evaluator \
-              --label "${GITHUB_SHA::7}" \
-              --fail-on-regression
-          else
-            echo "No evaluation/benchmark.json - skipping."
-            echo "The harness is built; it needs a governed dataset to score."
-          fi
+          python backend/manage.py evaluate \
+            --load evaluation/benchmark.json \
+            --dataset institutional-seed \
+            --dataset-version v1 \
+            --as-user ci-evaluator \
+            --label "${GITHUB_SHA::7}" \
+            --baseline evaluation/baseline.json \
+            --fail-on-regression
         env:
           DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
 

@@ -1,8 +1,16 @@
+import json
+from pathlib import Path
+
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from documents import evaluation
 from documents.models import EvaluationDataset, EvaluationRun
+
+
+def _without_system(metrics: dict) -> dict:
+    """Everything except the environment-dependent timings."""
+    return {key: value for key, value in metrics.items() if key != "system"}
 
 
 class Command(BaseCommand):
@@ -36,6 +44,39 @@ class Command(BaseCommand):
             "--fail-on-regression",
             action="store_true",
             help="Exit non-zero if any metric dropped. For CI.",
+        )
+        parser.add_argument(
+            "--baseline",
+            help=(
+                "Path to a committed baseline metrics file to compare "
+                "against. Use this in CI: --compare-to needs a run id, and a "
+                "fresh database has no previous run, so a pipeline using it "
+                "runs the benchmark and can never fail."
+            ),
+        )
+        parser.add_argument(
+            "--write-baseline",
+            help="Write this run's metrics to a file, to be committed.",
+        )
+        parser.add_argument(
+            "--gate-latency",
+            action="store_true",
+            help=(
+                "Also treat a latency increase as a regression. Off by "
+                "default: wall-clock timings differ on every run and "
+                "between machines, so gating on them makes the check fail "
+                "permanently while saying nothing about quality."
+            ),
+        )
+        parser.add_argument(
+            "--tolerance",
+            type=float,
+            default=0.0,
+            help=(
+                "Metric movement smaller than this is not a regression. "
+                "Defaults to 0: with a fixed dataset and a deterministic "
+                "pipeline, any movement is a real change."
+            ),
         )
 
     def handle(self, *args, **options):
@@ -77,6 +118,12 @@ class Command(BaseCommand):
 
         self._print_run(run)
 
+        if options["write_baseline"]:
+            self._write_baseline(run, Path(options["write_baseline"]))
+
+        if options["baseline"]:
+            self._compare_to_file(run, Path(options["baseline"]), options)
+
         if options["compare_to"]:
             baseline = EvaluationRun.objects.filter(id=options["compare_to"]).first()
             if baseline is None:
@@ -89,6 +136,87 @@ class Command(BaseCommand):
                     f"{len(report['regressions'])} metric(s) regressed against "
                     f"run {baseline.id}"
                 )
+
+    def _write_baseline(self, run, path):
+        """Record this run's metrics as the number to beat.
+
+        Configuration is recorded alongside them, because a score is only
+        comparable against another score produced the same way - a baseline
+        set with a semantic embedder is not a baseline for a lexical one.
+        """
+        payload = {
+            "dataset": run.dataset.name,
+            "dataset_version": run.dataset.version,
+            "configuration": run.configuration,
+            "metrics": run.metrics,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        self.stdout.write(self.style.SUCCESS(f"\nWrote baseline to {path}"))
+
+    def _compare_to_file(self, run, path, options):
+        """Compare against a committed baseline rather than a previous run."""
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise CommandError(
+                f"No baseline at {path}. Create one with --write-baseline "
+                f"once the current scores have been reviewed."
+            ) from exc
+        except json.JSONDecodeError as exc:
+            raise CommandError(f"{path} is not valid JSON: {exc}") from exc
+
+        if payload.get("dataset") != run.dataset.name or payload.get(
+            "dataset_version"
+        ) != run.dataset.version:
+            raise CommandError(
+                f"Baseline is for {payload.get('dataset')} "
+                f"{payload.get('dataset_version')}, this run is "
+                f"{run.dataset.name} {run.dataset.version}. Comparing scores "
+                f"from different benchmarks is comparing different exams."
+            )
+
+        # Latency is dropped from the comparison unless asked for.
+        #
+        # Found by proving this gate could fail: inflating one quality
+        # metric in the baseline correctly failed the run - and so did
+        # FOUR latency metrics, on an otherwise identical system, because
+        # wall-clock timing differs on every run. A gate that fails every
+        # time fails to be a gate; it gets disabled, and the quality
+        # regression it was built for goes through with it.
+        #
+        # Latency still belongs on the dashboard (§20) and in the run
+        # record. It just cannot be a pass/fail signal when the baseline
+        # was measured on different hardware from the candidate.
+        baseline_metrics = payload.get("metrics", {})
+        candidate_metrics = run.metrics
+
+        if not options["gate_latency"]:
+            baseline_metrics = _without_system(baseline_metrics)
+            candidate_metrics = _without_system(candidate_metrics)
+
+        report = evaluation.compare_metrics(
+            baseline_metrics, candidate_metrics, tolerance=options["tolerance"]
+        )
+        self.stdout.write(f"\nAgainst baseline {path}:")
+        self._print_comparison(report)
+
+        before = payload.get("configuration", {})
+        if before and before != run.configuration:
+            # Not fatal - an intentional model change is exactly when you
+            # WANT to see the deltas - but it must not pass unremarked.
+            self.stdout.write(
+                self.style.WARNING(
+                    "  note: the configuration differs from the baseline's, "
+                    "so these deltas include that change"
+                )
+            )
+
+        if options["fail_on_regression"] and report["regressions"]:
+            raise CommandError(
+                f"{len(report['regressions'])} metric(s) regressed against "
+                f"the baseline: {', '.join(report['regressions'])}"
+            )
 
     def _print_run(self, run):
         self.stdout.write("")

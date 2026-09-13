@@ -1,0 +1,129 @@
+{
+  "name": "institutional-seed",
+  "version": "v1",
+  "description": "Seed benchmark over the five synthetic institutional documents in evaluation/corpus/. Governed: questions and expected answers are fixed at this version and the dataset is immutable once loaded - a change means a new version, or last month's score and this month's describe different exams. NOT a substitute for a real institutional evaluation set: these documents are written for this benchmark, so a score here says the pipeline works, not that it works on your regulations. One answerable case (revaluation deadline) is a known miss at this baseline - see its notes. It is kept so that fixing it registers as an improvement rather than disappearing from the exam.",
+  "cases": [
+    {
+      "question": "What is the minimum attendance required to sit the end-semester examination?",
+      "expected_answer": "75 percent",
+      "relevant_documents": [
+        "@academic-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "Exact clause lookup. The baseline case: if this fails, retrieval is broken."
+    },
+    {
+      "question": "Can a student with 60 percent attendance apply for condonation?",
+      "expected_answer": "No. Condonation below 65 percent is not permitted.",
+      "relevant_documents": [
+        "@academic-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "The answer is a negative stated in the document. A system that pattern-matches on 'condonation' without reading the bound gets this wrong."
+    },
+    {
+      "question": "What is the tuition for B.Tech CSE?",
+      "expected_answer": "85000",
+      "relevant_documents": [
+        "@fee-structure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "Table row lookup. The figure is meaningless without its column header."
+    },
+    {
+      "question": "What is the hostel fee for B.Tech MECH?",
+      "expected_answer": "58000",
+      "relevant_documents": [
+        "@fee-structure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "Different column, different row - catches an answer that returns the first row or the first number."
+    },
+    {
+      "question": "How many books can a postgraduate student borrow?",
+      "expected_answer": "six",
+      "relevant_documents": [
+        "@library-rules"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "Two limits in one clause. Returning 'four' is the failure to watch for."
+    },
+    {
+      "question": "What is the late return fine for a library book?",
+      "expected_answer": "5 rupees per day per book",
+      "relevant_documents": [
+        "@library-rules"
+      ],
+      "relevant_pages": [
+        1
+      ]
+    },
+    {
+      "question": "What is the hostel curfew on Saturdays?",
+      "expected_answer": "11 pm",
+      "relevant_documents": [
+        "@hostel-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "The clause states two curfews. A system that stops at the first returns 10 pm."
+    },
+    {
+      "question": "What happens to a candidate caught using unauthorised material?",
+      "expected_answer": "Debarred from all examinations of that semester.",
+      "relevant_documents": [
+        "@examination-policy"
+      ],
+      "relevant_pages": [
+        1
+      ]
+    },
+    {
+      "question": "When is the supplementary examination held?",
+      "expected_answer": "July, once per academic year",
+      "relevant_documents": [
+        "@examination-policy"
+      ],
+      "relevant_pages": [
+        1
+      ]
+    },
+    {
+      "question": "What is the deadline for applying for revaluation?",
+      "expected_answer": "Within 15 days of the publication of results.",
+      "relevant_documents": [
+        "@academic-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "KNOWN MISS at the current baseline, kept deliberately. The answerer abstains: 'deadline' appears nowhere in the clause (it says 'within 15 days'), and no stemmer unifies 'applying' with 'application', so one query term of three matches - 0.33 coverage against a 0.34 floor. Retrieval finds the right document (recall@1 is 1.0); the extractive answerer will not quote from it. This is the lexical-matching limit the README documents, and it is exactly what a semantic embedding model would fix. Tuning the threshold to pass this one case would be fitting the system to the benchmark."
+    },
+    {
+      "question": "What is the institute's policy on remote work for administrative staff?",
+      "expect_abstention": true,
+      "notes": "Not in the corpus at all. A benchmark of only answerable questions cannot tell a well-calibrated system from one that never abstains - this is the case that scores calibration."
+    },
+    {
+      "question": "What is the parking charge for visitors?",
+      "expect_abstention": true,
+      "notes": "Plausible for an institution and absent from these documents. Shares vocabulary with the corpus ('visitors' appears in the hostel rules), so a system that abstains here is abstaining on substance rather than on vocabulary."
+    },
+    {
+      "question": "Which faculty member chairs the examination committee?",
+      "expect_abstention": true,
+      "notes": "The examination policy exists and does not name anyone. The nearest-miss case: the right document is retrievable and still contains no answer."
+    }
+  ]
+}
