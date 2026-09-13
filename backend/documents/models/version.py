@@ -24,6 +24,26 @@ class DocumentVersion(models.Model):
 
     extracted_text = models.TextField(blank=True, default="")
 
+    # Which extraction pass is the live one for this version.
+    #
+    # Mirrors Document.current_version, and exists for the same reason. A
+    # reprocess deliberately creates a NEW DocumentContent beside the old
+    # one rather than overwriting it, so two pipeline versions can be
+    # compared - but every one of those passes also writes a full set of
+    # chunks, and retrieval had no way to tell which set was live. The
+    # measured result was a search that returned the same passage three
+    # times from three passes, and a context budget spent on duplicates.
+    #
+    # SET_NULL rather than CASCADE: losing the pointer must never take the
+    # version and its file with it.
+    current_content = models.ForeignKey(
+        "documents.DocumentContent",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

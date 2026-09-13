@@ -9,6 +9,11 @@ class Document(models.Model):
         PROCESSING = "PROCESSING", "Processing"
         COMPLETED = "COMPLETED", "Completed"
         FAILED = "FAILED", "Failed"
+        # Distinct from FAILED on purpose (spec 10.1). A quarantined
+        # document is not a processing error to retry - it is a file
+        # the platform has decided not to touch, and the distinction
+        # is what an operator needs to see.
+        QUARANTINED = "QUARANTINED", "Quarantined"
 
     class DocumentType(models.TextChoices):
         GENERAL = "GENERAL", "General"

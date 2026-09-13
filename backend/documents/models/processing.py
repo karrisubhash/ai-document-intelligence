@@ -11,6 +11,7 @@ class ProcessingJob(models.Model):
     class Stage(models.TextChoices):
         INGESTION = "INGESTION", "Ingestion"
         VALIDATION = "VALIDATION", "Validation"
+        SCANNING = "SCANNING", "Malware scanning"
         TEXT_EXTRACTION = "TEXT_EXTRACTION", "Text extraction"
         OCR = "OCR", "OCR"
         CLASSIFICATION = "CLASSIFICATION", "Classification"

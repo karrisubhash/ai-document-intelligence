@@ -1,9 +1,14 @@
 from rest_framework import serializers
 
 from documents.models import (
+    ClassificationResult,
     Document,
+    DocumentChunk,
+    DocumentChunkEmbedding,
     DocumentContent,
     DocumentVersion,
+    ExtractedField,
+    ExtractionResult,
     PageContent,
     ProcessingEvent,
     ProcessingJob,
@@ -148,3 +153,113 @@ class DocumentCreateSerializer(serializers.Serializer):
 
 class DocumentVersionCreateSerializer(serializers.Serializer):
     file = serializers.FileField()
+
+
+class ClassificationResultSerializer(serializers.ModelSerializer):
+    """One classifier verdict, with the model that produced it.
+
+    Every run is returned, not just the newest: a verdict is only
+    interpretable next to the model and version that made it, and a
+    re-run under a newer model is a comparison, not a replacement.
+    """
+
+    class Meta:
+        model = ClassificationResult
+        fields = [
+            "id",
+            "document_content",
+            "processing_job",
+            "model_name",
+            "model_version",
+            "predicted_label",
+            "confidence",
+            "input_reference",
+            "metadata",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ExtractedFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExtractedField
+        fields = [
+            "id",
+            "field_name",
+            "status",
+            "value",
+            "confidence",
+            "page_number",
+            "character_start",
+            "character_end",
+            "matched_text",
+            "metadata",
+        ]
+        read_only_fields = fields
+
+
+class ExtractionResultSerializer(serializers.ModelSerializer):
+    extracted_fields = ExtractedFieldSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ExtractionResult
+        fields = [
+            "id",
+            "document_content",
+            "processing_job",
+            "model_name",
+            "model_version",
+            "schema_name",
+            "schema_version",
+            "document_type",
+            "field_count",
+            "found_count",
+            "input_reference",
+            "metadata",
+            "created_at",
+            "extracted_fields",
+        ]
+        read_only_fields = fields
+
+
+class ChunkEmbeddingSerializer(serializers.ModelSerializer):
+    """The embedding's identity, never the vector itself.
+
+    384 floats per chunk is a payload no reader can use, and `semantic`
+    is the only part of it that changes how a search result should be
+    read - so that is what travels.
+    """
+
+    class Meta:
+        model = DocumentChunkEmbedding
+        fields = [
+            "id",
+            "model_name",
+            "model_version",
+            "dimensions",
+            "semantic",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class DocumentChunkSerializer(serializers.ModelSerializer):
+    embeddings = ChunkEmbeddingSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = DocumentChunk
+        fields = [
+            "id",
+            "chunk_index",
+            "page_number",
+            "character_start",
+            "character_end",
+            "text",
+            "character_count",
+            "chunking_strategy",
+            "chunking_version",
+            "metadata",
+            "created_at",
+            "embeddings",
+        ]
+        read_only_fields = fields

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 # Reserved label for "the model does not recognise this". A college
@@ -14,6 +14,10 @@ class ClassificationPrediction:
     model_name: str
     model_version: str
     input_reference: str
+    # Score distribution, aggregation details, timings - whatever the
+    # implementation wants on record. Lands on ClassificationResult.metadata,
+    # so a prediction can be examined later rather than only believed.
+    metadata: dict = field(default_factory=dict)
 
     @property
     def is_unknown(self) -> bool:

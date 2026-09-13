@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -25,21 +26,35 @@ load_dotenv(BASE_DIR.parent / ".env")
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv(
-    "DJANGO_SECRET_KEY",
-    "unsafe-development-key",
-)
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv(
     "DJANGO_DEBUG",
     "False",
 ).lower() == "true"
 
+# SECURITY WARNING: keep the secret key used in production secret!
+#
+# Deliberately fails loudly instead of falling back to a known string when
+# DEBUG is off. A development default that silently survives into production
+# means every session cookie, password-reset token and signed value in the
+# deployment is forgeable by anyone who has read this file.
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "")
+
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is not true. "
+            "Generate one with: python -c \"from django.core.management.utils "
+            "import get_random_secret_key; print(get_random_secret_key())\""
+        )
+    SECRET_KEY = "unsafe-development-key"
+
+# Comma-separated, because a deployment behind a real hostname or load
+# balancer needs its own and hard-coding localhost silently 400s there.
 ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
+    host.strip()
+    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if host.strip()
 ]
 
 
@@ -52,8 +67,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # Required for SearchVectorField/GinIndex (lexical search) and for
+    # pgvector's index classes used by the chunk embeddings.
+    'django.contrib.postgres',
     'rest_framework',
     'rest_framework.authtoken',
+    'corsheaders',
     'accounts',
     'documents',
 ]
@@ -66,9 +85,44 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    # Collection endpoints are paginated (spec section 16). Without this a
+    # single GET /api/documents/ serializes every row the caller may see,
+    # which grows without bound and is trivially abusable.
+    "DEFAULT_PAGINATION_CLASS": (
+        "rest_framework.pagination.PageNumberPagination"
+    ),
+    "PAGE_SIZE": 50,
+    # Rate limiting (spec section 13). Per endpoint class rather than one
+    # global number: a document listing is a cheap indexed query, a chat
+    # request runs retrieval, reranking and an answerer. See
+    # documents/throttling.py for why login is keyed on IP *and* username.
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.AnonRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "user": os.getenv("THROTTLE_USER", "300/hour"),
+        "anon": os.getenv("THROTTLE_ANON", "30/hour"),
+        # Credential guessing. Deliberately tight; a human who has
+        # genuinely forgotten their password does not need 20 tries a minute.
+        "login": os.getenv("THROTTLE_LOGIN", "10/minute"),
+        # Writes bytes and queues worker time.
+        "upload": os.getenv("THROTTLE_UPLOAD", "60/hour"),
+        # Runs two retrievers and a fusion pass.
+        "search": os.getenv("THROTTLE_SEARCH", "120/hour"),
+        # The most expensive path in the system.
+        "chat": os.getenv("THROTTLE_CHAT", "60/hour"),
+    },
 }
 
 MIDDLEWARE = [
+    # Outermost, so every request gets a correlation id and is timed -
+    # including the ones later middleware rejects, which are exactly the
+    # requests worth seeing when something is wrong.
+    'documents.observability.middleware.ObservabilityMiddleware',
+    # Must precede CommonMiddleware so the CORS headers survive the
+    # redirects and 304s CommonMiddleware can short-circuit with.
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -149,18 +203,60 @@ USE_I18N = True
 USE_TZ = True
 
 
+# Cross-origin requests. The frontend is a separate Vite dev server on
+# its own origin, so the API has to opt into being called from it - an
+# empty list (the production default) means same-origin only.
+#
+# CORS_ALLOW_CREDENTIALS stays OFF, which is what makes this safe to turn
+# on in development: the frontend authenticates with an Authorization
+# header, so the browser never needs to attach session cookies to a
+# cross-origin call. Allowing credentials would make every SessionAuthed
+# endpoint reachable from the listed origin with the user's own cookies.
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+if DEBUG and not CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "static/"
+# collectstatic writes here; in production it is a volume shared read-only
+# with nginx, which serves it directly rather than through Django.
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
+# Console in development, SMTP when a host is configured. The deploy check
+# errors on a console backend precisely because mail silently vanishing in
+# production is indistinguishable from mail working.
+# Leading underscore on purpose: a module-level EMAIL_HOST would be read by
+# Django as the DEPRECATED email setting, and defining one of those
+# alongside MAILERS is a hard configuration error in Django 6.1.
+_email_host = os.getenv("EMAIL_HOST", "")
+
 MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+    "default": {
+        "BACKEND": (
+            "django.core.mail.backends.smtp.EmailBackend"
+            if _email_host
+            else "django.core.mail.backends.console.EmailBackend"
+        ),
+        "HOST": _email_host,
+        "PORT": int(os.getenv("EMAIL_PORT", "587")),
+        "USER": os.getenv("EMAIL_HOST_USER", ""),
+        "PASSWORD": os.getenv("EMAIL_HOST_PASSWORD", ""),
+        "USE_TLS": os.getenv("EMAIL_USE_TLS", "True").lower() == "true",
     },
 }
 MEDIA_URL = "/media/"
@@ -173,10 +269,200 @@ MAX_DOCUMENT_PAGES = 500
 OCR_DPI = 200
 
 # Dotted path to a DocumentClassifier implementation. Empty means the
-# CLASSIFICATION stage records SKIPPED - it never guesses a label. A real
-# model artifact from ai/classification/ gets pointed at here once it has
-# been trained and evaluated.
-DOCUMENT_CLASSIFIER = ""
+# CLASSIFICATION stage records SKIPPED - it never guesses a label.
+#
+# To enable the trained text baseline:
+#   pip install -r backend/requirements-ml.txt
+#   DOCUMENT_CLASSIFIER=documents.processing.classification.text_classifier.TextDocumentClassifier
+#
+# Once set, a missing or unloadable artifact FAILS the stage rather than
+# skipping it: configuring a classifier is a statement that classification
+# is expected to happen, and silently skipping would hide a broken deploy.
+DOCUMENT_CLASSIFIER = os.getenv("DOCUMENT_CLASSIFIER", "")
+
+# Dotted path to a FieldExtractor implementation. Empty means the EXTRACTION
+# stage records SKIPPED - it never invents fields. The bundled rule extractor
+# is documents.processing.field_extraction.rule_extractor.RuleFieldExtractor.
+DOCUMENT_FIELD_EXTRACTOR = os.getenv("DOCUMENT_FIELD_EXTRACTOR", "")
+
+# Schema pack the rule extractor matches against. Empty uses the bundled
+# institutional pack; point it at another file to extract different fields
+# without touching code.
+DOCUMENT_FIELD_SCHEMA_PACK = os.getenv("DOCUMENT_FIELD_SCHEMA_PACK", "")
+
+# Dotted path to an EmbeddingProvider. Empty means chunks are still written
+# and still lexically searchable - only the vector half of hybrid retrieval
+# is absent. The bundled baseline is
+# documents.processing.embedding.hashing.HashingEmbeddingProvider, which is
+# deterministic and offline but LEXICAL, not semantic: it scores vocabulary
+# overlap, not meaning. Every stored embedding records which it was.
+DOCUMENT_EMBEDDING_PROVIDER = os.getenv("DOCUMENT_EMBEDDING_PROVIDER", "")
+
+# Dotted path to a TableDetector (§11.3, phase 12). Empty skips the
+# LAYOUT_ANALYSIS stage.
+#
+# This is the one pluggable capability that defaults to ON, and the reason
+# is that it is the only one with nothing to configure: the bundled detector
+# reads structure out of the page text that has already been extracted, so
+# it needs no artifact, no model download and no external service. Defaulting
+# it off would mean a feature that silently does nothing for everyone who
+# did not know to switch it on.
+DOCUMENT_TABLE_DETECTOR = os.getenv(
+    "DOCUMENT_TABLE_DETECTOR",
+    "documents.processing.tables.layout.LayoutTableDetector",
+)
+
+# Dotted path to a FigureDetector (phase 12). Empty records no figures.
+#
+# Defaults on for the same reason the table detector does: the bundled
+# detector reads the image dictionary a PDF already carries, so there is
+# nothing to configure and nothing to download. It does not look at the
+# images - describing one needs a vision model, and every figure is stored
+# with an empty description until one is configured.
+DOCUMENT_FIGURE_DETECTOR = os.getenv(
+    "DOCUMENT_FIGURE_DETECTOR",
+    "documents.processing.figures.service.EmbeddedImageDetector",
+)
+
+# How many parts a question may be planned into (phase 12). 1 disables
+# planning entirely and every question runs as a single retrieval.
+#
+# Measured before it was built: a two-part question already answers both
+# parts, a three-part question answered one of three, and a four-part
+# question abstained outright with all four answers present in the corpus.
+# Each step costs a full retrieval, so this is a bound, not a budget.
+RAG_MAX_PLAN_STEPS = int(os.getenv("RAG_MAX_PLAN_STEPS", "4"))
+
+# Chunking. Changing either requires re-indexing to keep old and new chunks
+# comparable - see documents.processing.chunking.CHUNKING_VERSION.
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
+
+# Hybrid retrieval: how many candidates each half returns before fusion.
+SEARCH_CANDIDATES = int(os.getenv("SEARCH_CANDIDATES", "50"))
+
+
+# --- RAG (spec section 12) ------------------------------------------------
+# Both default to the bundled baselines when empty. Neither is semantic or
+# generative, and both say so in every response they produce.
+#
+#   RAG_RERANKER : a Reranker. Default documents.rag.reranking.LexicalReranker
+#   RAG_ANSWERER : an LLMProvider. Default documents.rag.llm.ExtractiveAnswerer,
+#                  which QUOTES passages verbatim rather than generating, so
+#                  it cannot hallucinate - at the cost of being unable to
+#                  synthesise across passages or rephrase.
+RAG_RERANKER = os.getenv("RAG_RERANKER", "")
+RAG_ANSWERER = os.getenv("RAG_ANSWERER", "")
+
+# Candidates handed to the reranker. Larger than the context can hold,
+# because reranking is what decides which of them earn a slot.
+RAG_RETRIEVAL_DEPTH = int(os.getenv("RAG_RETRIEVAL_DEPTH", "20"))
+
+# A passage must beat this after reranking to enter the context. Below it,
+# the match is a lexical coincidence, and answering from coincidences is how
+# a system produces confident nonsense.
+RAG_RELEVANCE_FLOOR = float(os.getenv("RAG_RELEVANCE_FLOOR", "0.15"))
+
+# Context size in CHARACTERS, not tokens: a tokenizer is model-specific and
+# no model is wired up. ~4 chars/token makes this roughly a 2k-token budget.
+RAG_CONTEXT_BUDGET = int(os.getenv("RAG_CONTEXT_BUDGET", "8000"))
+RAG_MAX_PASSAGES = int(os.getenv("RAG_MAX_PASSAGES", "8"))
+
+
+# --- Malware scanning (spec section 13) -----------------------------------
+# Dotted path to a DocumentScanner. Empty means the SCANNING stage records
+# SKIPPED - it says the file was NOT scanned rather than implying a clean
+# bill of health. The bundled scanner is
+# documents.processing.scanning.heuristic.HeuristicScanner, which is NOT an
+# antivirus: it has no signature database and catches disguised
+# executables, Office macros, PDF active content and the EICAR test string.
+# Point this at a ClamAV or cloud scanner for real coverage.
+DOCUMENT_SCANNER = os.getenv("DOCUMENT_SCANNER", "")
+
+# Signature/ruleset identifier, part of the scanner cache key so a stale
+# rule set is never left clearing uploads after an operator replaced it.
+DOCUMENT_SCANNER_RULESET = os.getenv("DOCUMENT_SCANNER_RULESET", "")
+
+
+# --- Observability (spec section 20) --------------------------------------
+# Comma-separated addresses allowed to scrape /metrics. Empty means any
+# address, which is fine behind a private network and wrong on the internet.
+METRICS_ALLOWED_IPS = [
+    ip.strip() for ip in os.getenv("METRICS_ALLOWED_IPS", "").split(",") if ip.strip()
+]
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# JSON lines by default. Every record passes through StructuredFormatter,
+# which redacts document content whatever the caller passed - see
+# documents/observability/logging.py for why that is enforced there rather
+# than left to each call site.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "structured": {
+            "()": "documents.observability.logging.StructuredFormatter",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "structured",
+        },
+    },
+    "root": {"handlers": ["console"], "level": LOG_LEVEL},
+    "loggers": {
+        "adi": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        # Django's request logger duplicates what the middleware already
+        # records, in a format that is not redacted.
+        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+    },
+}
+
+# Artifact consumed by the text classifier above. Produced by
+# `python -m ai.classification.training.train_text` and git-ignored, so
+# the default path only resolves on a machine that has trained one.
+DOCUMENT_CLASSIFIER_ARTIFACT = os.getenv(
+    "DOCUMENT_CLASSIFIER_ARTIFACT",
+    str(
+        BASE_DIR.parent
+        / "ai"
+        / "classification"
+        / "artifacts"
+        / "document-classifier"
+        / "v0.1.0"
+        / "model.joblib"
+    ),
+)
+
+
+# Throttle counters live here. Redis rather than the default in-memory
+# cache on purpose: LocMemCache is per PROCESS, so with several API workers
+# each would keep its own counter and the effective limit would silently
+# become N times what was configured. A rate limit that is not shared is
+# not a rate limit.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.getenv(
+            "REDIS_CACHE_URL",
+            f"redis://{os.getenv('REDIS_HOST', 'redis')}:"
+            f"{os.getenv('REDIS_PORT', '6379')}/2",
+        ),
+        "KEY_PREFIX": "adi",
+    }
+}
+
+# Tests must not share throttle state with a running stack, and must not
+# need Redis at all.
+if "test" in sys.argv:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "throttle-tests",
+        }
+    }
 
 
 CELERY_BROKER_URL = os.getenv(
@@ -188,3 +474,96 @@ CELERY_RESULT_BACKEND = os.getenv(
     "CELERY_RESULT_BACKEND",
     "redis://redis:6379/1",
 )
+
+# --- Workload separation (spec §22 stage 3, NFR-02) ------------------------
+# Ingestion is CPU-bound (OCR, PDF rendering) and re-indexing is
+# embedding-bound. On one shared queue the only way to make a bulk re-index
+# finish sooner is to add workers that also pick up uploads - so a
+# re-indexing run and the people waiting on an upload compete for the same
+# pool, and neither can be tuned without affecting the other.
+#
+# Separate queues make "scale the thing that is backed up" possible:
+#
+#   celery -A config worker -Q ingest --concurrency=2   # few, CPU-heavy
+#   celery -A config worker -Q index  --concurrency=8   # many, IO-bound
+CELERY_TASK_DEFAULT_QUEUE = "ingest"
+
+CELERY_TASK_ROUTES = {
+    "documents.tasks.process_document_task": {"queue": "ingest"},
+    "documents.tasks_reindex.reindex_content_task": {"queue": "index"},
+}
+
+# One task at a time per worker process. The default prefetches several,
+# which for minute-long OCR jobs means a worker sits on work it has not
+# started while another worker is idle - and makes queue depth lie about
+# how much is actually waiting.
+CELERY_WORKER_PREFETCH_MULTIPLIER = int(
+    os.getenv("CELERY_PREFETCH_MULTIPLIER", "1")
+)
+
+# Acknowledge after completion, not on receipt, so a worker killed mid-task
+# returns the task to the queue instead of losing it. Safe here because the
+# pipeline is idempotent per job - see _discard_previous_attempt.
+CELERY_TASK_ACKS_LATE = True
+
+
+# --- Transport security (spec §21, §13) -----------------------------------
+# Everything here is driven by DEBUG rather than a separate settings module,
+# matching how the rest of this file works. A deployment that forgets to set
+# DJANGO_DEBUG=False gets development behaviour AND fails the SECRET_KEY
+# guard at the top, so the two mistakes cannot happen quietly together.
+#
+# Verify with:  python manage.py check --deploy
+
+# The app runs behind nginx, which terminates TLS. Without this Django sees
+# plain HTTP on the internal hop and would redirect forever.
+if os.getenv("USE_X_FORWARDED_PROTO", "True").lower() == "true":
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Redirecting is nginx's job in the shipped config; this is the belt to its
+# braces, and the reason it is opt-out rather than opt-in is that a
+# misconfigured proxy failing open to plain HTTP is the more likely mistake.
+SECURE_SSL_REDIRECT = (
+    os.getenv("SECURE_SSL_REDIRECT", str(not DEBUG)).lower() == "true"
+)
+
+# HSTS is deliberately OFF by default even in production. It is close to
+# irreversible - a browser that has seen the header refuses plain HTTP for
+# the full duration - so it is an explicit decision by whoever owns the
+# domain, not something a framework default should switch on. One year once
+# the certificate story is known to be stable.
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = (
+    os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS", "True").lower() == "true"
+)
+SECURE_HSTS_PRELOAD = os.getenv("SECURE_HSTS_PRELOAD", "False").lower() == "true"
+
+# Cookies. Secure in production; never in development, or nothing works over
+# http://localhost and somebody disables the whole block to get on with it.
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+# CSRF must stay readable by JavaScript: the frontend reads the cookie to
+# echo it back in the X-CSRFToken header, which is how the double-submit
+# defence works.
+CSRF_COOKIE_HTTPONLY = False
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
+
+# Hosts a browser may be redirected to after login/logout.
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+# --- Backups (spec §21.3) --------------------------------------------------
+# Where `manage.py backup` writes. A bind mount in the production compose,
+# so dumps survive the container that produced them - a backup living only
+# inside the container it backs up is not a backup.
+BACKUP_ROOT = Path(os.getenv("BACKUP_ROOT", str(BASE_DIR.parent / "backups")))
+BACKUP_RETENTION = int(os.getenv("BACKUP_RETENTION", "7"))

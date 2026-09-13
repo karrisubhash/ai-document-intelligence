@@ -254,10 +254,14 @@ class OcrPathTests(IngestionTestCase):
             stages,
             [
                 ProcessingJob.Stage.INGESTION,
+                ProcessingJob.Stage.SCANNING,
                 ProcessingJob.Stage.VALIDATION,
                 ProcessingJob.Stage.TEXT_EXTRACTION,
                 ProcessingJob.Stage.OCR,
+                ProcessingJob.Stage.LAYOUT_ANALYSIS,
                 ProcessingJob.Stage.CLASSIFICATION,
+                ProcessingJob.Stage.EXTRACTION,
+                ProcessingJob.Stage.INDEXING,
             ],
         )
 
@@ -376,7 +380,11 @@ class FailureTaxonomyTests(IngestionTestCase):
         # once per wasted retry. The history is now truthful.
         self.assertEqual(
             list(job.events.values_list("stage", flat=True)),
-            [ProcessingJob.Stage.INGESTION, ProcessingJob.Stage.VALIDATION],
+            [
+                ProcessingJob.Stage.INGESTION,
+                ProcessingJob.Stage.SCANNING,
+                ProcessingJob.Stage.VALIDATION,
+            ],
         )
 
     def test_transient_failure_is_retried(self):

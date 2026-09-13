@@ -1,0 +1,161 @@
+{
+  "name": "institutional",
+  "version": "1.0.0",
+  "description": "Fields that actually occur on the document types this platform ingests. Document types absent from this pack (GENERAL, OTHER) are skipped rather than guessed at.",
+  "schemas": {
+    "CIRCULAR": [
+      {
+        "name": "circular_number",
+        "description": "Reference number the circular is filed under.",
+        "patterns": [
+          "circular\\s*(?:no\\.?|number)\\s*[:\\-]?\\s*(?P<value>[A-Z0-9][A-Z0-9./\\-]{2,40})",
+          "\\bref(?:erence)?\\s*(?:no\\.?)?\\s*[:\\-]\\s*(?P<value>[A-Z0-9][A-Z0-9./\\-]{2,40})"
+        ],
+        "max_length": 60
+      },
+      {
+        "name": "issue_date",
+        "description": "Date the circular was issued.",
+        "patterns": [
+          "date[d]?\\s*[:\\-]?\\s*(?P<value>\\d{1,2}[/\\-.]\\d{1,2}[/\\-.]\\d{2,4})",
+          "date[d]?\\s*[:\\-]?\\s*(?P<value>\\d{1,2}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?,?\\s+\\d{4})"
+        ],
+        "max_length": 40
+      },
+      {
+        "name": "subject",
+        "description": "Subject line.",
+        "patterns": [
+          "sub(?:ject)?\\s*[:\\-]\\s*(?P<value>[^\\n\\r]{4,200})"
+        ],
+        "max_length": 200
+      },
+      {
+        "name": "issuing_authority",
+        "description": "Office or officer issuing the circular.",
+        "patterns": [
+          "^\\s*(?:issued\\s+by|from)\\s*[:\\-]\\s*(?P<value>[^\\n\\r]{3,120})"
+        ],
+        "max_length": 120
+      }
+    ],
+    "REGULATION": [
+      {
+        "name": "regulation_number",
+        "description": "Regulation identifier, e.g. R20 or REG-2024-07.",
+        "patterns": [
+          "regulation\\s*(?:no\\.?|number)?\\s*[:\\-]?\\s*(?P<value>[A-Z0-9][A-Z0-9./\\-]{1,40})",
+          "\\b(?P<value>R\\d{2})\\s+regulations?\\b"
+        ],
+        "max_length": 60
+      },
+      {
+        "name": "effective_date",
+        "description": "Date the regulation takes effect.",
+        "patterns": [
+          "(?:effective|w\\.?e\\.?f\\.?|with\\s+effect\\s+from)\\s*[:\\-]?\\s*(?P<value>\\d{1,2}[/\\-.]\\d{1,2}[/\\-.]\\d{2,4})",
+          "(?:effective|with\\s+effect\\s+from)\\s*[:\\-]?\\s*(?P<value>\\d{1,2}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?,?\\s+\\d{4})"
+        ],
+        "max_length": 40
+      },
+      {
+        "name": "academic_year",
+        "description": "Academic year the regulation applies to.",
+        "patterns": [
+          "academic\\s+year\\s*[:\\-]?\\s*(?P<value>\\d{4}\\s*[\\-\\u2013/]\\s*\\d{2,4})"
+        ],
+        "value_pattern": "\\d{4}\\s*[\\-\\u2013/]\\s*\\d{2,4}",
+        "max_length": 20
+      },
+      {
+        "name": "approving_body",
+        "description": "Body that approved the regulation.",
+        "patterns": [
+          "approved\\s+by\\s*[:\\-]?\\s*(?P<value>[^\\n\\r]{3,120})"
+        ],
+        "max_length": 120
+      }
+    ],
+    "SYLLABUS": [
+      {
+        "name": "course_code",
+        "description": "Course code the syllabus belongs to.",
+        "patterns": [
+          "course\\s*code\\s*[:\\-]?\\s*(?P<value>[A-Z]{2,4}\\s?\\d{3,5})",
+          "\\b(?P<value>[A-Z]{2,4}\\s?\\d{3,5})\\s*[\\-\\u2013]\\s*(?:syllabus|course)"
+        ],
+        "value_pattern": "[A-Za-z]{2,4}\\s?\\d{3,5}",
+        "max_length": 20
+      },
+      {
+        "name": "course_title",
+        "description": "Course title.",
+        "patterns": [
+          "course\\s*(?:title|name)\\s*[:\\-]\\s*(?P<value>[^\\n\\r]{3,150})"
+        ],
+        "max_length": 150
+      },
+      {
+        "name": "credits",
+        "description": "Credit value.",
+        "patterns": [
+          "credits?\\s*[:\\-]?\\s*(?P<value>\\d{1,2}(?:\\.\\d)?)"
+        ],
+        "value_pattern": "\\d{1,2}(?:\\.\\d)?",
+        "max_length": 6
+      },
+      {
+        "name": "semester",
+        "description": "Semester the course runs in.",
+        "patterns": [
+          "semester\\s*[:\\-]?\\s*(?P<value>[IVX]{1,4}|\\d{1,2})\\b"
+        ],
+        "max_length": 10
+      }
+    ],
+    "POLICY": [
+      {
+        "name": "policy_number",
+        "description": "Policy identifier.",
+        "patterns": [
+          "policy\\s*(?:no\\.?|number)\\s*[:\\-]?\\s*(?P<value>[A-Z0-9][A-Z0-9./\\-]{1,40})"
+        ],
+        "max_length": 60
+      },
+      {
+        "name": "effective_date",
+        "description": "Date the policy takes effect.",
+        "patterns": [
+          "(?:effective|w\\.?e\\.?f\\.?|with\\s+effect\\s+from)\\s*[:\\-]?\\s*(?P<value>\\d{1,2}[/\\-.]\\d{1,2}[/\\-.]\\d{2,4})"
+        ],
+        "max_length": 40
+      },
+      {
+        "name": "review_date",
+        "description": "Date the policy is next reviewed.",
+        "patterns": [
+          "(?:review|next\\s+review)\\s*(?:date)?\\s*[:\\-]\\s*(?P<value>\\d{1,2}[/\\-.]\\d{1,2}[/\\-.]\\d{2,4})"
+        ],
+        "max_length": 40
+      }
+    ],
+    "FORM": [
+      {
+        "name": "form_number",
+        "description": "Form identifier.",
+        "patterns": [
+          "form\\s*(?:no\\.?|number)\\s*[:\\-]?\\s*(?P<value>[A-Z0-9][A-Z0-9./\\-]{1,40})"
+        ],
+        "max_length": 60
+      },
+      {
+        "name": "form_title",
+        "description": "Form title.",
+        "patterns": [
+          "(?:form\\s+for|application\\s+for)\\s*[:\\-]?\\s*(?P<value>[^\\n\\r]{3,150})"
+        ],
+        "max_length": 150
+      }
+    ]
+  }
+}

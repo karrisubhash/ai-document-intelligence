@@ -9,13 +9,17 @@ from documents.audit import record_event
 from documents.models import AuditLog, Document, ProcessingJob
 from documents.permissions import DocumentAccessPolicy
 from documents.services import create_document_version, reprocess_document
+from documents.throttling import BurstUserThrottle
 
 from .serializers import (
+    ClassificationResultSerializer,
+    DocumentChunkSerializer,
     DocumentContentSerializer,
     DocumentCreateSerializer,
     DocumentSerializer,
     DocumentVersionCreateSerializer,
     DocumentVersionSerializer,
+    ExtractionResultSerializer,
     ProcessingJobSerializer,
 )
 
@@ -25,11 +29,32 @@ class DocumentViewSet(viewsets.ModelViewSet):
     permission_classes = [DocumentAccessPolicy]
     parser_classes = [MultiPartParser, FormParser]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+    throttle_classes = [BurstUserThrottle]
+
+    def get_throttles(self):
+        # Only the write paths carry the upload budget. Throttling a
+        # listing at the same rate as an upload would make the UI
+        # unusable without making abuse meaningfully harder.
+        if self.action in ("create", "versions", "reprocess"):
+            self.throttle_scope = "upload"
+        else:
+            self.throttle_scope = None
+        return super().get_throttles()
+
 
     def get_queryset(self):
+        # select_related on the listing, measured rather than guessed: the
+        # serializer nests current_version, so without the join the endpoint
+        # issued one extra query PER DOCUMENT - 14 queries for 12 documents,
+        # and a little over a thousand for a thousand. The detail actions
+        # fetch one row, so the join buys them nothing.
         queryset = Document.objects.all()
+
         if self.action == "list":
-            return authorization.visible_documents(self.request.user, queryset)
+            return authorization.visible_documents(
+                self.request.user, queryset.select_related("current_version")
+            )
+
         return queryset
 
     def create(self, request, *args, **kwargs):
@@ -136,6 +161,72 @@ class DocumentViewSet(viewsets.ModelViewSet):
             )
 
         return Response(DocumentContentSerializer(latest).data)
+
+    @action(detail=True, methods=["get"])
+    def classification(self, request, pk=None):
+        """Every classification verdict recorded for the current version.
+
+        A list rather than the latest verdict alone, because the point of
+        storing runs per model is being able to see them side by side. An
+        empty list is a real answer - the stage records SKIPPED when no
+        classifier is configured, and the pipeline history says so.
+        """
+        document = self.get_object()
+        version = document.current_version
+
+        if version is None:
+            return Response(
+                {"detail": "Document has no version."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        results = version.classification_results.all()
+        return Response(ClassificationResultSerializer(results, many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def extraction(self, request, pk=None):
+        """Every field-extraction pass recorded for the current version."""
+        document = self.get_object()
+        version = document.current_version
+
+        if version is None:
+            return Response(
+                {"detail": "Document has no version."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        results = version.extraction_results.prefetch_related("extracted_fields")
+        return Response(ExtractionResultSerializer(results, many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def chunks(self, request, pk=None):
+        """Retrievable units produced from the current version's content.
+
+        Paginated: a long document produces thousands of chunks, and the
+        full text of all of them is not a response anyone asked for.
+        """
+        document = self.get_object()
+        version = document.current_version
+
+        if version is None:
+            return Response(
+                {"detail": "Document has no version."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        content = version.contents.first()
+
+        if content is None:
+            return Response(
+                {"detail": "No extracted content for this version yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        queryset = content.chunks.prefetch_related("embeddings")
+        page = self.paginate_queryset(queryset)
+        serializer = DocumentChunkSerializer(page, many=True)
+
+        return self.get_paginated_response(serializer.data)
 
     @action(detail=True, methods=["get"])
     def download(self, request, pk=None):

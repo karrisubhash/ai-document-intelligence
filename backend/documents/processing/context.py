@@ -5,6 +5,7 @@ class FileType:
     PDF = "PDF"
     TXT = "TXT"
     IMAGE = "IMAGE"
+    DOCX = "DOCX"
 
 
 @dataclass
@@ -27,6 +28,13 @@ class IngestionContext:
     processing_job: object | None = None
     file_type: str | None = None
     pages: list[ExtractedPage] = field(default_factory=list)
+    # Tables found by LAYOUT_ANALYSIS, with offsets into the page text as
+    # it will be stored. Written by the pipeline in the same transaction as
+    # the pages, so structure and text can never disagree.
+    tables: list = field(default_factory=list)
+    # Images the document embeds, recorded so an answer can point at
+    # content this pipeline cannot read rather than pretend it is absent.
+    figures: list = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
     # The persisted DocumentContent, set once the content stages finish.
     # Analysis stages read this instead of reopening the original file.

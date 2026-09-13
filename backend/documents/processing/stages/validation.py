@@ -2,16 +2,16 @@ from django.conf import settings
 
 from documents.processing.context import FileType, StageResult
 from documents.processing.errors import ErrorCode, StageError
-from documents.processing.extractors import pdf
+from documents.processing.extractors import docx, pdf
 
-SUPPORTED_TYPES = {FileType.PDF, FileType.TXT, FileType.IMAGE}
+SUPPORTED_TYPES = {FileType.PDF, FileType.TXT, FileType.IMAGE, FileType.DOCX}
 
 
 def run(context) -> StageResult:
     if context.file_type not in SUPPORTED_TYPES:
         raise StageError(
             f"Unsupported file type for '{context.document_version.file_name}'. "
-            f"Supported: PDF, TXT, PNG, JPG, JPEG.",
+            f"Supported: PDF, DOCX, TXT, PNG, JPG, JPEG.",
             code=ErrorCode.UNSUPPORTED_FILE_TYPE,
         )
 
@@ -43,5 +43,13 @@ def run(context) -> StageResult:
             )
 
         metadata["page_count"] = count
+
+    if context.file_type == FileType.DOCX:
+        # Cheap structural checks only. The page limit is not applied here:
+        # a DOCX has no page count until the whole document has been walked,
+        # so enforcing it would mean parsing the file twice. The
+        # decompression-bomb guard inside the extractor is what bounds the
+        # work, and it runs before any parsing happens.
+        metadata.update(docx.check_expansion(context.file_path))
 
     return StageResult(message="Validated.", metadata=metadata)

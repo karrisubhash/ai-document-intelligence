@@ -1,0 +1,8 @@
+# Optional: only needed to run the trained text classifier in-process
+# (DOCUMENT_CLASSIFIER=...text_classifier.TextDocumentClassifier).
+#
+# Kept out of requirements.txt so a deployment that does not classify
+# does not carry the ML stack. The adapter imports joblib lazily and
+# says to install this file if it is missing.
+scikit-learn>=1.4
+joblib>=1.3

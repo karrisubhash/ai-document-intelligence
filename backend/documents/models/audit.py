@@ -11,6 +11,8 @@ class AuditLog(models.Model):
         DOCUMENT_DOWNLOAD = "DOCUMENT_DOWNLOAD", "Document download"
         DOCUMENT_REPROCESS = "DOCUMENT_REPROCESS", "Document reprocess"
         DOCUMENT_VERSION_UPLOAD = "DOCUMENT_VERSION_UPLOAD", "Document version upload"
+        SEARCH = "SEARCH", "Search"
+        CHAT = "CHAT", "Chat"
 
     class Result(models.TextChoices):
         ALLOWED = "ALLOWED", "Allowed"

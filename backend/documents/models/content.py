@@ -40,6 +40,11 @@ class PageContent(models.Model):
         PDF_TEXT = "PDF_TEXT", "PDF text layer"
         OCR = "OCR", "OCR"
         PLAIN_TEXT = "PLAIN_TEXT", "Plain text"
+        # Distinct from PLAIN_TEXT: the text came out of a structured
+        # document with paragraphs and tables, and its page boundaries are
+        # author-declared breaks rather than rendered pages. Keeping them
+        # apart is what lets extraction quality be compared per source.
+        DOCX_TEXT = "DOCX_TEXT", "DOCX text"
 
     content = models.ForeignKey(
         DocumentContent,

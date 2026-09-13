@@ -8,3 +8,8 @@ pypdf
 pytesseract
 pdf2image
 pillow
+python-docx
+pgvector
+django-cors-headers
+prometheus-client
+gunicorn

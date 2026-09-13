@@ -241,10 +241,14 @@ class DocumentProcessingEndpointTests(AuthenticatedAPITestCase):
             [event["stage"] for event in job["events"]],
             [
                 ProcessingJob.Stage.INGESTION,
+                ProcessingJob.Stage.SCANNING,
                 ProcessingJob.Stage.VALIDATION,
                 ProcessingJob.Stage.TEXT_EXTRACTION,
                 ProcessingJob.Stage.OCR,
+                ProcessingJob.Stage.LAYOUT_ANALYSIS,
                 ProcessingJob.Stage.CLASSIFICATION,
+                ProcessingJob.Stage.EXTRACTION,
+                ProcessingJob.Stage.INDEXING,
             ],
         )
         # CLASSIFICATION is SKIPPED while no model is configured; nothing failed.
@@ -466,7 +470,7 @@ class DocumentAuthorizationTests(APITestCase):
         self.client.force_authenticate(user=self.cs_faculty)
         response = self.client.get(reverse("document-list"))
 
-        titles = [document["title"] for document in response.data]
+        titles = [document["title"] for document in response.data["results"]]
         self.assertIn("CS Policy", titles)
         self.assertNotIn("Mech Policy", titles)
 
@@ -477,7 +481,7 @@ class DocumentAuthorizationTests(APITestCase):
         self.client.force_authenticate(user=self.system_admin)
         response = self.client.get(reverse("document-list"))
 
-        titles = [document["title"] for document in response.data]
+        titles = [document["title"] for document in response.data["results"]]
         self.assertIn("CS Policy", titles)
         self.assertIn("Mech Policy", titles)
 

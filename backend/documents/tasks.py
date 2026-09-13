@@ -2,6 +2,7 @@ from celery import shared_task
 from django.db import InterfaceError, OperationalError
 
 from .processing.errors import StageError
+from .processing.scanning import DocumentInfected
 from .processing.pipeline import run_pipeline
 
 MAX_RETRIES = 3
@@ -18,6 +19,9 @@ RETRYABLE_EXCEPTIONS = (
 
 
 def is_retryable(exc: Exception) -> bool:
+    # A quarantined file does not become clean on the next attempt.
+    if isinstance(exc, DocumentInfected):
+        return False
     if isinstance(exc, StageError):
         return exc.retryable
     return isinstance(exc, RETRYABLE_EXCEPTIONS)

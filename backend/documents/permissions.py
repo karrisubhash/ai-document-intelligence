@@ -1,12 +1,22 @@
 from rest_framework import permissions
 
+from documents.observability import telemetry
+
 from . import authorization
 from .audit import record_event
 from .models import AuditLog
 
 # Actions that only ever read a document. "versions" is mixed (GET lists,
 # POST adds one) and is handled separately below.
-READ_ONLY_ACTIONS = {"retrieve", "processing", "download", "content"}
+READ_ONLY_ACTIONS = {
+    "retrieve",
+    "processing",
+    "download",
+    "content",
+    "classification",
+    "extraction",
+    "chunks",
+}
 
 ACTION_TO_AUDIT_EVENT = {
     "retrieve": AuditLog.Action.DOCUMENT_VIEW,
@@ -17,6 +27,13 @@ ACTION_TO_AUDIT_EVENT = {
     "download": AuditLog.Action.DOCUMENT_DOWNLOAD,
     # Extracted text is the document's substance - reading it is a view.
     "content": AuditLog.Action.DOCUMENT_VIEW,
+    # So is everything derived from it: a field value quotes the document,
+    # and a chunk is a verbatim slice of it. Auditing the derived views
+    # differently would make the cheapest way to read a document the one
+    # that leaves the weakest trail.
+    "classification": AuditLog.Action.DOCUMENT_VIEW,
+    "extraction": AuditLog.Action.DOCUMENT_VIEW,
+    "chunks": AuditLog.Action.DOCUMENT_VIEW,
 }
 
 
@@ -50,6 +67,10 @@ class DocumentAccessPolicy(permissions.BasePermission):
                 document=document,
                 result=AuditLog.Result.ALLOWED if allowed else AuditLog.Result.DENIED,
             )
+            if not allowed:
+                telemetry.authorization_denied(
+                    action, user_id=request.user.id, document_id=document.id
+                )
 
         return allowed
 

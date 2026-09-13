@@ -43,7 +43,11 @@ def run(context) -> StageResult:
         message=f"OCR ran on {len(pending)} page(s).",
         metadata={
             "pages_ocred": len(pending),
-            "duration_seconds": round(duration, 3),
+            # Named distinctly because the pipeline stamps its own
+            # "duration_seconds" for the whole stage over the top of this
+            # dict. This one times only the OCR loop, which is the number
+            # worth comparing across documents.
+            "ocr_seconds": round(duration, 3),
             "characters": sum(len(page.text) for page in pending),
         },
     )

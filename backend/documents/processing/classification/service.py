@@ -10,9 +10,15 @@ from .exceptions import ClassificationError, ClassifierNotConfigured
 
 
 @functools.cache
-def _load_classifier(path: str) -> DocumentClassifier:
-    """Instantiate once per dotted path - loading model weights on every
-    document would dominate inference cost."""
+def _load_classifier(path: str, artifact: str) -> DocumentClassifier:
+    """Instantiate once per (dotted path, artifact) pair.
+
+    Loading model weights on every document would dominate inference cost,
+    so instances are cached. `artifact` is part of the key rather than a
+    constructor argument: the adapter reads the setting itself, but keying
+    on the dotted path alone would keep serving the previously loaded
+    model after the artifact setting was pointed at a new one.
+    """
     return import_string(path)()
 
 
@@ -29,7 +35,9 @@ def get_classifier() -> DocumentClassifier:
             "rather than guessed."
         )
 
-    return _load_classifier(path)
+    return _load_classifier(
+        path, getattr(settings, "DOCUMENT_CLASSIFIER_ARTIFACT", "")
+    )
 
 
 def _validate(prediction: ClassificationPrediction) -> None:
@@ -66,4 +74,5 @@ def classify(document_content_id: int, *, processing_job=None) -> Classification
         predicted_label=prediction.label,
         confidence=prediction.confidence,
         input_reference=prediction.input_reference,
+        metadata=prediction.metadata,
     )

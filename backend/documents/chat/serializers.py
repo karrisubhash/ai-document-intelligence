@@ -1,0 +1,47 @@
+from rest_framework import serializers
+
+from documents.models import Conversation, Document, Message
+
+MAX_QUESTION_LENGTH = 2000
+
+
+class ChatRequestSerializer(serializers.Serializer):
+    question = serializers.CharField(max_length=MAX_QUESTION_LENGTH, trim_whitespace=True)
+    conversation_id = serializers.IntegerField(required=False, allow_null=True)
+    document_type = serializers.ChoiceField(
+        choices=Document.DocumentType.choices, required=False, allow_blank=True, default=""
+    )
+    department = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Message
+        fields = [
+            "id",
+            "role",
+            "content",
+            "abstained",
+            "abstention_reason",
+            "citations",
+            "support_ratio",
+            "model_name",
+            "model_version",
+            "generative",
+            "retrieved",
+            "passages_used",
+            "duration_ms",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    messages = MessageSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Conversation
+        fields = ["id", "title", "department", "created_at", "updated_at", "messages"]
+        read_only_fields = fields
