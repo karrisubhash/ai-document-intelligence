@@ -36,6 +36,11 @@ RUN if [ "$INSTALL_ML" = "true" ]; then \
 
 COPY backend /app/backend
 
+# The evaluation corpus and its governed benchmark template. Small, text
+# only, and part of the artifact on purpose: a regression gate that cannot
+# find its own dataset inside the image it is gating is a gate that skips.
+COPY evaluation /app/evaluation
+
 WORKDIR /app/backend
 
 EXPOSE 8000

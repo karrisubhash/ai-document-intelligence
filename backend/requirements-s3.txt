@@ -1,0 +1,12 @@
+# Object storage, optional (spec section 15).
+#
+# Installed only when uploads live in S3 or an S3-compatible service.
+# Setting AWS_STORAGE_BUCKET_NAME activates it; see config/settings.py.
+#
+#   pip install -r backend/requirements-s3.txt
+#
+# Kept out of requirements.txt for the same reason the ML layer is: a
+# single-node deployment needs neither, and a dependency that is always
+# installed is a dependency that always has to be patched.
+django-storages==1.14.4
+boto3==1.35.49

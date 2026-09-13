@@ -51,6 +51,7 @@ services:
 
     volumes:
       - ./backend:/app/backend
+      - ./evaluation:/app/evaluation
       - media_data:/app/backend/media
       # Trained model artifacts, read-only. Mounted at the path the
       # DOCUMENT_CLASSIFIER_ARTIFACT default already resolves to inside the
@@ -86,6 +87,7 @@ services:
 
     volumes:
       - ./backend:/app/backend
+      - ./evaluation:/app/evaluation
       - media_data:/app/backend/media
       # The worker is the process that actually runs the CLASSIFICATION
       # stage, so it needs the artifact at least as much as the API does.

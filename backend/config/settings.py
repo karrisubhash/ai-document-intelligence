@@ -262,6 +262,47 @@ MAILERS = {
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Object storage (spec section 15).
+#
+# Local disk by default, because a single-node deployment does not need
+# anything else and an S3 dependency that is always required is a
+# dependency on a network for a developer who has one file.
+#
+# It stops being sufficient the moment there is more than one node:
+# `--scale backend=3` puts uploads on whichever container answered the
+# request, so the other two - and every worker - get a FileNotFoundError
+# for a document that plainly exists. A volume shared between containers
+# on one host papers over it; two hosts do not.
+#
+# Setting AWS_STORAGE_BUCKET_NAME switches every FileField to S3. Nothing
+# in the pipeline changes: documents/storage.py materializes the object to
+# a temporary file for the extractors, which need a real path because
+# poppler and tesseract are subprocesses.
+AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
+
+if AWS_STORAGE_BUCKET_NAME:
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+            "OPTIONS": {
+                "bucket_name": AWS_STORAGE_BUCKET_NAME,
+                "region_name": os.getenv("AWS_S3_REGION_NAME", ""),
+                # Set for MinIO, Ceph or any other S3-compatible service;
+                # left empty for AWS itself.
+                "endpoint_url": os.getenv("AWS_S3_ENDPOINT_URL", "") or None,
+                # Documents are served through the authenticated, audited
+                # download endpoint - never by handing out a bucket URL.
+                # Private ACLs mean a leaked object key is not a document.
+                "default_acl": "private",
+                "querystring_auth": True,
+                "file_overwrite": False,
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+
 
 # Ingestion limits, enforced by the VALIDATION pipeline stage.
 MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024

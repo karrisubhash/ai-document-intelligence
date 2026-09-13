@@ -15,6 +15,7 @@ from documents.models import (
     ProcessingJob,
 )
 
+from documents import storage
 from documents.observability import telemetry
 
 from .context import IngestionContext, StageResult
@@ -76,25 +77,36 @@ def run_pipeline(processing_job_id: int) -> None:
     document_version = job.document_version
     document = document_version.document
 
-    context = IngestionContext(
-        document_version=document_version,
-        file_path=document_version.file.path,
-        processing_job=job,
-    )
-
     _mark_started(job, document)
 
+    # The file is materialized ONCE, for the whole job, and every stage
+    # shares that path. Reading `document_version.file.path` directly - as
+    # this used to - works only on a filesystem storage: Storage.path()
+    # raises NotImplementedError on S3 and every other remote backend, so
+    # the platform could not be pointed at object storage at all, however
+    # it was configured. See documents/storage.py.
+    #
+    # Held open across the analysis stages too, even though they read the
+    # persisted DocumentContent rather than the file, so that a retry of a
+    # single stage never has to fetch the object a second time.
     try:
-        for stage, stage_fn in CONTENT_STAGES:
-            _run_stage(job, context, stage, stage_fn)
+        with storage.local_copy(document_version.file) as file_path:
+            context = IngestionContext(
+                document_version=document_version,
+                file_path=file_path,
+                processing_job=job,
+            )
 
-        # The normalized representation lands here, before anything
-        # analyses it: File -> Ingestion -> Validation -> DocumentContent
-        # -> Classification.
-        context.content = _persist_content(job, context)
+            for stage, stage_fn in CONTENT_STAGES:
+                _run_stage(job, context, stage, stage_fn)
 
-        for stage, stage_fn in ANALYSIS_STAGES:
-            _run_stage(job, context, stage, stage_fn)
+            # The normalized representation lands here, before anything
+            # analyses it: File -> Ingestion -> Validation ->
+            # DocumentContent -> Classification.
+            context.content = _persist_content(job, context)
+
+            for stage, stage_fn in ANALYSIS_STAGES:
+                _run_stage(job, context, stage, stage_fn)
     except Exception as exc:
         _mark_failed(job, document, exc)
         raise
