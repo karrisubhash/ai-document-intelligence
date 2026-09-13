@@ -116,6 +116,44 @@ def authorized_chunks(user):
     ), documents
 
 
+def _why_nothing_is_searchable(user, documents) -> str:
+    """Say which of three different situations produced no results.
+
+    The note here used to read "no authorized documents match the filters"
+    whenever the CHUNK queryset was empty, which conflates a permission
+    outcome with an indexing one. Observed: four documents plainly listed
+    and processed, search returning nothing, and a note insisting there
+    were no authorized documents. The cause was that every chunk belonged
+    to an extraction pass that was no longer the live one - a fact the
+    message actively pointed away from.
+
+    Distinguishing the cases costs one COUNT on a path that has already
+    decided to return nothing, and turns a silent, misleading dead end into
+    something diagnosable.
+    """
+    visible = documents.count()
+    if not visible:
+        return "no authorized documents match the filters"
+
+    # Same documents, without the "current version, current pass" bound.
+    existing = DocumentChunk.objects.filter(
+        document_version__document__in=documents
+    ).count()
+
+    if not existing:
+        return (
+            f"{visible} authorized document(s), but none of them has been "
+            f"indexed - the INDEXING stage produced no chunks"
+        )
+
+    return (
+        f"{visible} authorized document(s) with {existing} chunk(s), none of "
+        f"which belongs to the current version's current extraction pass. "
+        f"Re-process the documents, or check that the worker is running the "
+        f"same code as the API"
+    )
+
+
 def _build_lexical_query(query: str):
     """OR the query's terms rather than AND-ing them.
 
@@ -202,7 +240,7 @@ def search(
     response = SearchResponse(query=query, authorized_documents=documents.count())
 
     if not queryset.exists():
-        response.notes.append("no authorized documents match the filters")
+        response.notes.append(_why_nothing_is_searchable(user, documents))
         return response
 
     # --- Lexical half -----------------------------------------------------

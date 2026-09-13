@@ -614,3 +614,87 @@ class StaleContentRetrievalTests(TestCase):
         chunks, _ = search_service.authorized_chunks(self.user)
 
         self.assertEqual(chunks.count(), 0)
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class EmptySearchDiagnosticTests(TestCase):
+    """When search returns nothing, say WHICH nothing.
+
+    The note used to read "no authorized documents match the filters"
+    whenever the chunk queryset was empty. Observed during a live test:
+    four documents listed and processed, search returning nothing, and a
+    note insisting there were no authorized documents - pointing away from
+    the actual cause, which was that every chunk belonged to an extraction
+    pass that was no longer the live one.
+    """
+
+    def setUp(self):
+        self.user = make_user("diagnostic_user", department="Registry")
+
+    def make_document(self, title="Regulations"):
+        document = Document.objects.create(
+            title=title,
+            document_type="REGULATION",
+            owner=self.user,
+            department="Registry",
+        )
+        body = b"Clause 4.2 Attendance minimum is 75 percent.\n"
+        version = document.versions.create(
+            version_number=1,
+            file=ContentFile(body, name="r.txt"),
+            file_name="r.txt",
+            file_size=len(body),
+            uploaded_by=self.user,
+        )
+        document.current_version = version
+        document.save(update_fields=["current_version"])
+        return document, version
+
+    def test_no_documents_says_so(self):
+        response = search_service.search(self.user, "attendance")
+
+        self.assertEqual(response.hits, [])
+        self.assertIn("no authorized documents", response.notes[0])
+
+    def test_documents_that_were_never_indexed_are_named_as_such(self):
+        """Distinct from a permission problem: the documents are visible,
+        they simply have no chunks."""
+        self.make_document()
+
+        response = search_service.search(self.user, "attendance")
+
+        self.assertEqual(response.hits, [])
+        note = " ".join(response.notes)
+        self.assertIn("has been indexed", note)
+        self.assertIn("1 authorized document", note)
+
+    def test_chunks_from_a_superseded_pass_are_named_as_such(self):
+        """The case that actually happened. The fix must point AT the
+        cause, not away from it."""
+        document, version = self.make_document()
+        run_pipeline(ProcessingJob.objects.create(document_version=version).id)
+        self.assertTrue(
+            DocumentChunk.objects.filter(document_version=version).exists()
+        )
+
+        # Exactly what a stale worker leaves behind: content and chunks
+        # exist, but nothing is marked as the live pass.
+        version.current_content = None
+        version.save(update_fields=["current_content"])
+
+        response = search_service.search(self.user, "attendance")
+
+        self.assertEqual(response.hits, [])
+        note = " ".join(response.notes)
+        self.assertIn("current extraction pass", note)
+        self.assertIn("worker", note)
+        self.assertNotIn("no authorized documents", note)
+
+    def test_a_healthy_document_still_returns_hits(self):
+        """The guard must not fire on the ordinary path."""
+        document, version = self.make_document()
+        run_pipeline(ProcessingJob.objects.create(document_version=version).id)
+
+        response = search_service.search(self.user, "attendance")
+
+        self.assertTrue(response.hits)
