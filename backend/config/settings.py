@@ -410,6 +410,20 @@ RAG_ANSWERER = os.getenv("RAG_ANSWERER", "")
 # as data, every claim must still carry a resolvable marker, and an answer
 # that fails grounding is still downgraded to an abstention. The generative
 # model is checked, not trusted.
+# Which Claude surface to call: "api" (first-party, ANTHROPIC_API_KEY) or
+# "bedrock" (Amazon Bedrock, ordinary AWS credentials).
+#
+# Not cosmetic. Bedrock model ids carry an "anthropic." prefix, a region is
+# required, and server-side refusal fallbacks are unsupported there -
+# sending that parameter to Bedrock is a 400. The answerer selects the
+# right shape per backend rather than sending one and hoping.
+RAG_ANSWERER_BACKEND = os.getenv("RAG_ANSWERER_BACKEND", "api")
+
+# Required for Bedrock; falls back to AWS_REGION / AWS_DEFAULT_REGION. The
+# SDK raises rather than defaulting to us-east-1, which is correct: a silent
+# default sends traffic to a region the account may have no model access in.
+AWS_BEDROCK_REGION = os.getenv("AWS_BEDROCK_REGION", "")
+
 RAG_ANSWERER_MODEL = os.getenv("RAG_ANSWERER_MODEL", "")
 
 # low | medium | high | xhigh | max. Grounded answering over a handful of

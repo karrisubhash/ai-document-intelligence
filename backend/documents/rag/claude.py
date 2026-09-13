@@ -12,7 +12,7 @@ built to catch invention stays exactly where it was and now earns its keep:
   * retrieval still runs the permission filter FIRST, so the model only
     ever sees passages this caller may read;
   * passages that look like instructions are still flagged, and the prompt
-    below names them as data to report on rather than orders to follow;
+    names them as data to report on rather than orders to follow;
   * every claim must carry a passage marker, and `grounding.validate`
     checks each marker resolves and that the answer's content words
     actually appear in the passages it cited;
@@ -20,8 +20,8 @@ built to catch invention stays exactly where it was and now earns its keep:
     the engine, not returned with a warning.
 
 So the model is not trusted. It is checked, and abstention is what happens
-when the check fails - which is the same contract the extractive answerer
-had, applied to a component that can actually get it wrong.
+when the check fails - the same contract the extractive answerer had,
+applied to a component that can actually get it wrong.
 
 *Failure falls back rather than 500s.* Section 18 makes timeouts and
 fallback the gateway's problem rather than every caller's. A model outage
@@ -29,10 +29,21 @@ returns the extractive answer instead of an error, and records which
 provider actually produced it - a quietly-degraded answer that does not say
 so is worse than a slow one.
 
-NOT YET RUN AGAINST THE LIVE API from this repository - there were no
-Anthropic credentials on the machine it was written on. The request shape
-follows the current SDK and the logic is unit-tested against a stubbed
-client, but treat the first real call as the test.
+TWO BACKENDS, because they are not the same API surface:
+
+  api      the first-party Anthropic API, keyed by ANTHROPIC_API_KEY
+  bedrock  Amazon Bedrock, keyed by ordinary AWS credentials
+
+The differences are small but not optional. Bedrock model ids carry an
+`anthropic.` prefix, a region is required, and server-side refusal
+fallbacks are **not supported there** - the equivalent is client-side
+middleware registered on the client. Sending the server-side parameter to
+Bedrock is a 400, so it is selected per backend rather than always-on.
+
+NOT YET RUN AGAINST EITHER LIVE BACKEND from this repository - there were
+no credentials on the machine it was written on. The request shapes follow
+the current SDK and the logic is unit-tested against a stubbed client, but
+treat the first real call as the test.
 """
 
 import logging
@@ -43,11 +54,24 @@ from .llm import ABSTENTION_TEXT, ExtractiveAnswerer, LLMResponse
 
 logger = logging.getLogger("adi.llm")
 
+API = "api"
+BEDROCK = "bedrock"
+
 # Opus is the default deliberately. This is a grounded-citation task over
 # institutional documents where a wrong answer is the expensive outcome and
 # the volume is human-scale, so the most capable model is the right default;
 # RAG_ANSWERER_MODEL exists for anyone who measures otherwise.
 DEFAULT_MODEL = "claude-opus-5"
+
+# Where a policy decline is re-served. Institutional documents are dull,
+# but a disciplinary circular or a safety incident report is exactly the
+# kind of legitimate content a classifier can decline on.
+FALLBACK_MODEL = "claude-opus-4-8"
+
+# Bedrock namespaces Anthropic models. Applied automatically rather than
+# demanded of whoever sets RAG_ANSWERER_MODEL: forgetting it is a 404 that
+# reads like the model does not exist.
+BEDROCK_PREFIX = "anthropic."
 
 # A cap, not a target. Answers here are a few sentences; this only exists so
 # a long one is never truncated mid-thought.
@@ -88,7 +112,7 @@ Rules, in order of priority:
 
 
 class ClaudeNotConfigured(RuntimeError):
-    """No credentials, or the SDK is not installed."""
+    """The SDK is missing, or the backend has nothing to authenticate with."""
 
 
 class ClaudeAnswerer:
@@ -98,17 +122,40 @@ class ClaudeAnswerer:
     generative = True
 
     def __init__(self):
-        self.model = getattr(settings, "RAG_ANSWERER_MODEL", "") or DEFAULT_MODEL
+        self.backend = (
+            getattr(settings, "RAG_ANSWERER_BACKEND", "") or API
+        ).strip().lower()
+        if self.backend not in (API, BEDROCK):
+            raise ClaudeNotConfigured(
+                f"RAG_ANSWERER_BACKEND must be {API!r} or {BEDROCK!r}, "
+                f"got {self.backend!r}"
+            )
+
+        configured = getattr(settings, "RAG_ANSWERER_MODEL", "") or DEFAULT_MODEL
+        self.model = self._qualify(configured)
         self.effort = getattr(settings, "RAG_ANSWERER_EFFORT", "") or "medium"
         self.version = self.model
-        # The extractive answerer is kept as the fallback path, not as a
-        # second configuration to maintain: it needs nothing to work.
+
+        # The extractive answerer is the fallback path, not a second
+        # configuration to maintain: it needs nothing to work.
         self._fallback = ExtractiveAnswerer()
         self._client = None
+
+    def _qualify(self, model: str) -> str:
+        if self.backend == BEDROCK and not model.startswith(BEDROCK_PREFIX):
+            return f"{BEDROCK_PREFIX}{model}"
+        return model
+
+    # --- client ----------------------------------------------------------
 
     def _get_client(self):
         if self._client is not None:
             return self._client
+
+        # Our own configuration is checked BEFORE the dependency. Both can
+        # be missing at once, and "install the SDK" is the less useful of
+        # the two messages when the real problem is a setting nobody set.
+        region = self._region() if self.backend == BEDROCK else ""
 
         try:
             import anthropic
@@ -118,14 +165,68 @@ class ClaudeAnswerer:
                 "pip install -r backend/requirements-llm.txt"
             ) from exc
 
-        # Zero-arg: the SDK resolves ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN
-        # or an `ant auth login` profile. Nothing here should ever hold a
-        # key, and the settings file must not grow one.
-        self._client = anthropic.Anthropic(
-            timeout=getattr(settings, "RAG_ANSWERER_TIMEOUT", 60.0),
-            max_retries=getattr(settings, "RAG_ANSWERER_RETRIES", 2),
-        )
+        timeout = getattr(settings, "RAG_ANSWERER_TIMEOUT", 60.0)
+        retries = getattr(settings, "RAG_ANSWERER_RETRIES", 2)
+
+        if self.backend == BEDROCK:
+            self._client = self._bedrock_client(anthropic, region, timeout, retries)
+        else:
+            # Zero-arg auth: the SDK resolves ANTHROPIC_API_KEY,
+            # ANTHROPIC_AUTH_TOKEN or an `ant auth login` profile. Nothing
+            # here should ever hold a key, and settings must not grow one.
+            self._client = anthropic.Anthropic(timeout=timeout, max_retries=retries)
+
         return self._client
+
+    def _region(self) -> str:
+        """The Bedrock region, or a refusal.
+
+        Required - the SDK raises rather than quietly defaulting to
+        us-east-1, which is the right behaviour: a silent default sends
+        traffic to a region the account may not even have model access in,
+        and the resulting error names the model rather than the region.
+        """
+        region = (
+            getattr(settings, "AWS_BEDROCK_REGION", "")
+            or os_environ("AWS_REGION")
+            or os_environ("AWS_DEFAULT_REGION")
+        )
+        if not region:
+            raise ClaudeNotConfigured(
+                "Bedrock needs a region. Set AWS_BEDROCK_REGION (or AWS_REGION) "
+                "to the region where you have Anthropic model access granted."
+            )
+        return region
+
+    def _bedrock_client(self, anthropic, region, timeout, retries):
+        """The Bedrock Messages-API client, plus client-side fallbacks."""
+        try:
+            client_class = anthropic.AnthropicBedrockMantle
+        except AttributeError as exc:
+            raise ClaudeNotConfigured(
+                "This anthropic SDK has no Bedrock client. "
+                "pip install -r backend/requirements-llm.txt"
+            ) from exc
+
+        kwargs = {"aws_region": region, "timeout": timeout, "max_retries": retries}
+
+        # Server-side `fallbacks` is not supported on Bedrock - sending it
+        # is a 400. The equivalent is middleware on the client, which
+        # retries a policy decline on another model.
+        middleware = getattr(anthropic, "BetaRefusalFallbackMiddleware", None)
+        if middleware is not None:
+            kwargs["middleware"] = [
+                middleware([{"model": self._qualify(FALLBACK_MODEL)}])
+            ]
+        else:
+            logger.info(
+                "llm.no_fallback_middleware",
+                extra={"reason": "SDK predates BetaRefusalFallbackMiddleware"},
+            )
+
+        return client_class(**kwargs)
+
+    # --- answering -------------------------------------------------------
 
     def answer(self, *, question: str, context, prompt: str) -> LLMResponse:
         if context.is_empty:
@@ -146,7 +247,11 @@ class ClaudeAnswerer:
             # answer is available.
             logger.warning(
                 "llm.fallback",
-                extra={"provider": self.name, "error": type(exc).__name__},
+                extra={
+                    "provider": self.name,
+                    "backend": self.backend,
+                    "error": type(exc).__name__,
+                },
             )
             response = self._fallback.answer(
                 question=question, context=context, prompt=prompt
@@ -158,26 +263,30 @@ class ClaudeAnswerer:
             }
             return response
 
+    def _request_kwargs(self, prompt: str) -> dict:
+        kwargs = {
+            "model": self.model,
+            "max_tokens": MAX_TOKENS,
+            "system": SYSTEM,
+            "output_config": {"effort": self.effort},
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        if self.backend == API:
+            # First-party only. On Bedrock this pair is a 400; the client
+            # there carries the middleware equivalent instead.
+            kwargs["betas"] = ["server-side-fallback-2026-07-01"]
+            kwargs["fallbacks"] = "default"
+
+        return kwargs
+
     def _generate(self, *, question: str, context, prompt: str) -> LLMResponse:
         # No `import anthropic` here: _get_client owns that, and importing
         # again would make an installed SDK a hard requirement even for a
         # caller that injected its own client.
         client = self._get_client()
 
-        message = client.beta.messages.create(
-            model=self.model,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM,
-            output_config={"effort": self.effort},
-            # Routes a policy decline to a fallback model inside the same
-            # call rather than returning nothing. Institutional documents
-            # are dull, but a disciplinary circular or a safety incident
-            # report is exactly the kind of legitimate content a classifier
-            # can decline on.
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            messages=[{"role": "user", "content": prompt}],
-        )
+        message = client.beta.messages.create(**self._request_kwargs(prompt))
 
         if message.stop_reason == "refusal":
             details = getattr(message, "stop_details", None)
@@ -196,12 +305,11 @@ class ClaudeAnswerer:
         if not text:
             return self._abstained(prompt, reason="the model returned no text")
 
-        abstained = text.strip() == ABSTENTION_TEXT
         usage = message.usage
 
         return LLMResponse(
             text=text,
-            abstained=abstained,
+            abstained=text.strip() == ABSTENTION_TEXT,
             cited_markers=_markers(text),
             model_name=self.name,
             model_version=self.model,
@@ -211,11 +319,12 @@ class ClaudeAnswerer:
             prompt_tokens=getattr(usage, "input_tokens", 0) or 0,
             completion_tokens=getattr(usage, "output_tokens", 0) or 0,
             metadata={
+                "backend": self.backend,
                 "model": self.model,
                 "effort": self.effort,
                 "stop_reason": message.stop_reason,
                 # Which model actually served it, which is not always the
-                # one requested once fallbacks are enabled.
+                # one requested once fallbacks are in play.
                 "served_by": getattr(message, "model", self.model),
                 "cache_read_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
             },
@@ -231,8 +340,18 @@ class ClaudeAnswerer:
             generative=True,
             prompt_characters=len(prompt),
             completion_characters=len(ABSTENTION_TEXT),
-            metadata={"reason": reason, "model": self.model},
+            metadata={
+                "reason": reason,
+                "model": self.model,
+                "backend": self.backend,
+            },
         )
+
+
+def os_environ(name: str) -> str:
+    import os
+
+    return os.environ.get(name, "")
 
 
 def _markers(text: str) -> tuple:

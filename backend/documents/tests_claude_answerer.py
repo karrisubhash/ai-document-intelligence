@@ -282,3 +282,111 @@ class PromptContractTests(TestCase):
         # returning nothing.
         self.assertEqual(kwargs["fallbacks"], "default")
         self.assertIn("server-side-fallback-2026-07-01", kwargs["betas"])
+
+
+@override_settings(RAG_ANSWERER_BACKEND="bedrock", AWS_BEDROCK_REGION="us-east-1")
+class BedrockBackendTests(TestCase):
+    """Bedrock is not the same API surface, and the differences are not
+    optional - each one is a 400 or a 404 if ignored."""
+
+    def test_the_model_id_is_namespaced(self):
+        """Bedrock namespaces Anthropic models. Forgetting the prefix is a
+        404 that reads like the model does not exist."""
+        answerer = ClaudeAnswerer()
+
+        self.assertEqual(answerer.model, "anthropic.claude-opus-5")
+
+    def test_an_already_prefixed_model_is_not_double_prefixed(self):
+        with override_settings(RAG_ANSWERER_MODEL="anthropic.claude-sonnet-5"):
+            self.assertEqual(
+                ClaudeAnswerer().model, "anthropic.claude-sonnet-5"
+            )
+
+    def test_server_side_fallbacks_are_never_sent_to_bedrock(self):
+        """The check that matters most here: server-side `fallbacks` is
+        unsupported on Bedrock and sending it is a 400. The equivalent is
+        middleware on the client."""
+        answerer = ClaudeAnswerer()
+        client = stub_client(StubMessage("The minimum is 75 percent [1]."))
+        answerer._client = client
+        context = build_context()
+
+        answerer.answer(
+            question="What is the attendance minimum?",
+            context=context,
+            prompt=ctx.render(context, "What is the attendance minimum?"),
+        )
+
+        kwargs = client.beta.messages.create.call_args.kwargs
+        self.assertNotIn("fallbacks", kwargs)
+        self.assertNotIn("betas", kwargs)
+        # ...while the things Bedrock DOES support are still sent.
+        self.assertEqual(kwargs["output_config"], {"effort": "medium"})
+        self.assertEqual(kwargs["model"], "anthropic.claude-opus-5")
+
+    def test_the_first_party_backend_still_sends_them(self):
+        with override_settings(RAG_ANSWERER_BACKEND="api"):
+            answerer = ClaudeAnswerer()
+            client = stub_client(StubMessage("The minimum is 75 percent [1]."))
+            answerer._client = client
+            context = build_context()
+
+            answerer.answer(
+                question="What is the attendance minimum?",
+                context=context,
+                prompt=ctx.render(context, "q"),
+            )
+
+            kwargs = client.beta.messages.create.call_args.kwargs
+            self.assertEqual(kwargs["fallbacks"], "default")
+            self.assertIn("server-side-fallback-2026-07-01", kwargs["betas"])
+
+    def test_a_missing_region_is_refused_with_a_useful_message(self):
+        """The SDK raises rather than defaulting to us-east-1, and so does
+        this: a silent default sends traffic to a region the account may
+        have no model access in."""
+        from documents.rag.claude import ClaudeNotConfigured
+
+        with override_settings(AWS_BEDROCK_REGION=""):
+            with mock.patch.dict("os.environ", {}, clear=True):
+                answerer = ClaudeAnswerer()
+                with self.assertRaises(ClaudeNotConfigured) as caught:
+                    answerer._get_client()
+
+        self.assertIn("region", str(caught.exception).lower())
+
+    def test_an_unknown_backend_is_refused_at_construction(self):
+        from documents.rag.claude import ClaudeNotConfigured
+
+        with override_settings(RAG_ANSWERER_BACKEND="azure"):
+            with self.assertRaises(ClaudeNotConfigured):
+                ClaudeAnswerer()
+
+    def test_the_backend_is_recorded_on_the_answer(self):
+        answerer = ClaudeAnswerer()
+        answerer._client = stub_client(
+            StubMessage("The minimum is 75 percent [1].")
+        )
+        context = build_context()
+
+        response = answerer.answer(
+            question="What is the attendance minimum?",
+            context=context,
+            prompt=ctx.render(context, "q"),
+        )
+
+        self.assertEqual(response.metadata["backend"], "bedrock")
+
+    def test_a_bedrock_outage_falls_back_to_the_extractive_answer(self):
+        answerer = ClaudeAnswerer()
+        answerer._client = stub_client(raises=RuntimeError("throttled"))
+        context = build_context()
+
+        response = answerer.answer(
+            question="What is the attendance minimum?",
+            context=context,
+            prompt=ctx.render(context, "q"),
+        )
+
+        self.assertIn("75 percent", response.text)
+        self.assertEqual(response.metadata["fell_back_from"], "claude")

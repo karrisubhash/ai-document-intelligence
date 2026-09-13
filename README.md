@@ -578,9 +578,23 @@ real provider is one setting (`RAG_ANSWERER`).
 
 ```bash
 pip install -r backend/requirements-llm.txt
+
+# Either the first-party API...
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# ...or Amazon Bedrock, on ordinary AWS credentials and no Anthropic key
+export RAG_ANSWERER_BACKEND=bedrock
+export AWS_BEDROCK_REGION=us-east-1        # a region with model access granted
+
 export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
 ```
+
+**The two backends are not the same API surface**, and the differences are not optional:
+Bedrock model ids carry an `anthropic.` prefix (applied automatically - forgetting it is a
+404 that reads like the model does not exist), a region is required rather than defaulted,
+and **server-side refusal fallbacks are unsupported there** - sending that parameter to
+Bedrock is a 400, so the equivalent is client-side middleware registered on the client. The
+answerer selects the right shape per backend rather than sending one and hoping.
 
 The extractive baseline quotes sentences, which reads like a search result rather than a
 reply: it cannot rephrase, cannot combine two clauses, and cannot say *"no, because..."*.
@@ -612,11 +626,14 @@ a classifier can decline on.
 makes that the gateway's problem), and records `fell_back_from` so a quietly degraded answer
 never passes as a normal one.
 
-**This has not been run against the live API from this repository** — there were no
-Anthropic credentials on the machine. The request shape follows the current SDK and the
-logic is covered by 18 tests against a stubbed client (hallucination caught, refusal
-abstains, outage degrades, empty context never reaches the model), but treat the first real
-call as the test.
+**Neither backend has completed a live call from this repository.** The first-party key
+available during development authenticated successfully and was then refused for billing
+(`credit balance is too low`), and no AWS credentials were present, so the request shapes
+have never been validated by a server. They follow the current SDK and are covered by 26
+tests against a stubbed client - hallucination caught by grounding, refusal abstains, outage
+degrades to the extractive answer, empty context never reaches the model, and the
+Bedrock-unsupported parameter is asserted absent on that path - but **treat the first real
+call as the test**.
 
 ### Hard-wrapped documents used to get cut off mid-sentence
 
@@ -1494,7 +1511,7 @@ point for a 16-class problem whose interesting failures are the small, low-text 
 ## Testing
 
 ```bash
-# Backend: 624 tests across documents, ingestion, classification, field
+# Backend: 632 tests across documents, ingestion, classification, field
 #          extraction, DOCX, search, RAG, tables, figures, agents,
 #          storage, object storage, security, evaluation gate,
 #          observability, multiprocess metrics, scale, backup,

@@ -9,4 +9,11 @@
 #   pip install -r backend/requirements-llm.txt
 #   export ANTHROPIC_API_KEY=sk-ant-...
 #   export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
-anthropic>=1.0.0
+#
+# On Amazon Bedrock instead, with ordinary AWS credentials and no Anthropic
+# key - note the [bedrock] extra, which pulls in boto3:
+#
+#   export RAG_ANSWERER_BACKEND=bedrock
+#   export AWS_BEDROCK_REGION=us-east-1     # a region you have model access in
+#   export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
+anthropic[bedrock]>=1.0.0
