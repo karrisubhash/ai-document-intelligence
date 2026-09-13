@@ -1,0 +1,41 @@
+# Scrape configuration for the production stack (spec §20).
+#
+# Two things here are deliberate and easy to get wrong.
+#
+# *Discovery is by DNS, not by a static host list.* `docker compose up
+# --scale backend=3` creates three containers behind one service name, and
+# Docker's embedded DNS returns an A record per container. A static target
+# of `backend:8000` would resolve to whichever one the resolver felt like
+# and silently monitor a third of the fleet - the same failure mode the
+# multiprocess metrics fix exists to prevent, one level up.
+#
+# *The backend is scraped directly, not through nginx.* nginx restricts
+# /metrics to private ranges, and going through it would also mean scraping
+# whichever replica the load balancer chose rather than all of them.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    stack: ai-document-intelligence
+
+scrape_configs:
+  # Every backend replica. Each one aggregates its own gunicorn workers via
+  # PROMETHEUS_MULTIPROC_DIR, so one target == one container == an honest
+  # total for that container.
+  - job_name: adi-backend
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [backend]
+        type: A
+        port: 8000
+        refresh_interval: 30s
+    relabel_configs:
+      # Without this every replica reports instance="<random ip>:8000" and
+      # a restarted container looks like a brand new series.
+      - source_labels: [__meta_dns_name]
+        target_label: service
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

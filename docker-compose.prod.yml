@@ -79,6 +79,7 @@ services:
     command: >
       sh -c "python manage.py collectstatic --noinput &&
       exec gunicorn config.wsgi:application
+      --config gunicorn.conf.py
       --bind 0.0.0.0:8000
       --workers ${GUNICORN_WORKERS:-3}
       --threads ${GUNICORN_THREADS:-2}
@@ -111,6 +112,14 @@ services:
 
     environment:
       DJANGO_DEBUG: "False"
+      # Without this, /metrics reports whichever of the N gunicorn workers
+      # answered the scrape - roughly 1/N of the traffic, understating
+      # every error count and latency. tmpfs because the samples are
+      # process state, not data: they must not survive the container.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+
+    tmpfs:
+      - /tmp/prometheus
 
     depends_on:
       db:
@@ -229,8 +238,47 @@ services:
       while :; do certbot renew --webroot --webroot-path=/var/www/certbot;
       sleep 12h & wait $${!}; done"
 
+  # Observability (§20). Part of the production overlay rather than an
+  # opt-in profile: the overlay already has to be named explicitly, so
+  # anyone running it is deploying for real and should be able to see what
+  # the system is doing.
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+    depends_on:
+      - backend
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    # Bound to LOOPBACK, not published to the world. A Grafana on the open
+    # internet with a default password is a bigger hole than anything it
+    # monitors; reach it over an SSH tunnel:
+    #   ssh -L 3000:localhost:3000 <host>
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?set GRAFANA_PASSWORD}
+      # Nothing to sign up for and nobody to phone home to.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
+  prometheus_data:
+  grafana_data:
   media_data:
   static_data:
   certbot_www:

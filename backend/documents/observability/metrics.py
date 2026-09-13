@@ -21,15 +21,21 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 # twice under a test runner cannot raise "duplicated timeseries" and so the
 # exposed surface is exactly what this project declares.
 #
-# ONE REGISTRY PER PROCESS, and that is a real limitation worth stating
-# rather than discovering. The API process and the Celery worker are
-# separate processes with separate registries: /metrics served by the API
-# shows API counters, and the worker's pipeline counters live in the
-# worker. A complete picture needs either a scrape target per process, or
-# prometheus_client's multiprocess mode backed by a shared directory.
-# The structured logs do NOT have this split - every process writes the
-# same JSON lines to stdout, so pipeline telemetry is observable there
-# today regardless.
+# One registry per process. Under gunicorn that is a problem, because
+# there are several: with three workers, a scrape is answered by whichever
+# one accepted the connection and reports roughly a third of the traffic.
+# The number is not noisy, it is WRONG, and it is wrong in the flattering
+# direction - error counts and latencies all read low.
+#
+# `PROMETHEUS_MULTIPROC_DIR` fixes that: each process writes its samples to
+# a shared directory and `render()` aggregates across all of them. See
+# render() and backend/gunicorn.conf.py, which is where dead workers get
+# reaped so a restarted worker's counters are not double-counted forever.
+#
+# The Celery workers are a different matter and deliberately so: they are
+# separate CONTAINERS, and the right answer there is a scrape target per
+# container, which is what Prometheus expects. Their pipeline telemetry is
+# also on stdout as structured JSON regardless.
 REGISTRY = CollectorRegistry()
 
 # Buckets in seconds, tuned for what this system actually does: sub-second
@@ -120,6 +126,11 @@ queue_depth = Gauge(
     "Tasks waiting in the broker queue.",
     ["queue"],
     registry=REGISTRY,
+    # Queue depth is a property of the BROKER, not of the process that
+    # read it, so every worker reports the same number and summing them
+    # would multiply the backlog by the worker count. Take the most
+    # recently written value from a live process.
+    multiprocess_mode="livemostrecent",
 )
 
 
@@ -210,6 +221,8 @@ evaluation_metric = Gauge(
     "Latest value of an offline evaluation metric, by dataset and metric"
     " name. Exposed so AI quality sits on the same dashboard as uptime.",
     ["dataset", "metric"],
+    # Also a global fact rather than a per-process one.
+    multiprocess_mode="livemostrecent",
     registry=REGISTRY,
 )
 
@@ -244,8 +257,32 @@ malware_verdicts = Counter(
 )
 
 
+def multiprocess_dir() -> str:
+    """The shared sample directory, or "" when not running multiprocess."""
+    import os
+
+    return os.environ.get("PROMETHEUS_MULTIPROC_DIR", "")
+
+
 def render() -> tuple:
-    """(payload, content_type) for the /metrics endpoint."""
+    """(payload, content_type) for the /metrics endpoint.
+
+    Under gunicorn the samples of every worker are collected from the
+    shared directory into a throwaway registry, so one scrape describes the
+    whole container rather than whichever worker happened to answer it.
+
+    A fresh registry per scrape is correct and not wasteful: the
+    MultiProcessCollector reads the files at collection time, so reusing a
+    registry would pin the first scrape's view of which processes existed.
+    """
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-    return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+    directory = multiprocess_dir()
+    if not directory:
+        return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+
+    from prometheus_client import multiprocess
+
+    registry = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry, path=directory)
+    return generate_latest(registry), CONTENT_TYPE_LATEST
