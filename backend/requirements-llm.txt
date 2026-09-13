@@ -1,0 +1,12 @@
+# Generative answering, optional (spec section 12, 26).
+#
+# Without this the RAG pipeline still works: the bundled ExtractiveAnswerer
+# quotes passages verbatim and needs no model, no key and no network.
+# Installing this and setting RAG_ANSWERER swaps in a generative model
+# behind the same gateway - the grounding, citation and abstention checks
+# are unchanged and apply to it exactly as they did before.
+#
+#   pip install -r backend/requirements-llm.txt
+#   export ANTHROPIC_API_KEY=sk-ant-...
+#   export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
+anthropic>=1.0.0

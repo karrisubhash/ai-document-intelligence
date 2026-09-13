@@ -37,7 +37,7 @@ for** and **what is actually built today**, and never conflates the two.
 | Information extraction (structured fields) | 11.2 | ✅ Built — schema-driven, span-verified |
 | Chunking, embeddings, pgvector index | 11.4, 15 | ✅ Built — page-bounded chunks, span-verified |
 | Hybrid search + reranking | 12.2 | ✅ Built — RRF fusion + pluggable reranker |
-| RAG, citations, abstention, guardrails | 12 | ✅ Built — extractive answerer, validated citations, abstention |
+| RAG, citations, abstention, guardrails | 12 | ✅ Built — extractive by default, generative via one setting, same guardrails |
 | Testing console (React + Vite) | 26 | ✅ Built — covers the document, search and chat paths, not every endpoint ([frontend/](frontend/)) |
 | Metrics, structured logs, AI telemetry | 20 | ✅ Built — `/metrics`, redaction enforced at the formatter |
 | Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 8-job pipeline |
@@ -565,7 +565,7 @@ question → permission-filtered hybrid retrieval → rerank → context
          → answer + sources, or an abstention
 ```
 
-### The answerer quotes; it does not generate
+### The bundled answerer quotes; it does not generate
 
 The bundled `ExtractiveAnswerer` selects the sentences from retrieved passages that best
 answer the question and returns them **verbatim** with their markers. It cannot hallucinate,
@@ -573,6 +573,70 @@ because every character it emits was copied from a passage the caller was author
 read. It also cannot synthesise across passages, resolve pronouns or rephrase — it is a
 baseline, not a destination. `generative: false` is in every response, and swapping in a
 real provider is one setting (`RAG_ANSWERER`).
+
+### Generative answers (optional)
+
+```bash
+pip install -r backend/requirements-llm.txt
+export ANTHROPIC_API_KEY=sk-ant-...
+export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
+```
+
+The extractive baseline quotes sentences, which reads like a search result rather than a
+reply: it cannot rephrase, cannot combine two clauses, and cannot say *"no, because..."*.
+[`rag/claude.py`](backend/documents/rag/claude.py) is the other side of that trade, behind
+the same `LLMProvider` gateway - swapping it in is one setting, and no caller changes.
+
+**No guardrail moves.** A generative model can invent, so everything built to catch
+invention now earns its keep:
+
+- retrieval still runs the **permission filter first**, so the model only ever sees passages
+  this caller may read;
+- injection-flagged passages are still labelled in the prompt as *data to report on, never
+  a directive to follow*;
+- every claim must carry a resolvable marker, and `grounding.validate` checks the answer's
+  content words actually appear in the passages it cited;
+- an answer that fails those checks is **downgraded to an abstention** by the engine, not
+  returned with a warning attached.
+
+The model is checked, not trusted — the same contract the extractive answerer had, applied
+to a component that can actually get it wrong.
+
+Defaults: **Claude Opus 5**, effort `medium` (grounded answering over a handful of short
+passages does not need deep reasoning, and latency is felt directly in a chat box), a 60s
+timeout rather than the SDK's 10-minute default, and server-side refusal fallbacks — a
+disciplinary circular or a safety incident report is exactly the sort of legitimate content
+a classifier can decline on.
+
+**A model outage falls back to the extractive answer rather than returning a 500** (§18
+makes that the gateway's problem), and records `fell_back_from` so a quietly degraded answer
+never passes as a normal one.
+
+**This has not been run against the live API from this repository** — there were no
+Anthropic credentials on the machine. The request shape follows the current SDK and the
+logic is covered by 18 tests against a stubbed client (hallucination caught, refusal
+abstains, outage degrades, empty context never reaches the model), but treat the first real
+call as the test.
+
+### Hard-wrapped documents used to get cut off mid-sentence
+
+Newlines are treated as clause boundaries, because institutional documents put one clause
+per line far more often than they write flowing prose. But a document wrapped at the right
+margin puts newlines *inside* sentences too, and the answer came back truncated:
+
+```
+Q: What is the attendance minimum?
+A: A student must maintain a minimum of 75 percent attendance in each course to [1]
+```
+
+which reads as a broken system rather than a terse one. Continuation lines are now rejoined
+before sentence splitting, using the conservative half of the classic hard-wrap heuristic:
+**only a line beginning with a lowercase letter continues the one above it**, and table rows
+are never joined on either side — their newlines are the row separators, and merging two
+rows would produce a row that is not in the table at all.
+
+Under-joining costs a slightly short quote. Over-joining would weld a heading onto a clause
+and present the result as one sentence from the document.
 
 ### Abstention is a first-class outcome (§12.4)
 
@@ -1430,7 +1494,7 @@ point for a 16-class problem whose interesting failures are the small, low-text 
 ## Testing
 
 ```bash
-# Backend: 602 tests across documents, ingestion, classification, field
+# Backend: 624 tests across documents, ingestion, classification, field
 #          extraction, DOCX, search, RAG, tables, figures, agents,
 #          storage, object storage, security, evaluation gate,
 #          observability, multiprocess metrics, scale, backup,

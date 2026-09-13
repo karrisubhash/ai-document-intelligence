@@ -397,6 +397,32 @@ RAG_ANSWERER = os.getenv("RAG_ANSWERER", "")
 
 # Candidates handed to the reranker. Larger than the context can hold,
 # because reranking is what decides which of them earn a slot.
+# Generative answering (optional). Empty keeps the bundled extractive
+# answerer, which quotes passages verbatim and needs no model, key or
+# network - so the default install answers questions offline.
+#
+#   pip install -r backend/requirements-llm.txt
+#   export ANTHROPIC_API_KEY=sk-ant-...
+#   export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
+#
+# Swapping the answerer does NOT relax any guardrail. Retrieval still runs
+# the permission filter first, injection-flagged passages are still named
+# as data, every claim must still carry a resolvable marker, and an answer
+# that fails grounding is still downgraded to an abstention. The generative
+# model is checked, not trusted.
+RAG_ANSWERER_MODEL = os.getenv("RAG_ANSWERER_MODEL", "")
+
+# low | medium | high | xhigh | max. Grounded answering over a handful of
+# short passages does not need deep reasoning, and answer latency is felt
+# directly in a chat box - so this defaults lower than the API's own
+# default. Raise it if measurement shows it helps.
+RAG_ANSWERER_EFFORT = os.getenv("RAG_ANSWERER_EFFORT", "medium")
+
+# Seconds. A chat request that hangs for the SDK's 10-minute default is a
+# request the user has already given up on.
+RAG_ANSWERER_TIMEOUT = float(os.getenv("RAG_ANSWERER_TIMEOUT", "60"))
+RAG_ANSWERER_RETRIES = int(os.getenv("RAG_ANSWERER_RETRIES", "2"))
+
 RAG_RETRIEVAL_DEPTH = int(os.getenv("RAG_RETRIEVAL_DEPTH", "20"))
 
 # A passage must beat this after reranking to enter the context. Below it,

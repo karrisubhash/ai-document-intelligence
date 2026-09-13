@@ -66,6 +66,58 @@ class LLMProvider(Protocol):
     def answer(self, *, question: str, context, prompt: str) -> LLMResponse: ...
 
 
+def _looks_like_a_table_row(line: str) -> bool:
+    """A line whose cells are separated by tabs, pipes or a column gap."""
+    return len([cell for cell in CELL_SEPARATOR.split(line.strip()) if cell]) >= 2
+
+
+def _unwrap(text: str) -> list:
+    """Rejoin lines that a right margin split, and nothing else.
+
+    The test for a continuation is that the next line STARTS LOWERCASE.
+    That is the conservative half of the classic hard-wrap heuristic, and
+    the conservative half is the one worth having here:
+
+        "Clause 4.2 Attendance"              <- heading, next line is "A
+        "A student must maintain ..."           student" - NOT joined
+        "... in each course to"              <- next line is "be eligible"
+        "be eligible for the examination."      - joined
+
+    Under-joining costs a slightly short quote. Over-joining would weld a
+    heading onto a clause, or two unrelated clauses together, and present
+    the result as one sentence from the document.
+
+    Table rows are never joined on either side: their newlines are the row
+    separators, and merging two rows would produce a row that is not in the
+    table at all.
+    """
+    lines = []
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        previous = lines[-1] if lines else ""
+        continues = (
+            previous
+            and line[:1].islower()
+            and not previous.rstrip().endswith((".", "!", "?", ":", ";"))
+            and not _looks_like_a_table_row(line)
+            and not _looks_like_a_table_row(previous)
+        )
+
+        if continues:
+            # A single space where the margin put a newline. The characters
+            # are the document's; only that one whitespace is normalized,
+            # and the citation still points at the full span on the page.
+            lines[-1] = f"{previous} {line}"
+        else:
+            lines.append(line)
+
+    return lines
+
+
 class ExtractiveAnswerer:
     """Answers by quoting the passages, never by generating new text."""
 
@@ -301,12 +353,27 @@ class ExtractiveAnswerer:
 
     @staticmethod
     def _sentences(text: str) -> list:
-        # Newlines are sentence boundaries in this corpus: institutional
-        # documents put one clause per line far more often than they write
-        # flowing prose.
+        """Sentences, with hard-wrapped lines rejoined first.
+
+        Newlines really are clause boundaries in this corpus - institutional
+        documents put one clause per line far more often than they write
+        flowing prose - so they are treated as sentence ends. But a document
+        wrapped at the right margin puts newlines INSIDE sentences too, and
+        treating those as boundaries truncates the answer mid-thought:
+
+            A student must maintain a minimum of 75 percent attendance in
+            each course to
+            be eligible for the end-semester examination.
+
+        asked "what is the attendance minimum?" answered
+        "...in each course to", which reads as a broken system rather than
+        a short one. Observed live, on a plain hard-wrapped regulation.
+
+        _unwrap rejoins continuation lines before splitting. It is
+        deliberately conservative: only a line beginning with a lowercase
+        letter continues the one above it, and table rows are never joined.
+        """
         pieces = []
-        for line in text.splitlines():
-            line = line.strip()
-            if line:
-                pieces.extend(part for part in SENTENCE.split(line) if part.strip())
+        for line in _unwrap(text):
+            pieces.extend(part for part in SENTENCE.split(line) if part.strip())
         return pieces
