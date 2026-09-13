@@ -15,3 +15,6 @@ htmlcov/
 ai/classification/data/
 ai/classification/artifacts/
 ai/classification/runs/
+
+# Database dumps. Never committed: they contain every document.
+backups/

@@ -1,0 +1,237 @@
+# Production overlay (spec §21.1).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# NOT auto-loaded: it must be named explicitly, so a developer running
+# `docker compose up` never accidentally gets production behaviour, and a
+# production deploy never silently inherits a developer's override.
+#
+# What this changes from the development stack:
+#   * gunicorn instead of runserver (runserver is single-threaded, serves
+#     static files insecurely, and Django itself says never to use it here)
+#   * nginx terminating TLS in front
+#   * no host port on Postgres or Redis - only nginx is published
+#   * a bind-mounted backup directory, so dumps outlive the container
+#   * the ML layer baked in, since a production deploy that cannot load its
+#     own classifier is a deploy that silently skips classification
+
+services:
+
+  db:
+    # !override, not `ports: []`. Compose MERGES sequences across files, so
+    # an empty list appends nothing and leaves the base mapping in place -
+    # it looks like it unpublishes the port and does not. Verified with
+    # `docker compose config`.
+    ports: !override []
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+
+  redis:
+    ports: !override []
+    restart: unless-stopped
+    # Redis holds throttle counters and the task queue, not documents, but
+    # an open Redis is a remote code execution vector on many builds.
+    command: redis-server --save 60 1 --appendonly yes
+
+  # Migrations run ONCE, before anything serves traffic.
+  #
+  # They used to be in the backend start command, which is fine at one
+  # replica and broken at three: `--scale backend=3` had all three racing
+  # the same migration and the loser died with
+  # `column "name" of relation "django_content_type" does not exist`.
+  # A schema change is a deploy step, not something every replica attempts.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_ML: "true"
+    command: python manage.py migrate --noinput
+    env_file:
+      - .env
+    environment:
+      DJANGO_DEBUG: "False"
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_ML: "true"
+    restart: unless-stopped
+
+    # Every flag stays at the SAME indentation as `gunicorn`.
+    #
+    # In a YAML folded scalar (`>`), a line indented MORE than the first
+    # content line is kept literal - its newline survives folding. With the
+    # flags indented further, each one became its own shell command
+    # ("sh: --bind: not found") and gunicorn fell back to its default bind
+    # of 127.0.0.1, which nginx cannot reach. The stack came up and served
+    # 502s.
+    #
+    # Migrations are NOT here: see the `migrate` service.
+    command: >
+      sh -c "python manage.py collectstatic --noinput &&
+      exec gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-3}
+      --threads ${GUNICORN_THREADS:-2}
+      --timeout ${GUNICORN_TIMEOUT:-120}
+      --graceful-timeout 30
+      --access-logfile -
+      --error-logfile -"
+
+    # !override, for the same reason `ports` needs it below. Compose MERGES
+    # volume sequences across files, so listing the production volumes here
+    # ADDED them to the base file's list rather than replacing it - and the
+    # base file mounts ./backend over /app/backend. Production was running
+    # the working tree, not the image, with this very comment sitting above
+    # it claiming the opposite. Verified with `docker compose config`.
+    #
+    # The image is the artifact. Mounting the working tree over it is how a
+    # deploy ends up running code nobody built.
+    volumes: !override
+      - media_data:/app/backend/media
+      - static_data:/app/backend/staticfiles
+      - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
+      - ./backups:/backups
+
+    # Reachable ONLY through nginx. With a plain `ports: []` this stayed
+    # published on 8000 and the API was directly reachable with no TLS, no
+    # edge rate limiting and no proxy headers - which is also how
+    # SECURE_PROXY_SSL_HEADER gets its trust, so a direct caller could
+    # assert X-Forwarded-Proto themselves.
+    ports: !override []
+
+    environment:
+      DJANGO_DEBUG: "False"
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_ML: "true"
+    restart: unless-stopped
+
+    # --max-tasks-per-child recycles workers so a slow leak in a native
+    # dependency (poppler and tesseract are both C) cannot accumulate across
+    # thousands of documents.
+    # Ingestion only. Low concurrency because OCR is CPU-bound: more
+    # processes than cores makes every document slower, not the batch
+    # faster. Scale with `--scale worker=N` across machines instead.
+    command: >
+      celery -A config worker
+      --loglevel=INFO
+      --queues=ingest
+      --concurrency=${CELERY_CONCURRENCY:-2}
+      --max-tasks-per-child=100
+
+    # !override - see the backend service.
+    volumes: !override
+      - media_data:/app/backend/media
+      - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
+      - ./backups:/backups
+
+    environment:
+      DJANGO_DEBUG: "False"
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Embedding and re-indexing. Higher concurrency than the ingest worker
+  # because the work is IO-bound against the embedding provider, and
+  # separate so a bulk re-index never sits in front of live uploads.
+  worker-index:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_ML: "true"
+    restart: unless-stopped
+
+    command: >
+      celery -A config worker
+      --loglevel=INFO
+      --queues=index
+      --concurrency=${CELERY_INDEX_CONCURRENCY:-6}
+      --max-tasks-per-child=200
+
+    # !override - see the backend service.
+    volumes: !override
+      - media_data:/app/backend/media
+      - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
+
+    environment:
+      DJANGO_DEBUG: "False"
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./infrastructure/nginx/proxy_params:/etc/nginx/conf.d/proxy_params:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - static_data:/var/www/static:ro
+      - certbot_www:/var/www/certbot
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-localhost}
+    # A renewed certificate is only picked up on reload. Six-hourly is the
+    # conventional cadence: certbot renews at 30 days remaining, so there
+    # is no hurry, and a reload is free.
+    command: >
+      sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done &
+      nginx -g 'daemon off;'"
+    depends_on:
+      - backend
+
+  # Renewal only. First issuance needs nginx already running, which is
+  # the chicken-and-egg that infrastructure/init-letsencrypt.sh resolves -
+  # run that once before the first `up`.
+  #
+  # Certbot exits after each attempt, so it is run in a sleep loop rather
+  # than left resident. Twelve-hourly with a 30-day renewal window means a
+  # single failed attempt is never load-bearing.
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM;
+      while :; do certbot renew --webroot --webroot-path=/var/www/certbot;
+      sleep 12h & wait $${!}; done"
+
+volumes:
+  postgres_data:
+  media_data:
+  static_data:
+  certbot_www:
+  letsencrypt:

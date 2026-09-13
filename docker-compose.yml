@@ -1,7 +1,10 @@
 services:
 
   db:
-    image: postgres:16
+    # Postgres 16 with the pgvector extension available. Same major
+    # version as plain postgres:16, so an existing data volume is
+    # compatible - the extension is enabled by a Django migration.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -35,6 +38,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Off by default. Set INSTALL_ML=true to bake scikit-learn into the
+        # image so a trained classifier can run in-process.
+        INSTALL_ML: ${INSTALL_ML:-false}
 
     command: >
       sh -c "
@@ -45,6 +52,13 @@ services:
     volumes:
       - ./backend:/app/backend
       - media_data:/app/backend/media
+      # Trained model artifacts, read-only. Mounted at the path the
+      # DOCUMENT_CLASSIFIER_ARTIFACT default already resolves to inside the
+      # container (BASE_DIR.parent/ai/...), so enabling a classifier needs
+      # no path configuration. Git-ignored on the host: an untrained
+      # checkout mounts an empty directory, which is harmless because
+      # DOCUMENT_CLASSIFIER is empty and the stage simply skips.
+      - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
 
     ports:
       - "${APP_PORT}:8000"
@@ -62,12 +76,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_ML: ${INSTALL_ML:-false}
 
-    command: celery -A config worker --loglevel=INFO
+    # One worker for both queues in development - the separation is
+    # about scaling them apart in production, not about needing two
+    # processes on a laptop.
+    command: celery -A config worker --loglevel=INFO --queues=ingest,index
 
     volumes:
       - ./backend:/app/backend
       - media_data:/app/backend/media
+      # The worker is the process that actually runs the CLASSIFICATION
+      # stage, so it needs the artifact at least as much as the API does.
+      - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
 
     env_file:
       - .env
@@ -78,6 +100,42 @@ services:
       redis:
         condition: service_healthy
 
+  frontend:
+    # Optional, and off by default: `npm run dev` on the host is the
+    # faster loop and the one the frontend README documents. This service
+    # exists so the whole stack can come up on a machine without Node -
+    #
+    #   docker compose --profile frontend up
+    #
+    profiles: ["frontend"]
+
+    image: node:22-alpine
+    working_dir: /app
+
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+
+    volumes:
+      - ./frontend:/app
+      # Keeps the container's Linux node_modules out of the host bind
+      # mount, where a Windows or macOS install of the same packages
+      # would otherwise be shadowed by - or shadow - this one.
+      - frontend_node_modules:/app/node_modules
+
+    environment:
+      # Resolved by the browser, not by this container, so it names the
+      # API's published host port rather than the compose service.
+      VITE_API_BASE_URL: http://localhost:${APP_PORT:-8000}
+
+    ports:
+      # Changing the host port means the browser's origin changes with it,
+      # so set CORS_ALLOWED_ORIGINS to match or the API will refuse the
+      # calls - only :5173 is allowed by default.
+      - "${FRONTEND_PORT:-5173}:5173"
+
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:
   media_data:
+  frontend_node_modules:

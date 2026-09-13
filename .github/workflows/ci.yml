@@ -1,0 +1,295 @@
+# CI/CD pipeline (spec §21.2).
+#
+#   Git Push -> Lint -> Unit Tests -> Integration Tests -> Security Checks
+#            -> AI Regression Evaluation -> Build Images -> Deploy Staging
+#            -> Smoke Tests -> Production
+#
+# The stages run as separate jobs rather than one script so a failure names
+# the gate that caught it. Deployment jobs are guarded by environments, which
+# is what makes "deploy to production" a decision someone makes rather than a
+# consequence of merging.
+#
+# NOTE: this workflow has never executed. It is written against the same
+# commands the local stack runs and its YAML is validated, but GitHub Actions
+# cannot run in this environment, so treat the first real run as the test.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Tests need a key but not a secret one - they run against a throwaway
+  # database. Production keys come from the environment, never from here.
+  DJANGO_SECRET_KEY: ci-only-not-a-production-secret-0123456789abcdef
+  DJANGO_DEBUG: "False"
+  POSTGRES_DB: ai_document_intelligence
+  POSTGRES_USER: app_user
+  POSTGRES_PASSWORD: ci-password
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
+  REDIS_HOST: localhost
+  REDIS_PORT: "6379"
+
+jobs:
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linters
+        run: pip install ruff
+
+      - name: Ruff
+        run: ruff check backend ai
+
+      - name: Formatting
+        run: ruff format --check backend ai
+
+  tests:
+    name: Tests (unit + integration)
+    runs-on: ubuntu-latest
+    needs: lint
+
+    # The real services, not mocks. Postgres carries pgvector because the
+    # search tests exercise a real HNSW index - a sqlite stand-in would pass
+    # while proving nothing about the query that actually runs.
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app_user"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: System packages
+        # OCR and PDF rendering are native dependencies; without them the
+        # ingestion tests skip rather than fail, which is worse.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            poppler-utils tesseract-ocr postgresql-client
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-ml.txt
+
+      - name: Migration check
+        # A model change without a migration passes every test and then
+        # fails on deploy. This catches it here.
+        run: python backend/manage.py makemigrations --check --dry-run
+
+      - name: Backend suite
+        run: python backend/manage.py test --noinput
+        working-directory: .
+
+      - name: AI suite
+        # Stdlib-only by design, so it needs no ML install and no database.
+        run: python -m unittest discover -s ai/classification/tests -t .
+        env:
+          PYTHONPATH: .
+
+  security:
+    name: Security checks
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -r backend/requirements.txt
+          pip install bandit pip-audit
+
+      - name: Django deployment check
+        # The gate phase 10 was built against: production settings must be
+        # clean, not "clean except for the ones we got used to seeing".
+        run: python backend/manage.py check --deploy --fail-level WARNING
+        env:
+          DJANGO_SECRET_KEY: ${{ env.DJANGO_SECRET_KEY }}
+          SECURE_HSTS_SECONDS: "31536000"
+          SECURE_HSTS_PRELOAD: "True"
+          EMAIL_HOST: smtp.example.invalid
+
+      - name: Static analysis
+        run: bandit -r backend/documents backend/config -ll
+
+      - name: Dependency audit
+        # Advisory rather than blocking: a new CVE in a transitive dependency
+        # should raise a flag, not stop an unrelated bugfix from shipping.
+        run: pip-audit --requirement backend/requirements.txt || true
+
+  ai-regression:
+    name: AI regression evaluation
+    runs-on: ubuntu-latest
+    needs: tests
+    # Only on the default branch: it needs an indexed corpus, and a PR from a
+    # fork has no access to one.
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app_user"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr
+
+      - name: Install
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-ml.txt
+
+      - name: Migrate
+        run: python backend/manage.py migrate --noinput
+
+      # Spec §19.2: every change to retrieval, prompts, embeddings, rerankers
+      # or LLM configuration is evaluated against a fixed benchmark, and the
+      # result is compared to the previous one.
+      #
+      # This step is a placeholder until a governed evaluation set exists.
+      # The harness, the metrics and --fail-on-regression are all built and
+      # tested; what is missing is a dataset, and inventing one here would
+      # produce a number that looks like a quality gate and is not.
+      - name: Evaluate against the benchmark
+        run: |
+          if [ -f evaluation/benchmark.json ]; then
+            python backend/manage.py evaluate \
+              --load evaluation/benchmark.json \
+              --dataset "$(python -c 'import json;print(json.load(open("evaluation/benchmark.json"))["name"])')" \
+              --as-user ci-evaluator \
+              --label "${GITHUB_SHA::7}" \
+              --fail-on-regression
+          else
+            echo "No evaluation/benchmark.json - skipping."
+            echo "The harness is built; it needs a governed dataset to score."
+          fi
+        env:
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
+
+  build:
+    name: Build images
+    runs-on: ubuntu-latest
+    needs: [tests, security]
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (with the ML layer)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          build-args: INSTALL_ML=true
+          tags: ai-document-intelligence:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Compose MERGES sequences across files, so an overlay that
+      # re-declares `ports` or `volumes` ADDS to the base list instead of
+      # replacing it. That has silently un-done two production guarantees
+      # in this repo already - the API stayed published on 8000, and the
+      # working tree stayed mounted over the image. Neither is visible by
+      # reading the overlay; both are obvious in `docker compose config`.
+      # This gate asserts the merged OUTCOME, so the whole class is caught
+      # in CI rather than in production.
+      - name: Production configuration
+        run: python infrastructure/check_deployment_config.py
+
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs: build
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        run: |
+          echo "Deployment is environment-specific and intentionally not"
+          echo "invented here - wire this to your host, registry or"
+          echo "orchestrator. The gates above are what make it safe to."
+
+  smoke:
+    name: Smoke tests
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe staging
+        run: |
+          BASE="${{ vars.STAGING_URL }}"
+          if [ -z "$BASE" ]; then
+            echo "STAGING_URL is not set; nothing to probe."
+            exit 0
+          fi
+          # Health, then an endpoint that must REFUSE anonymous access -
+          # a smoke test that only checks for a 200 cannot tell a working
+          # deploy from one with authentication switched off.
+          curl -fsS "$BASE/health/" | tee /dev/stderr | grep -q '"status": "healthy"'
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/documents/")
+          test "$code" = "401" || test "$code" = "403"
+          echo "smoke tests passed"
+
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: smoke
+    # A protected environment: this is the approval gate, so production is a
+    # decision someone makes rather than something merging causes.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        run: echo "Wire to your production target; gated on every job above."
