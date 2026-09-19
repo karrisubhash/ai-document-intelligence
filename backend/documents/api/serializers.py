@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from documents.api import discovery
 from documents.models import (
     ClassificationResult,
     Document,
@@ -134,6 +135,171 @@ class DocumentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class DocumentVersionSummarySerializer(serializers.ModelSerializer):
+    """Just enough of a version to browse and size it in a results list.
+
+    Deliberately narrower than DocumentVersionSerializer: no `file` (the
+    storage key - relative filesystem path locally, or the S3 object key -
+    which a discovery listing has no use for and §16 asks not to expose),
+    and no `checksum` (integrity metadata for verifying a download, not for
+    browsing). Both remain on the version's own endpoint
+    (`/versions/`) and on document detail, where a caller with a specific
+    reason to check them still can.
+    """
+
+    class Meta:
+        model = DocumentVersion
+        fields = [
+            "id",
+            "version_number",
+            "file_name",
+            "file_size",
+            "mime_type",
+            "uploaded_by",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class DocumentListSerializer(serializers.ModelSerializer):
+    """The `list` action's shape - see DocumentVersionSummarySerializer.
+
+    Every top-level field here is identical to DocumentSerializer, so a
+    consumer reading `results[].id/title/document_type/...` sees no change;
+    only the nested `current_version` is slimmer. That is the one
+    intentional, documented difference from the detail endpoint's shape
+    (README, "Document discovery").
+    """
+
+    current_version = DocumentVersionSummarySerializer(read_only=True)
+
+    class Meta:
+        model = Document
+        fields = [
+            "id",
+            "title",
+            "document_type",
+            "department",
+            "owner",
+            "status",
+            "current_version",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class DocumentListQuerySerializer(serializers.Serializer):
+    """Query parameters for GET /api/documents/.
+
+    Modeled on documents.search.serializers.SearchRequestSerializer: typed
+    fields validate before a single query is built, so an invalid value
+    fails with the same `{"field": ["..."]}` shape every other endpoint
+    uses - never a 500 from an unparsed int() or a filter that silently
+    matched nothing because the value made no sense.
+
+    Absent or blank means "no filter" for every field here, matching how
+    the search endpoint already treats an optional `document_type`/
+    `department`. Validated values are handed to `documents.api.discovery
+    .apply()`, which is the only thing that turns them into a queryset -
+    this class only says what a caller may ask for, never runs a query.
+    """
+
+    search = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        default="",
+    )
+    status = serializers.ChoiceField(
+        choices=Document.Status.choices, required=False, allow_blank=True, default=""
+    )
+    document_type = serializers.ChoiceField(
+        choices=Document.DocumentType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    department = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    # An integer user id, or the literal "me" - resolved to request.user's
+    # own id in validate_owner, so nothing downstream ever sees the string.
+    owner = serializers.CharField(required=False, allow_blank=True, default="")
+    created_after = serializers.CharField(required=False, allow_blank=True, default="")
+    created_before = serializers.CharField(required=False, allow_blank=True, default="")
+    updated_after = serializers.CharField(required=False, allow_blank=True, default="")
+    updated_before = serializers.CharField(required=False, allow_blank=True, default="")
+    ordering = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_owner(self, value):
+        if value == "":
+            return None
+        if value == "me":
+            request = self.context.get("request")
+            return request.user.id
+        if not value.lstrip("-").isdigit() or int(value) < 0:
+            raise serializers.ValidationError(
+                "Must be a non-negative integer user id, or 'me'."
+            )
+        return int(value)
+
+    def validate_created_after(self, value):
+        return (
+            discovery.parse_boundary(value, "created_after", end_of_day=False)
+            if value
+            else None
+        )
+
+    def validate_created_before(self, value):
+        return (
+            discovery.parse_boundary(value, "created_before", end_of_day=True)
+            if value
+            else None
+        )
+
+    def validate_updated_after(self, value):
+        return (
+            discovery.parse_boundary(value, "updated_after", end_of_day=False)
+            if value
+            else None
+        )
+
+    def validate_updated_before(self, value):
+        return (
+            discovery.parse_boundary(value, "updated_before", end_of_day=True)
+            if value
+            else None
+        )
+
+    def validate_ordering(self, value):
+        return discovery.resolve_ordering(value) if value else None
+
+    def validate(self, attrs):
+        after, before = attrs.get("created_after"), attrs.get("created_before")
+        if after is not None and before is not None and after > before:
+            raise serializers.ValidationError(
+                {"created_before": ["Must not be earlier than created_after."]}
+            )
+
+        after, before = attrs.get("updated_after"), attrs.get("updated_before")
+        if after is not None and before is not None and after > before:
+            raise serializers.ValidationError(
+                {"updated_before": ["Must not be earlier than updated_after."]}
+            )
+
+        return attrs
+
+    def to_internal_value(self, data):
+        # Renamed on the way out so discovery.apply() never has to know the
+        # public query parameter was "owner" - it reads owner_id, matching
+        # the model column it filters on.
+        validated = super().to_internal_value(data)
+        validated["owner_id"] = validated.pop("owner")
+        return validated
 
 
 class UploadSerializer(serializers.Serializer):

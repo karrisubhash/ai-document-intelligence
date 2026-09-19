@@ -318,7 +318,7 @@ when the public surface is frozen.)
 | `POST` | `/api/auth/token/` | Obtain a DRF auth token |
 | `GET` | `/api/auth/me/` | Current user, role and department |
 | `POST` | `/api/documents/` | Upload a document — returns **202 Accepted**, processing queued |
-| `GET` | `/api/documents/` | List documents the caller is authorized to see |
+| `GET` | `/api/documents/` | List documents the caller is authorized to see — searchable, filterable, orderable; see [Document discovery](#document-discovery) |
 | `GET` | `/api/documents/{id}/` | Document metadata and status |
 | `PATCH` | `/api/documents/{id}/` | Update title / type |
 | `DELETE` | `/api/documents/{id}/` | Delete a document |
@@ -359,6 +359,145 @@ curl -X POST http://localhost:8000/api/documents/ \
 curl -H "Authorization: Token $TOKEN" http://localhost:8000/api/documents/1/processing/
 curl -H "Authorization: Token $TOKEN" http://localhost:8000/api/documents/1/content/
 ```
+
+---
+
+## Document discovery
+
+Pagination on `GET /api/documents/` has existed since M2; what did not was any way to narrow
+the list before paging through it. At the scale this platform targets, paging through
+hundreds of pages by hand is not discovery. `documents/api/discovery.py` is the
+implementation; this section is the query-parameter contract.
+
+### Query parameters
+
+All of the following are optional and compose with each other and with `page`:
+
+| Parameter | Matches | Notes |
+|---|---|---|
+| `search` | `title` or the current version's `file_name`, case-insensitive substring | A document mid-processing (no current version yet) is still matched by title |
+| `status` | exact `Document.status` | `UPLOADED`, `QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`, `QUARANTINED` |
+| `document_type` | exact `Document.document_type` | `GENERAL`, `REGULATION`, `POLICY`, `SYLLABUS`, `CIRCULAR`, `FORM`, `OTHER` |
+| `department` | exact `Document.department` | Free text, matching what `POST /api/documents/` accepted |
+| `owner` | exact `Document.owner_id` | An integer id, or the literal `me` |
+| `created_after`, `created_before` | `Document.created_at` range | A bare date (`2025-01-31`) or a full ISO-8601 datetime; a bare date is read as the *whole named day* — `created_before=2025-01-31` includes documents created on the 31st, not up to its exclusive edge |
+| `updated_after`, `updated_before` | `Document.updated_at` range | Same rules as above, independently |
+| `ordering` | — | Comma-separated, each optionally prefixed `-`; allowlisted to `id`, `title`, `status`, `document_type`, `created_at`, `updated_at` (at most 3). Default is `-created_at`, matching the endpoint's behavior before this existed |
+
+An invalid value — an unrecognised `status`, an unparseable date, an `ordering` field not in
+the allowlist, `created_before` earlier than `created_after` — is a **400** naming the field,
+in the same `{"field": ["..."]}` shape every other endpoint uses. `ordering` is never handed
+to the ORM as a raw string: each token is resolved against a fixed allowlist before
+`.order_by()` ever sees it, so a value like `ordering=owner__profile__department` is refused
+rather than silently executed.
+
+**Ordering is deterministic.** `created_at` has microsecond precision but is not guaranteed
+unique — a bulk import or two uploads in the same tick can tie — so every ordering, including
+the default, has `id` appended as a tiebreak. Without it, a tied group's internal order is
+whatever Postgres feels like on a given execution, and a page boundary landing inside one can
+skip or repeat a row between fetches.
+
+### Authorization
+
+Discovery narrows what `authorization.visible_documents` already returns; it can only make
+the result set smaller. A search term, a filter value, or an ordering choice can never widen
+it back past the department/ownership boundary the plain list already enforces — that
+boundary is structural (successive `.filter()` calls on the same queryset always AND
+together), not a value any of these features could get wrong.
+
+Concretely: filtering by a department the caller does not belong to, or by another user's
+`owner` id, returns the same empty list the endpoint would return without the filter — never
+an error, which would itself confirm the department or user exists. A department's document
+*count* does not change when another department gains or loses documents, so a caller cannot
+infer another department's size without ever seeing a row. `tests_discovery.py`'s
+`AuthorizationScopingTests` covers this directly, including through search and every filter.
+
+### Response shape
+
+The `list` action returns a narrower `current_version` than the detail endpoint does — no
+storage key (`file`) and no `checksum`, neither of which a browsing list needs. Every other
+field is unchanged from before:
+
+```json
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 42,
+      "title": "Exam Regulations 2024",
+      "document_type": "REGULATION",
+      "department": "Registrar",
+      "owner": 7,
+      "status": "COMPLETED",
+      "current_version": {
+        "id": 42,
+        "version_number": 1,
+        "file_name": "regulations.pdf",
+        "file_size": 481200,
+        "mime_type": "application/pdf",
+        "uploaded_by": 7,
+        "created_at": "2025-01-15T09:00:00Z"
+      },
+      "created_at": "2025-01-15T09:00:00Z",
+      "updated_at": "2025-01-15T09:05:00Z"
+    }
+  ]
+}
+```
+
+`GET /api/documents/{id}/` and `GET /api/documents/{id}/versions/` are unchanged — a consumer
+that needs the storage key or checksum still has both there.
+
+### Indexes, measured
+
+`Document` had no indexes beyond its primary key and the two Django creates automatically for
+its foreign keys (`owner_id`, `current_version_id`). `department` sits on the authorization
+boundary itself — `visible_documents` ORs it with `owner_id` on *every* listing request from
+a non-admin user, not only when a caller filters by it — so it is unindexed on the path every
+discovery request takes, not an edge case.
+
+Measured on a realistic fixture (tens of thousands of rows; `tests_discovery.py` has the
+construction) with `EXPLAIN (ANALYZE, BUFFERS)` against the real Postgres container, not
+estimated:
+
+| Query shape | Before (no index) | After (`department, -created_at` + `status`) |
+|---|---|---|
+| Plain authorization-scoped listing | 44–76 ms (parallel sequential scan) | ~8 ms (bitmap index scan) |
+| `+ status` filter | 35 ms | ~4 ms |
+| `+ department` filter | 45 ms | ~7 ms |
+| `+ search` | 28 ms | ~3 ms |
+| `ordering=title` | 60 ms | ~8 ms |
+| Default ordering | 76 ms | ~8 ms |
+| `SYSTEM_ADMIN`, `status` filter, no department scope | — | ~6 ms, uses the `status` index directly |
+| `SYSTEM_ADMIN`, explicit `?department=` filter, no OR | — | ~1.8 ms — an `Index Scan` walking `department, -created_at` directly in the order `ORDER BY` wants, no separate sort |
+
+Two indexes, for two different access paths: `department` sits first in a composite index
+with `-created_at` because that pair is what the authorization OR and the default ordering
+both touch; `status` is separate because a `SYSTEM_ADMIN`'s listing carries no
+department/owner restriction at all, so "every `FAILED` document across the institution" has
+no department in its `WHERE` clause for the first index to help.
+
+**What the composite index does not do:** for the dominant case — the authorization OR still
+present, as it is on every non-admin request — a plain single-column `department` index
+measured about the same or, at low department cardinality (a handful of departments, each a
+large share of the table), measurably *better* than the composite one, because Postgres's
+planner weighs the composite index's larger per-entry size against a sequential scan and
+sometimes prefers the scan. At realistic cardinality (dozens of departments, each a small
+share) the two were close either way. The composite index earns its place on the
+`SYSTEM_ADMIN`-department-filter case above, which is a clean, repeatable win with no
+measured downside — not on the theory that "wider index, sorted output" is free.
+
+No index was added for `search`. `ILIKE '%term%'` cannot use a plain B-tree regardless of
+which columns it covers, and every measured case above already runs `search` *inside* an
+authorization-narrowed set — the department/owner index does the narrowing, and the `ILIKE`
+filter only has to scan what is left. The one case that does not benefit is a `SYSTEM_ADMIN`
+searching with no other filter, which is a full sequential scan over the whole table:
+measured at ~57 ms at ~86,000 rows. Acceptable at the scale this platform targets today; a
+trigram (`pg_trgm`) or full-text index is the natural next step if admin-wide free-text search
+at much larger scale becomes a real bottleneck — not built pre-emptively against a case that
+is not yet slow.
 
 ---
 
@@ -743,7 +882,6 @@ oversize, both the size and the limit — an operator needs to recognise a patte
 the limit recorded beside the size because the setting changes. The file's *contents* are
 never recorded. `adi_upload_rejections_total{reason}` counts them, labelled from a fixed
 vocabulary rather than from anything the caller chose.
-
 
 ### Scanning runs before validation, and that order is deliberate
 
@@ -1610,11 +1748,11 @@ point for a 16-class problem whose interesting failures are the small, low-text 
 ## Testing
 
 ```bash
-# Backend: 680 tests across documents, ingestion, classification, field
-#          extraction, DOCX, search, RAG, tables, figures, agents,
-#          storage, object storage, upload admission, security,
-#          evaluation gate, observability, multiprocess metrics, scale,
-#          backup, regressions and accounts
+# Backend: 744 tests across documents, discovery, ingestion,
+#          classification, field extraction, DOCX, search, RAG, tables,
+#          figures, agents, storage, object storage, upload admission,
+#          security, evaluation gate, observability, multiprocess
+#          metrics, scale, backup, regressions and accounts
 cd backend
 python manage.py test
 

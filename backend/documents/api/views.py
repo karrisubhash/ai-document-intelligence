@@ -5,6 +5,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from documents import authorization
+from documents.api import discovery
 from documents.audit import record_event
 from documents.models import AuditLog, Document, ProcessingJob
 from documents.permissions import DocumentAccessPolicy
@@ -16,6 +17,8 @@ from .serializers import (
     DocumentChunkSerializer,
     DocumentContentSerializer,
     DocumentCreateSerializer,
+    DocumentListQuerySerializer,
+    DocumentListSerializer,
     DocumentSerializer,
     DocumentVersionCreateSerializer,
     DocumentVersionSerializer,
@@ -41,6 +44,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
             self.throttle_scope = None
         return super().get_throttles()
 
+    def get_serializer_class(self):
+        # The list action gets a discovery-appropriate shape - see
+        # DocumentListSerializer for exactly how it differs and why.
+        if self.action == "list":
+            return DocumentListSerializer
+        return super().get_serializer_class()
 
     def get_queryset(self):
         # select_related on the listing, measured rather than guessed: the
@@ -51,9 +60,24 @@ class DocumentViewSet(viewsets.ModelViewSet):
         queryset = Document.objects.all()
 
         if self.action == "list":
-            return authorization.visible_documents(
+            # Validated BEFORE authorization is even consulted, so an
+            # invalid filter value fails with a 400 naming the field,
+            # never a 500 from an unparsed int() or a queryset that
+            # silently matched nothing.
+            query = DocumentListQuerySerializer(
+                data=self.request.query_params, context={"request": self.request}
+            )
+            query.is_valid(raise_exception=True)
+
+            # Authorization scopes the queryset FIRST. discovery.apply()
+            # only ever narrows it further with additional .filter() calls,
+            # which Django ANDs onto what is already here - so no search
+            # term, filter value or ordering field it accepts can widen the
+            # result set back past this boundary. See discovery.py.
+            scoped = authorization.visible_documents(
                 self.request.user, queryset.select_related("current_version")
             )
+            return discovery.apply(scoped, query.validated_data)
 
         return queryset
 
