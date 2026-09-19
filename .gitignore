@@ -19,7 +19,19 @@ ai/classification/runs/
 # Database dumps. Never committed: they contain every document.
 backups/
 
-# Resolved from evaluation/benchmark.template.json by `manage.py
-# seed_evaluation`. Its document ids are specific to one database, so it is
-# a build artifact - the TEMPLATE and the BASELINE are what is governed.
+# Resolved from a benchmark TEMPLATE by `manage.py seed_evaluation`. The
+# document ids inside are specific to one database, so these are build
+# artifacts - the TEMPLATE and the BASELINE are what is governed and
+# reviewed.
+#
+# The glob, not just benchmark.json: benchmark-v2.json was written next to
+# it and was NOT ignored, so a resolved artifact full of one laptop's
+# primary keys was one `git add` away from being committed as if it were
+# the governed dataset.
 evaluation/benchmark.json
+evaluation/benchmark-*.json
+!evaluation/benchmark-*.template.json
+
+# Written by `manage.py ingest_corpus`, keyed by database document id, for
+# the same reason.
+evaluation/corpus_manifest.json

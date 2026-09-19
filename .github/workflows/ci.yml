@@ -222,6 +222,16 @@ jobs:
       # ids, which cannot be committed because a fresh database has none.
       - name: Seed the evaluation corpus
         run: python backend/manage.py seed_evaluation
+        env:
+          # The SAME embedder the evaluate step scores with. Without this the
+          # seed indexed chunks with no provider configured - so no vectors
+          # were written - and the next step embedded the QUERY with the
+          # hashing provider and matched it against nothing. The benchmark
+          # silently measured lexical retrieval alone while
+          # `capture_configuration()` recorded "hashing-baseline" beside the
+          # score, which is the one thing a stored configuration exists to
+          # prevent.
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
 
       # --baseline, not --compare-to. --compare-to takes a RUN ID, and a
       # fresh CI database has no previous run - so the gate ran the

@@ -13,6 +13,7 @@ everyone downstream believes quality is being checked.
 """
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -20,16 +21,38 @@ from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 
 from documents.models import Document, EvaluationDataset
-from documents.tests import MEDIA_ROOT, make_user
+from documents.tests import MEDIA_ROOT
 
 EMBEDDER = "documents.processing.embedding.hashing.HashingEmbeddingProvider"
-CORPUS_SLUGS = {
-    "academic-regulations",
-    "examination-policy",
-    "fee-structure",
-    "hostel-regulations",
-    "library-rules",
-}
+
+EVALUATION_DIR = Path(__file__).resolve().parents[2] / "evaluation"
+CORPUS_DIR = EVALUATION_DIR / "corpus"
+TEMPLATE = EVALUATION_DIR / "benchmark.template.json"
+
+
+def corpus_slugs(template=TEMPLATE):
+    """The documents THIS template is scored against.
+
+    Derived, not listed. A hardcoded set is a second place the corpus is
+    defined and it drifts the moment a document is added - which already
+    happened once, when v2 added four documents and these assertions started
+    reporting 9 != 5.
+
+    Read from the template rather than from the directory, because the
+    directory is shared between benchmark versions and the template is what
+    governs the exam. Reading the directory was the FIRST fix here and it was
+    wrong for the same reason the seeder was: it made v1's corpus depend on
+    what v2 happened to need.
+    """
+    data = json.loads(Path(template).read_text(encoding="utf-8"))
+    if data.get("corpus"):
+        return {str(slug).lstrip("@") for slug in data["corpus"]}
+    return {
+        str(reference).lstrip("@")
+        for case in data["cases"]
+        for reference in (case.get("relevant_documents") or [])
+        if str(reference).startswith("@")
+    }
 
 
 @override_settings(MEDIA_ROOT=MEDIA_ROOT)
@@ -51,7 +74,10 @@ class SeedEvaluationTests(TestCase):
         self.seed()
 
         documents = Document.objects.filter(title__startswith="[eval] ")
-        self.assertEqual(documents.count(), len(CORPUS_SLUGS))
+        self.assertEqual(
+            {document.title.removeprefix("[eval] ") for document in documents},
+            corpus_slugs(),
+        )
         for document in documents:
             self.assertIsNotNone(document.current_version)
             self.assertTrue(
@@ -90,7 +116,7 @@ class SeedEvaluationTests(TestCase):
 
         self.assertEqual(
             Document.objects.filter(title__startswith="[eval] ").count(),
-            len(CORPUS_SLUGS),
+            len(corpus_slugs()),
         )
 
     def test_the_evaluator_cannot_log_in(self):
@@ -121,6 +147,130 @@ class SeedEvaluationTests(TestCase):
         self.assertIn("answerable", output)
         self.assertIn("expecting abstention", output)
 
+    # --- The corpus is part of the dataset -------------------------------
+
+    def test_only_the_templates_own_documents_are_ingested(self):
+        """The corpus directory holds every version's documents; a benchmark
+        is scored against the ones ITS template names.
+
+        This is the assertion that would have caught the v2 regression: four
+        documents landed in `evaluation/corpus/` for a different benchmark,
+        the seeder ingested the directory, and v1's committed baseline
+        stopped matching a system that had not changed.
+        """
+        self.seed()
+
+        ingested = {
+            document.title.removeprefix("[eval] ")
+            for document in Document.objects.filter(title__startswith="[eval] ")
+        }
+        on_disk = {source.stem for source in CORPUS_DIR.glob("*.txt")}
+
+        self.assertEqual(ingested, corpus_slugs())
+        self.assertLess(
+            ingested,
+            on_disk | ingested,
+            "this test is vacuous unless the directory holds more than v1",
+        )
+
+    def test_a_second_benchmark_under_the_same_user_is_refused(self):
+        """Retrieval sees everything the evaluator can read, so two corpora
+        under one user is a third, unnamed exam. It must fail loudly - the
+        scores it produces look like an ordinary quality regression."""
+        self.seed()
+
+        other = self.write_template(
+            "institutional-other", "v9", ["@grievance-procedure"]
+        )
+        with self.assertRaises(CommandError) as caught:
+            call_command("seed_evaluation", template=str(other), verbosity=0)
+
+        message = str(caught.exception)
+        self.assertIn("--user", message)
+        self.assertIn("--prune", message)
+
+    def test_prune_switches_a_database_between_versions(self):
+        self.seed()
+
+        other = self.write_template(
+            "institutional-other", "v9", ["@grievance-procedure"]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            call_command(
+                "seed_evaluation",
+                template=str(other),
+                output=str(Path(directory) / "b.json"),
+                prune=True,
+                verbosity=0,
+            )
+
+        self.assertEqual(
+            {
+                document.title.removeprefix("[eval] ")
+                for document in Document.objects.filter(title__startswith="[eval] ")
+            },
+            {"grievance-procedure"},
+        )
+
+    def test_an_explicit_corpus_can_include_a_document_no_case_cites(self):
+        """A distractor is legitimate - it is what makes a retrieval score
+        mean anything - so a template may name its corpus outright."""
+        template = self.write_template(
+            "institutional-other",
+            "v9",
+            ["@grievance-procedure"],
+            corpus=["grievance-procedure", "library-rules"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            call_command(
+                "seed_evaluation",
+                template=str(template),
+                output=str(Path(directory) / "b.json"),
+                verbosity=0,
+            )
+
+        self.assertEqual(
+            {
+                document.title.removeprefix("[eval] ")
+                for document in Document.objects.filter(title__startswith="[eval] ")
+            },
+            {"grievance-procedure", "library-rules"},
+        )
+
+    def test_a_missing_corpus_file_fails_loudly(self):
+        """Resolving without it would score retrieval as a miss for a
+        document the benchmark expected to be there."""
+        template = self.write_template("institutional-other", "v9", ["@not-a-document"])
+
+        with self.assertRaises(CommandError) as caught:
+            call_command("seed_evaluation", template=str(template), verbosity=0)
+
+        self.assertIn("not-a-document.txt", str(caught.exception))
+
+    def write_template(self, name, version, references, corpus=None):
+        """A minimal template on disk, for the multi-version cases."""
+        payload = {
+            "name": name,
+            "version": version,
+            "description": "fixture",
+            "cases": [
+                {
+                    "question": "What does it say?",
+                    "expected_answer": "something",
+                    "relevant_documents": references,
+                    "relevant_pages": [1],
+                }
+            ],
+        }
+        if corpus is not None:
+            payload["corpus"] = corpus
+
+        directory = tempfile.mkdtemp(prefix="template-")
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = Path(directory) / "template.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
 
 @override_settings(MEDIA_ROOT=MEDIA_ROOT, DOCUMENT_EMBEDDING_PROVIDER=EMBEDDER)
 class BaselineGateTests(TestCase):
@@ -144,12 +294,12 @@ class BaselineGateTests(TestCase):
     def run_evaluation(self, **kwargs):
         from io import StringIO
 
-        options = dict(
-            dataset="institutional-seed",
-            dataset_version="v1",
-            as_user="ci-evaluator",
-            stdout=StringIO(),
-        )
+        options = {
+            "dataset": "institutional-seed",
+            "dataset_version": "v1",
+            "as_user": "ci-evaluator",
+            "stdout": StringIO(),
+        }
         options.update(kwargs)
         call_command("evaluate", **options)
         return options["stdout"].getvalue()
@@ -179,9 +329,7 @@ class BaselineGateTests(TestCase):
         self.baseline.write_text(json.dumps(payload), encoding="utf-8")
 
         with self.assertRaises(CommandError) as caught:
-            self.run_evaluation(
-                baseline=str(self.baseline), fail_on_regression=True
-            )
+            self.run_evaluation(baseline=str(self.baseline), fail_on_regression=True)
 
         self.assertIn("groundedness", str(caught.exception))
 

@@ -20,6 +20,29 @@ and retrieval as they are configured on the machine running it - which is
 the only thing worth scoring.
 
 Idempotent: re-running replaces the corpus documents and rewrites the file.
+
+THE CORPUS IS PART OF THE DATASET, and that is not a detail. A benchmark is
+scored through `rag.ask`, which retrieves everything the evaluator user is
+authorized to read - so the exam is not the 13 questions, it is the 13
+questions ASKED OF A PARTICULAR SET OF DOCUMENTS. Adding a document to
+`evaluation/corpus/` changes every benchmark scored under that user, whether
+or not any case mentions it.
+
+That happened. v2 of the benchmark added four documents to the shared corpus
+directory; this command ingested the whole directory; and v1 - whose cases
+were written against five documents - was suddenly scored against nine. Its
+committed baseline stopped matching and the regression gate failed, reporting
+precision_at_k.10 -0.0889 and citation_accuracy -0.0740. Nothing about
+retrieval had got worse. The exam had changed, which is exactly what the
+governance rule on datasets exists to prevent - applied to the half of the
+dataset that lives on disk rather than in the JSON.
+
+So this command ingests the documents THIS TEMPLATE declares, and nothing
+else. A template may list them explicitly under `corpus`; otherwise they are
+the slugs its own cases reference. And because two templates with different
+corpora cannot both be scored under one user - retrieval would see the union
+- seeding a second one under the same user is refused rather than silently
+producing a third, unnamed exam.
 """
 
 import json
@@ -63,16 +86,110 @@ class Command(BaseCommand):
             default=str(OUTPUT),
             help="Where to write the resolved benchmark.",
         )
+        # A dataset is immutable once loaded, so improving the benchmark
+        # means adding a VERSION beside the old one rather than editing it -
+        # otherwise last month's score and this month's describe different
+        # exams. That only works if the seeder can resolve more than the one
+        # hardcoded template, which is why this exists.
+        parser.add_argument(
+            "--template",
+            default=str(TEMPLATE),
+            help="Benchmark template to resolve (default benchmark.template.json).",
+        )
+        parser.add_argument(
+            "--prune",
+            action="store_true",
+            help=(
+                "Remove [eval] documents owned by --user that are outside "
+                "this template's corpus. Needed when switching a database "
+                "from one benchmark version to another; it INVALIDATES any "
+                "loaded dataset that referenced them."
+            ),
+        )
 
     def handle(self, *args, **options):
-        if not TEMPLATE.exists():
-            raise CommandError(f"{TEMPLATE} is missing")
+        template = Path(options["template"])
+        if not template.exists():
+            raise CommandError(f"{template} is missing")
         if not CORPUS.is_dir():
             raise CommandError(f"{CORPUS} is missing")
 
+        data = json.loads(template.read_text(encoding="utf-8"))
+        slugs = self._corpus_slugs(data, template)
+
         user = self._evaluator(options["user"])
-        ids = self._ingest(user)
-        self._resolve(ids, Path(options["output"]))
+        self._check_for_foreign_documents(user, slugs, prune=options["prune"])
+        ids = self._ingest(user, slugs)
+        self._resolve(data, ids, Path(options["output"]))
+
+    @staticmethod
+    def _corpus_slugs(data, template) -> list:
+        """Which documents this benchmark is scored against.
+
+        An explicit `corpus` list wins, because a benchmark may legitimately
+        want a distractor that no case names as relevant - that is part of
+        what makes a retrieval score mean something. Falling back to the
+        slugs the cases reference keeps existing templates working without an
+        edit, and is the conservative reading: a document nothing references
+        cannot have been intended as part of the exam.
+        """
+        declared = data.get("corpus")
+        if declared:
+            return sorted({str(slug).lstrip("@") for slug in declared})
+
+        referenced = {
+            str(reference).lstrip("@")
+            for case in data.get("cases", [])
+            for reference in (case.get("relevant_documents") or [])
+            if str(reference).startswith("@")
+        }
+        if not referenced:
+            raise CommandError(
+                f"{template} declares no `corpus` and no case references a "
+                f"@slug, so there is nothing to score against."
+            )
+        return sorted(referenced)
+
+    def _check_for_foreign_documents(self, user, slugs, *, prune=False):
+        """Refuse to score one benchmark's questions over another's corpus.
+
+        Retrieval sees every document this user may read, so a database that
+        already holds another version's corpus under the same user produces a
+        score belonging to neither benchmark. There is no way to detect that
+        from the numbers afterwards - they simply come out lower, and look
+        like a quality regression.
+        """
+        wanted = {f"{TITLE_PREFIX}{slug}" for slug in slugs}
+        foreign = list(
+            Document.objects.filter(owner=user, title__startswith=TITLE_PREFIX).exclude(
+                title__in=wanted
+            )
+        )
+        if not foreign:
+            return
+
+        names = sorted(
+            document.title.removeprefix(TITLE_PREFIX) for document in foreign
+        )
+
+        if not prune:
+            raise CommandError(
+                f"{user.username} already owns {len(foreign)} [eval] "
+                f"document(s) outside this template's corpus: "
+                f"{', '.join(names)}. Scoring here would ask this benchmark's "
+                f"questions over a larger corpus than it was written for. "
+                f"Seed the other benchmark under its own --user, or pass "
+                f"--prune to remove these (which invalidates any loaded "
+                f"dataset that references them)."
+            )
+
+        for document in foreign:
+            document.current_version = None
+            document.save(update_fields=["current_version"])
+        Document.objects.filter(id__in=[d.id for d in foreign]).delete()
+        self.stdout.write(
+            self.style.WARNING(f"pruned {len(foreign)}: {', '.join(names)}")
+        )
 
     def _evaluator(self, username):
         User = get_user_model()
@@ -93,10 +210,15 @@ class Command(BaseCommand):
         self.stdout.write(f"evaluator: {user.username} ({DEPARTMENT})")
         return user
 
-    def _ingest(self, user):
-        sources = sorted(CORPUS.glob("*.txt"))
-        if not sources:
-            raise CommandError(f"no .txt documents in {CORPUS}")
+    def _ingest(self, user, slugs):
+        sources = [CORPUS / f"{slug}.txt" for slug in slugs]
+        missing = [source.name for source in sources if not source.exists()]
+        if missing:
+            raise CommandError(
+                f"{CORPUS} is missing {', '.join(missing)}. A benchmark "
+                f"resolved without them would score retrieval as a miss for "
+                f"documents it expected to be there."
+            )
 
         ids = {}
         for source in sources:
@@ -148,9 +270,7 @@ class Command(BaseCommand):
 
         return ids
 
-    def _resolve(self, ids, output):
-        data = json.loads(TEMPLATE.read_text(encoding="utf-8"))
-
+    def _resolve(self, data, ids, output):
         for index, case in enumerate(data.get("cases", [])):
             resolved = []
             for reference in case.get("relevant_documents", []) or []:
@@ -173,8 +293,9 @@ class Command(BaseCommand):
         # governed and reviewed.
         data["description"] = (
             data.get("description", "")
-            + " Resolved from benchmark.template.json by `manage.py "
-            "seed_evaluation`; document ids are specific to this database."
+            + " Resolved by `manage.py seed_evaluation`; document ids are "
+            "specific to this database, and the corpus is exactly the "
+            f"document(s) this template declares: {', '.join(sorted(ids))}."
         )
 
         output.parent.mkdir(parents=True, exist_ok=True)

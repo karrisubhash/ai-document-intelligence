@@ -844,6 +844,40 @@ extraction, chunking, table detection and retrieval as configured — and substi
 it created. Document ids stay stable across re-seeds, because a dataset is immutable once
 loaded and a recreated corpus would leave it pointing at rows that no longer exist.
 
+**The corpus is part of the dataset**, and that is not a detail. A benchmark is scored
+through `rag.ask`, which retrieves everything the evaluator user is authorized to read — so
+the exam is not the 13 questions, it is those questions *asked of a particular set of
+documents*. Adding a file to `evaluation/corpus/` changes every benchmark scored under that
+user, whether or not any case mentions it.
+
+That happened, and the gate caught it. A second benchmark version added four documents to
+the shared corpus directory; `seed_evaluation` ingested the whole directory; and v1 — whose
+cases were written against five documents — was suddenly being scored against nine. The
+committed baseline stopped matching and the gate failed:
+
+```
+DOWN generation.citation_accuracy: -0.0740
+DOWN retrieval.precision_at_k.10:  -0.0889
+```
+
+Nothing about retrieval had got worse. `recall@1`, `MRR` and `MAP` were all still 1.0 — the
+right document came back first for every question. What had changed was the denominator:
+more documents means more candidates at k=10 that no case lists as relevant, and answers
+that cite passages from documents v1 never knew about. **The exam had changed**, which is
+precisely what the immutability rule exists to prevent — applied to the half of the dataset
+that lives on disk rather than in the JSON.
+
+So `seed_evaluation` now ingests the documents *the template it is resolving* declares, and
+nothing else: an explicit `corpus` list if the template has one, otherwise the slugs its own
+cases reference. Because two corpora under one evaluator produce a third, unnamed exam,
+seeding a second version under the same user is **refused** rather than silently scored —
+the message names `--user` and `--prune`. After the fix, v1 scores against its five
+documents again and `citation_accuracy` returns to its baseline 0.9444.
+
+The lesson generalises: a governed dataset is not just the questions file. It is the
+questions, the corpus, the user they are asked as, and the configuration they are scored
+under — and the first three of those were only half-governed.
+
 Current baseline, lexical retrieval and the extractive answerer:
 
 | | |
