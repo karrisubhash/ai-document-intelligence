@@ -12,7 +12,7 @@ from unittest.mock import patch
 from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -177,7 +177,9 @@ class HeuristicScannerTests(TestCase):
         self.assertTrue(any(f.rule == "ooxml_macro" for f in result.findings))
 
     def test_a_macro_free_docx_is_clean(self):
-        self.assertEqual(self.scan("plain.docx", ooxml_bytes({})).verdict, Verdict.CLEAN)
+        self.assertEqual(
+            self.scan("plain.docx", ooxml_bytes({})).verdict, Verdict.CLEAN
+        )
 
     def test_result_records_what_it_scanned_with(self):
         """A clean verdict is only meaningful alongside the rules that
@@ -204,7 +206,10 @@ class ScanServiceTests(TestCase):
     def test_unconfigured_scanner_raises_not_configured(self):
         with override_settings(DOCUMENT_SCANNER=""):
             with self.assertRaises(ScannerNotConfigured):
-                scanning_service.scan_file("/tmp/whatever")
+                # The path is never resolved. The assertion is that an
+                # unconfigured scanner refuses BEFORE touching the
+                # filesystem, so a path that does not exist is the point.
+                scanning_service.scan_file("/tmp/whatever")  # nosec B108
 
     def test_an_unknown_verdict_is_never_read_as_clean(self):
         import tempfile
@@ -480,3 +485,50 @@ class ThrottlingTests(TestCase):
                 self.client.get(reverse("document-list")).status_code,
                 status.HTTP_200_OK,
             )
+
+
+class TransportSecurityTests(SimpleTestCase):
+    """The production transport settings, asserted from inside the suite.
+
+    `SECURE_SSL_REDIRECT` is switched off under the test runner, because
+    Django's test client speaks plain HTTP and a 301 on every request makes
+    the suite unrunnable (see config/settings.py for the full reasoning).
+    That exemption is narrow, and it needs a guard: without one, the same
+    line could later be edited to disable the redirect in production and no
+    test in this repository would notice.
+
+    So this reads the settings MODULE rather than the live configuration -
+    the module is what a deployment loads, and it is the thing that would
+    have been changed.
+    """
+
+    def source(self):
+        from pathlib import Path
+
+        import config.settings as settings_module
+
+        return Path(settings_module.__file__).read_text(encoding="utf-8")
+
+    def test_the_ssl_redirect_exemption_is_scoped_to_the_test_runner(self):
+        source = self.source()
+
+        self.assertIn("if RUNNING_TESTS:\n    SECURE_SSL_REDIRECT = False", source)
+        self.assertIn('RUNNING_TESTS = "test" in sys.argv', source)
+
+    def test_the_redirect_defaults_on_outside_debug(self):
+        """`not DEBUG` is the default, so a production deployment that sets
+        nothing still redirects."""
+        self.assertIn(
+            'SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", str(not DEBUG))',
+            self.source(),
+        )
+
+    def test_secure_cookies_are_not_exempted(self):
+        """Only the redirect is lifted for tests. If someone widens the
+        exemption to cookies, HSTS or the proxy header, the suite stops
+        exercising the configuration a deployment actually uses."""
+        from django.conf import settings
+
+        self.assertTrue(settings.RUNNING_TESTS, "these tests run under the runner")
+        self.assertEqual(settings.SESSION_COOKIE_SECURE, not settings.DEBUG)
+        self.assertEqual(settings.CSRF_COOKIE_SECURE, not settings.DEBUG)

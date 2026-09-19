@@ -27,10 +27,13 @@ load_dotenv(BASE_DIR.parent / ".env")
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv(
-    "DJANGO_DEBUG",
-    "False",
-).lower() == "true"
+DEBUG = (
+    os.getenv(
+        "DJANGO_DEBUG",
+        "False",
+    ).lower()
+    == "true"
+)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 #
@@ -44,8 +47,8 @@ if not SECRET_KEY:
     if not DEBUG:
         raise ImproperlyConfigured(
             "DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is not true. "
-            "Generate one with: python -c \"from django.core.management.utils "
-            "import get_random_secret_key; print(get_random_secret_key())\""
+            'Generate one with: python -c "from django.core.management.utils '
+            'import get_random_secret_key; print(get_random_secret_key())"'
         )
     SECRET_KEY = "unsafe-development-key"
 
@@ -61,20 +64,20 @@ ALLOWED_HOSTS = [
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
     # Required for SearchVectorField/GinIndex (lexical search) and for
     # pgvector's index classes used by the chunk embeddings.
-    'django.contrib.postgres',
-    'rest_framework',
-    'rest_framework.authtoken',
-    'corsheaders',
-    'accounts',
-    'documents',
+    "django.contrib.postgres",
+    "rest_framework",
+    "rest_framework.authtoken",
+    "corsheaders",
+    "accounts",
+    "documents",
 ]
 
 REST_FRAMEWORK = {
@@ -88,9 +91,7 @@ REST_FRAMEWORK = {
     # Collection endpoints are paginated (spec section 16). Without this a
     # single GET /api/documents/ serializes every row the caller may see,
     # which grows without bound and is trivially abusable.
-    "DEFAULT_PAGINATION_CLASS": (
-        "rest_framework.pagination.PageNumberPagination"
-    ),
+    "DEFAULT_PAGINATION_CLASS": ("rest_framework.pagination.PageNumberPagination"),
     "PAGE_SIZE": 50,
     # Rate limiting (spec section 13). Per endpoint class rather than one
     # global number: a document listing is a cheap indexed query, a chat
@@ -119,37 +120,37 @@ MIDDLEWARE = [
     # Outermost, so every request gets a correlation id and is timed -
     # including the ones later middleware rejects, which are exactly the
     # requests worth seeing when something is wrong.
-    'documents.observability.middleware.ObservabilityMiddleware',
+    "documents.observability.middleware.ObservabilityMiddleware",
     # Must precede CommonMiddleware so the CORS headers survive the
     # redirects and 304s CommonMiddleware can short-circuit with.
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = 'config.urls'
+ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
 ]
 
-WSGI_APPLICATION = 'config.wsgi.application'
+WSGI_APPLICATION = "config.wsgi.application"
 
 
 # Database
@@ -172,16 +173,16 @@ DATABASES = {
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
 
@@ -194,9 +195,9 @@ if "test" in sys.argv:
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = "UTC"
 
 USE_I18N = True
 
@@ -339,6 +340,64 @@ DOCUMENT_FIELD_SCHEMA_PACK = os.getenv("DOCUMENT_FIELD_SCHEMA_PACK", "")
 # overlap, not meaning. Every stored embedding records which it was.
 DOCUMENT_EMBEDDING_PROVIDER = os.getenv("DOCUMENT_EMBEDDING_PROVIDER", "")
 
+# Amazon Titan Text Embeddings V2, when DOCUMENT_EMBEDDING_PROVIDER is the
+# Bedrock provider. This is the first embedder here that encodes meaning
+# rather than vocabulary; the hashing baseline treats "car" and
+# "automobile" as orthogonal, which is survivable across five documents and
+# is not across twelve thousand.
+#
+#   pip install -r backend/requirements-llm.txt
+#   export AWS_BEDROCK_REGION=us-east-1
+#   export DOCUMENT_EMBEDDING_PROVIDER=documents.processing.embedding.bedrock.BedrockTitanEmbeddingProvider
+#
+# Changing this invalidates every stored vector: a vector is only
+# comparable to another from the same model. Section 11.4's controlled
+# re-index is the required follow-up, not an optional tidy-up.
+EMBEDDING_BEDROCK_MODEL = os.getenv("EMBEDDING_BEDROCK_MODEL", "")
+
+# Titan embeds ONE text per call - there is no batch form - so a bulk
+# re-index is one HTTP round trip per chunk unless they overlap. This is
+# how many overlap. Modest on purpose: adaptive retries already handle the
+# account throttle, and a larger pool mostly buys retries.
+EMBEDDING_BEDROCK_CONCURRENCY = int(os.getenv("EMBEDDING_BEDROCK_CONCURRENCY", "8"))
+EMBEDDING_BEDROCK_TIMEOUT = int(os.getenv("EMBEDDING_BEDROCK_TIMEOUT", "30"))
+EMBEDDING_BEDROCK_RETRIES = int(os.getenv("EMBEDDING_BEDROCK_RETRIES", "6"))
+
+# A sentence-transformer running in this process: real semantic embeddings
+# with no account, no key, no network at query time and no per-call cost.
+#
+#   pip install -r backend/requirements-local.txt
+#   export DOCUMENT_EMBEDDING_PROVIDER=\
+#       documents.processing.embedding.local.LocalEmbeddingProvider
+#
+# This is the recommended default for a corpus of this size. Indexing is
+# one embedding per CHUNK - roughly 50,000 of them for 12,000 documents -
+# and no hosted free tier permits that, while a local model has no quota at
+# all. bge-small-en-v1.5 is 384-dimensional, which is the width the column
+# and its HNSW index are ALREADY built for, so switching to it needs a
+# re-index but no migration.
+EMBEDDING_LOCAL_MODEL = os.getenv("EMBEDDING_LOCAL_MODEL", "")
+EMBEDDING_LOCAL_BATCH_SIZE = int(os.getenv("EMBEDDING_LOCAL_BATCH_SIZE", "32"))
+
+# "cpu" unless told otherwise. Left to sentence-transformers, an unset
+# device takes CUDA whenever a GPU is visible, so a web worker can quietly
+# claim GPU memory from whatever else is using it.
+EMBEDDING_LOCAL_DEVICE = os.getenv("EMBEDDING_LOCAL_DEVICE", "cpu")
+
+# Threads torch may use, or 0 to leave its own choice alone. It has to be
+# stated here rather than read from the environment by the provider: Django
+# settings do not fall back to os.environ, so a knob the provider reads with
+# getattr(settings, ...) and nothing defines is a knob that can never be
+# anything but its default.
+#
+# Worth having because torch sizes its thread pool from the HOST's core
+# count and not from the cgroup CPU limit, so a container allotted two
+# cores still starts one thread per core on the machine and spends more
+# time contending than embedding. Set this to the container's actual
+# allocation. torch.set_num_threads() is process-global, so it also covers
+# the local cross-encoder reranker when both are enabled.
+EMBEDDING_LOCAL_THREADS = int(os.getenv("EMBEDDING_LOCAL_THREADS", "0"))
+
 # Dotted path to a TableDetector (§11.3, phase 12). Empty skips the
 # LAYOUT_ANALYSIS stage.
 #
@@ -442,12 +501,88 @@ RAG_RETRIEVAL_DEPTH = int(os.getenv("RAG_RETRIEVAL_DEPTH", "20"))
 # A passage must beat this after reranking to enter the context. Below it,
 # the match is a lexical coincidence, and answering from coincidences is how
 # a system produces confident nonsense.
-RAG_RELEVANCE_FLOOR = float(os.getenv("RAG_RELEVANCE_FLOOR", "0.15"))
+#
+# UNSET means "let the reranker decide", and that is the default on purpose.
+# This threshold belongs to a scoring scheme rather than to the system: the
+# lexical reranker emits a weighted sum of three ratios, a cross-encoder
+# emits a calibrated relevance probability, and 0.15 is a sensible cut
+# through the first distribution and an arbitrary one through the second.
+# When this is empty, documents.rag.engine.resolve_relevance_floor asks the
+# configured reranker for its own floor. Setting it explicitly overrides
+# every reranker, which is right for an operator who has measured one.
+_relevance_floor = os.getenv("RAG_RELEVANCE_FLOOR", "").strip()
+RAG_RELEVANCE_FLOOR = float(_relevance_floor) if _relevance_floor else None
+
+# Reranking model, when RAG_RERANKER is the Bedrock cross-encoder. A bare
+# model id; the Rerank API's full ARN is built from it and the region.
+#
+#   export RAG_RERANKER=documents.rag.bedrock_rerank.BedrockReranker
+#
+# Note that Amazon Rerank 1.0 is not offered in us-east-1 while Cohere
+# Rerank 3.5 is, so the default is the one that works in the most regions.
+RAG_RERANKER_MODEL = os.getenv("RAG_RERANKER_MODEL", "")
+RAG_RERANKER_TIMEOUT = int(os.getenv("RAG_RERANKER_TIMEOUT", "15"))
+RAG_RERANKER_RETRIES = int(os.getenv("RAG_RERANKER_RETRIES", "3"))
+
+# A cross-encoder running in this process, the local sibling of the Bedrock
+# reranker and the free half of the same idea.
+#
+#   pip install -r backend/requirements-local.txt
+#   export RAG_RERANKER=documents.rag.local_rerank.LocalCrossEncoderReranker
+#
+# Reranking reads query and passage TOGETHER, so it scores whether a
+# passage answers the question rather than whether it repeats its words.
+# It only ever sees RAG_RETRIEVAL_DEPTH candidates, so unlike embedding it
+# is affordable to run per question.
+RAG_RERANKER_LOCAL_MODEL = os.getenv("RAG_RERANKER_LOCAL_MODEL", "")
+RAG_RERANKER_LOCAL_BATCH_SIZE = int(os.getenv("RAG_RERANKER_LOCAL_BATCH_SIZE", "16"))
+RAG_RERANKER_LOCAL_DEVICE = os.getenv("RAG_RERANKER_LOCAL_DEVICE", "cpu")
+
+# --- Generative answering over any OpenAI-compatible endpoint ------------
+# One provider, every free tier. Groq, Google Gemini's compatibility
+# endpoint, OpenRouter, DeepSeek, Together, Cerebras and a local Ollama all
+# speak /chat/completions, so a short provider name is enough to pick one:
+#
+#   pip install -r backend/requirements-llm.txt
+#   export RAG_ANSWERER=documents.rag.openai_compat.OpenAICompatibleAnswerer
+#   export RAG_ANSWERER_PROVIDER=groq        # or gemini, openrouter, ollama
+#   export GROQ_API_KEY=...                  # the key never enters settings
+#
+# Answering is ONE call per question, which is why a free tier is viable
+# here and is not for embedding. The guardrails are unchanged: the
+# permission filter still runs first, every claim still needs a resolvable
+# citation, every figure is still checked against the cited passages, and a
+# failure is still downgraded to an abstention rather than returned.
+RAG_ANSWERER_PROVIDER = os.getenv("RAG_ANSWERER_PROVIDER", "")
+
+# Both override whatever the named provider preset supplies. Set these
+# directly to reach an endpoint that has no preset.
+RAG_ANSWERER_BASE_URL = os.getenv("RAG_ANSWERER_BASE_URL", "")
+
+# Near-zero by default. This is grounded extraction over supplied passages,
+# not creative writing, and sampling variance here shows up as an answer
+# that cites a different passage on every identical question.
+RAG_ANSWERER_TEMPERATURE = float(os.getenv("RAG_ANSWERER_TEMPERATURE", "0.0"))
 
 # Context size in CHARACTERS, not tokens: a tokenizer is model-specific and
 # no model is wired up. ~4 chars/token makes this roughly a 2k-token budget.
 RAG_CONTEXT_BUDGET = int(os.getenv("RAG_CONTEXT_BUDGET", "8000"))
 RAG_MAX_PASSAGES = int(os.getenv("RAG_MAX_PASSAGES", "8"))
+
+# Share of an answer's content words that must appear in the passages it
+# cites. This is the BACKSTOP behind grounding's fact check, not the gate -
+# see documents/rag/grounding.py for why it is no longer 0.55. Raising it
+# back toward that value re-creates a filter that rejects well-written
+# answers for using ordinary English, while still passing a fluent answer
+# that quietly changed one figure. Unset uses the module default.
+_min_support = os.getenv("RAG_MIN_SUPPORT_RATIO", "").strip()
+RAG_MIN_SUPPORT_RATIO = float(_min_support) if _min_support else None
+
+# How many of the caller's earlier questions may lend vocabulary to a
+# follow-up before retrieval runs. A question that stands on its own is
+# never rewritten; see documents/rag/followup.py. 0 disables the behaviour
+# and restores one-shot questions.
+RAG_FOLLOWUP_HISTORY_TURNS = int(os.getenv("RAG_FOLLOWUP_HISTORY_TURNS", "2"))
 
 
 # --- Malware scanning (spec section 13) -----------------------------------
@@ -497,7 +632,11 @@ LOGGING = {
         "adi": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
         # Django's request logger duplicates what the middleware already
         # records, in a format that is not redacted.
-        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        "django.request": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
     },
 }
 
@@ -545,6 +684,39 @@ if "test" in sys.argv:
         }
     }
 
+    # The AI components are pinned to their offline baselines for the test
+    # run, whatever the developer's .env says. Three separate reasons, and
+    # each of them bit before this existed:
+    #
+    # 1. DETERMINISM. Settings are read from .env, so enabling the local
+    #    embedder for real work silently changed what the suite tested.
+    #    tests_api_results.test_chunks_report_an_embedding_without_shipping
+    #    _the_vector creates one hashing-baseline row and asserts on
+    #    embeddings[0]; with a provider configured the pipeline wrote a
+    #    SECOND, semantic embedding for the same chunk, and the assertion
+    #    failed on a test that had nothing to do with the change. A suite
+    #    whose result depends on an untracked local file is not a suite.
+    #
+    # 2. COST AND TIME. The same run went from 46 seconds to 792 - a 17x
+    #    slowdown - because every test that indexes a document loaded a
+    #    134 MB sentence-transformer. On a cold CI runner it would also
+    #    DOWNLOAD it, making the suite depend on the Hugging Face hub being
+    #    up to test things that have nothing to do with embeddings.
+    #
+    # 3. WHAT IS ACTUALLY UNDER TEST. These tests check the pipeline, the
+    #    permission filter, the API contracts and the guardrails - none of
+    #    which is a property of the embedding model. The tests that DO care
+    #    already pin a provider explicitly with override_settings, and they
+    #    keep working: an explicit override still wins over this.
+    DOCUMENT_EMBEDDING_PROVIDER = (
+        "documents.processing.embedding.hashing.HashingEmbeddingProvider"
+    )
+    # Empty means the bundled LexicalReranker, which needs no model.
+    RAG_RERANKER = ""
+    # Empty means the bundled ExtractiveAnswerer, which needs no network.
+    # Leaving a real one configured would make the suite call an API.
+    RAG_ANSWERER = ""
+
 
 CELERY_BROKER_URL = os.getenv(
     "CELERY_BROKER_URL",
@@ -578,9 +750,7 @@ CELERY_TASK_ROUTES = {
 # which for minute-long OCR jobs means a worker sits on work it has not
 # started while another worker is idle - and makes queue depth lie about
 # how much is actually waiting.
-CELERY_WORKER_PREFETCH_MULTIPLIER = int(
-    os.getenv("CELERY_PREFETCH_MULTIPLIER", "1")
-)
+CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.getenv("CELERY_PREFETCH_MULTIPLIER", "1"))
 
 # Acknowledge after completion, not on receipt, so a worker killed mid-task
 # returns the task to the queue instead of losing it. Safe here because the
@@ -604,9 +774,7 @@ if os.getenv("USE_X_FORWARDED_PROTO", "True").lower() == "true":
 # Redirecting is nginx's job in the shipped config; this is the belt to its
 # braces, and the reason it is opt-out rather than opt-in is that a
 # misconfigured proxy failing open to plain HTTP is the more likely mistake.
-SECURE_SSL_REDIRECT = (
-    os.getenv("SECURE_SSL_REDIRECT", str(not DEBUG)).lower() == "true"
-)
+SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", str(not DEBUG)).lower() == "true"
 
 # HSTS is deliberately OFF by default even in production. It is close to
 # irreversible - a browser that has seen the header refuses plain HTTP for

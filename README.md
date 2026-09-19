@@ -40,7 +40,7 @@ for** and **what is actually built today**, and never conflates the two.
 | RAG, citations, abstention, guardrails | 12 | ✅ Built — extractive by default, generative via one setting, same guardrails |
 | Testing console (React + Vite) | 26 | ✅ Built — covers the document, search and chat paths, not every endpoint ([frontend/](frontend/)) |
 | Metrics, structured logs, AI telemetry | 20 | ✅ Built — `/metrics`, redaction enforced at the formatter |
-| Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 8-job pipeline |
+| Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 8-job pipeline; every gate now passes locally, none has run in GitHub Actions |
 | Horizontal scale, queue routing, re-indexing | 22 | ✅ Built — measured, not assumed ([details](#scale-22-nfr-02)) |
 | Table detection + table-aware retrieval | 11.3 | ✅ Built — span-verified cells, columns travel with the rows |
 | Figures located (not described) | 11.3 | ✅ Built — an abstention that says which page to look at |
@@ -1133,10 +1133,33 @@ catches a model change without a migration, which otherwise passes every test an
 deploy. The smoke test asserts an endpoint **refuses** anonymous access — one that only
 checks for a 200 cannot tell a working deploy from one with authentication switched off.
 
-**This workflow has never executed.** Its YAML is validated and its commands mirror what the
-local stack runs, but GitHub Actions cannot run in this environment. Treat the first real
-run as the test. The AI-regression job seeds the corpus and gates on a committed baseline
-— see [the regression gate](#the-regression-gate-192).
+**This workflow has still never executed in GitHub Actions**, and that remains the thing to
+verify first. What has changed is that every gate in it has now been run locally, with the
+workflow's own commands and environment — and five of them failed.
+
+A pipeline whose first job cannot pass is not a pipeline. Every job here declares
+`needs: lint` or `needs: tests`, so each failure below silently disabled everything
+downstream of it:
+
+| Gate | What it did | Fix |
+|---|---|---|
+| `ruff check` | no configuration and no pinned version, so the rule set was whatever ruff shipped that morning: **245 findings** | `pyproject.toml` states the rules; the workflow pins `ruff==0.16.8`; the real findings were fixed, not suppressed |
+| `ruff format --check` | **76 files** would be reformatted | formatted once; the test suite is the proof it changed no behaviour |
+| `manage.py check --deploy --fail-level WARNING` | the workflow's own placeholder `DJANGO_SECRET_KEY` was 48 characters, and `security.W009` wants 50 | lengthened the placeholder — the check was working exactly as intended |
+| `manage.py test` | the workflow sets `DJANGO_DEBUG=False` on purpose, which turns on `SECURE_SSL_REDIRECT`, so every one of the suite's requests got a `301` and read `.data` off an `HttpResponsePermanentRedirect` | the redirect — and *only* the redirect — is lifted under the test runner; `TransportSecurityTests` asserts the exemption stays that narrow |
+| `check_deployment_config.py` | `docker compose config` exited 2 before reading a service: `GRAFANA_PASSWORD` is correctly declared `${...:?}` and CI has no `.env` | the check supplies its own placeholders, so it is hermetic — it asks about the merge, not about anyone's credentials |
+| `bandit -ll` | exited 1 on three `/tmp` string literals in tests, none of which is ever opened | `# nosec B108` with the reason beside it |
+
+Two more were wrong without failing. The AI-regression job seeded the corpus with **no**
+embedding provider and then evaluated with the hashing one, so the query was embedded and
+matched against vectors that were never written — the benchmark measured lexical retrieval
+alone while recording `hashing-baseline` beside the score. The seed step now sets the same
+provider. And the corpus itself had drifted; see
+[the regression gate](#the-regression-gate-192).
+
+Locally, all seven gates and both test suites now pass. That is **locally verified, not
+deployment verified** — a GitHub Actions runner is a different machine with different
+package versions, and the first real run is still the test.
 
 ---
 
@@ -1553,11 +1576,11 @@ point for a 16-class problem whose interesting failures are the small, low-text 
 ## Testing
 
 ```bash
-# Backend: 632 tests across documents, ingestion, classification, field
+# Backend: 680 tests across documents, ingestion, classification, field
 #          extraction, DOCX, search, RAG, tables, figures, agents,
-#          storage, object storage, security, evaluation gate,
-#          observability, multiprocess metrics, scale, backup,
-#          regressions and accounts
+#          storage, object storage, upload admission, security,
+#          evaluation gate, observability, multiprocess metrics, scale,
+#          backup, regressions and accounts
 cd backend
 python manage.py test
 

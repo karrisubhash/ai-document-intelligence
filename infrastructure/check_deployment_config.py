@@ -30,8 +30,34 @@ reimplementation of its rules here.
 """
 
 import json
+import os
 import subprocess
 import sys
+
+# Values for the variables the compose files interpolate. This check asks
+# one question - does the overlay MERGE into a production stack - and the
+# answer does not depend on anyone's real credentials. Supplying them here
+# makes the gate hermetic: it runs identically on a laptop with a populated
+# .env, on a fresh CI checkout with none, and on a machine where .env holds
+# something else entirely.
+#
+# It is also what made the gate runnable in CI at all. `GRAFANA_PASSWORD`
+# is declared `${GRAFANA_PASSWORD:?...}` - correctly, because a Grafana
+# with a default password is not a monitoring stack - and `APP_PORT` has no
+# default, so `docker compose config` exited 2 before reading a single
+# service. The build job's "Production configuration" step therefore could
+# not pass, whatever the overlay said.
+#
+# NOTHING HERE IS A CREDENTIAL. These strings are never written to a
+# deployment; they exist so the parser has something to substitute.
+PLACEHOLDERS = {
+    "POSTGRES_DB": "check_db",
+    "POSTGRES_USER": "check_user",
+    "POSTGRES_PASSWORD": "check_password",
+    "APP_PORT": "8000",
+    "GRAFANA_PASSWORD": "check_password",
+    "NGINX_SERVER_NAME": "example.invalid",
+}
 
 COMPOSE = [
     "docker",
@@ -57,7 +83,10 @@ EDGE_PORTS = {"80", "443"}
 
 
 def load_config():
-    result = subprocess.run(COMPOSE, capture_output=True, text=True)
+    # The real environment wins where it is already set, so an operator
+    # checking their own stack checks their own values.
+    environment = {**PLACEHOLDERS, **os.environ}
+    result = subprocess.run(COMPOSE, capture_output=True, text=True, env=environment)
     if result.returncode != 0:
         print("docker compose config failed:\n" + result.stderr, file=sys.stderr)
         sys.exit(2)

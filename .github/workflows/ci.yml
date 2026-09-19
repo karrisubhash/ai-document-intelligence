@@ -25,7 +25,12 @@ env:
   PYTHON_VERSION: "3.12"
   # Tests need a key but not a secret one - they run against a throwaway
   # database. Production keys come from the environment, never from here.
-  DJANGO_SECRET_KEY: ci-only-not-a-production-secret-0123456789abcdef
+  # At least 50 characters with enough distinct ones, because the security
+  # job runs `check --deploy --fail-level WARNING` and Django's security.W009
+  # is a WARNING. The previous value was 48 characters, so that job failed on
+  # its own placeholder - the check working exactly as intended, on a key that
+  # was never going to be used for anything.
+  DJANGO_SECRET_KEY: ci-only-not-a-production-secret-qZ8vK3mLp7RtWx2NbYc4Hj6Fs9Dg
   DJANGO_DEBUG: "False"
   POSTGRES_DB: ai_document_intelligence
   POSTGRES_USER: app_user
@@ -48,9 +53,17 @@ jobs:
           cache: pip
 
       - name: Install linters
-        run: pip install ruff
+        # PINNED. This job gates every other job in the pipeline
+        # (`needs: lint`), so an unpinned linter means a ruff release can
+        # stop the tests, the security checks and the build from running,
+        # on a morning when nobody changed any code. Upgrading is then a
+        # deliberate commit that bumps this line and pyproject.toml
+        # together.
+        run: pip install ruff==0.16.8
 
       - name: Ruff
+        # Rules come from pyproject.toml, not from ruff's defaults - same
+        # reason.
         run: ruff check backend ai
 
       - name: Formatting

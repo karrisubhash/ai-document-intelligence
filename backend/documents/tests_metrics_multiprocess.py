@@ -59,9 +59,7 @@ class MultiProcessAggregationTests(TestCase):
                 "multiprocess mode at all",
             )
 
-            with mock.patch.dict(
-                os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}
-            ):
+            with mock.patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}):
                 payload, _ = metrics.render()
 
             body = payload.decode()
@@ -78,9 +76,7 @@ class MultiProcessAggregationTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_worker(directory, 5)
 
-            with mock.patch.dict(
-                os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}
-            ):
+            with mock.patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}):
                 payload, _ = metrics.render()
 
             body = payload.decode()
@@ -102,8 +98,13 @@ class MultiProcessAggregationTests(TestCase):
         self.assertIn("text/plain", content_type)
 
     def test_the_directory_is_reported(self):
-        with mock.patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": "/tmp/p"}):
-            self.assertEqual(metrics.multiprocess_dir(), "/tmp/p")
+        # An opaque string echoed back through a getter. No file is
+        # opened, created or removed at this path - the assertion is that
+        # the setting is READ, and any two equal strings would do. Bandit
+        # sees a hardcoded /tmp and cannot know that, hence the markers.
+        directory = "/tmp/p"  # nosec B108
+        with mock.patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}):
+            self.assertEqual(metrics.multiprocess_dir(), directory)
 
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
@@ -133,9 +134,7 @@ class GunicornHookTests(TestCase):
             with open(stale, "wb") as handle:
                 handle.write(b"stale")
 
-            with mock.patch.dict(
-                os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}
-            ):
+            with mock.patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}):
                 config.on_starting(mock.Mock())
 
             self.assertTrue(os.path.isdir(directory))
@@ -149,9 +148,7 @@ class GunicornHookTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_worker(directory, 2)
 
-            with mock.patch.dict(
-                os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}
-            ):
+            with mock.patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": directory}):
                 with mock.patch(
                     "prometheus_client.multiprocess.mark_process_dead"
                 ) as reap:
