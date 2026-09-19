@@ -186,9 +186,14 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# True only under `manage.py test`. Named rather than repeated so every
+# place the suite needs different behaviour is greppable, and so that none
+# of them can be read as a production switch.
+RUNNING_TESTS = "test" in sys.argv
+
 # The production hasher is deliberately slow, which dominates test runtime
 # once a suite creates many users. Never applies outside `manage.py test`.
-if "test" in sys.argv:
+if RUNNING_TESTS:
     PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 
@@ -676,7 +681,7 @@ CACHES = {
 
 # Tests must not share throttle state with a running stack, and must not
 # need Redis at all.
-if "test" in sys.argv:
+if RUNNING_TESTS:
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -775,6 +780,27 @@ if os.getenv("USE_X_FORWARDED_PROTO", "True").lower() == "true":
 # braces, and the reason it is opt-out rather than opt-in is that a
 # misconfigured proxy failing open to plain HTTP is the more likely mistake.
 SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", str(not DEBUG)).lower() == "true"
+
+# ...except under the test runner, where it is not a security control, it is
+# a wall. Django's test client speaks plain HTTP by construction, so every
+# request in the suite - 672 of them - gets a 301 to https and the test
+# reads `.data` off an HttpResponsePermanentRedirect.
+#
+# This is not hypothetical tidying. `.github/workflows/ci.yml` sets
+# DJANGO_DEBUG="False" for the whole workflow, deliberately, so that the
+# suite runs under production-like settings. The consequence was that the
+# tests job could not pass - and because every later job declares
+# `needs: tests`, the security checks, the AI regression gate and the build
+# never ran either.
+#
+# Narrow on purpose: ONLY the redirect is lifted. Secure cookies, HSTS,
+# the proxy header and every other production setting stay exactly as they
+# are, so the suite still exercises the configuration a deployment uses.
+# That the redirect itself is enabled in production is asserted by
+# `manage.py check --deploy` in CI's security job, and by
+# TransportSecurityTests in documents/tests_security.py.
+if RUNNING_TESTS:
+    SECURE_SSL_REDIRECT = False
 
 # HSTS is deliberately OFF by default even in production. It is close to
 # irreversible - a browser that has seen the header refuses plain HTTP for
