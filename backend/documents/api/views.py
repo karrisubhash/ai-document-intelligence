@@ -58,7 +58,9 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return queryset
 
     def create(self, request, *args, **kwargs):
-        serializer = DocumentCreateSerializer(data=request.data)
+        serializer = DocumentCreateSerializer(
+            data=request.data, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
@@ -99,7 +101,9 @@ class DocumentViewSet(viewsets.ModelViewSet):
         document = self.get_object()
 
         if request.method == "POST":
-            serializer = DocumentVersionCreateSerializer(data=request.data)
+            serializer = DocumentVersionCreateSerializer(
+                data=request.data, context={"request": request}
+            )
             serializer.is_valid(raise_exception=True)
 
             version = create_document_version(

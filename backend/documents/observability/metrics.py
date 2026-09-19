@@ -256,6 +256,17 @@ malware_verdicts = Counter(
     registry=REGISTRY,
 )
 
+upload_rejections = Counter(
+    "adi_upload_rejections_total",
+    "Uploads refused at the API boundary, before anything was stored.",
+    # A fixed vocabulary from documents.uploads: empty, too_large,
+    # unsupported_extension. Never the filename or the extension itself -
+    # an attacker picks those, and a label they control is a label that
+    # can be made unbounded.
+    ["reason"],
+    registry=REGISTRY,
+)
+
 
 def multiprocess_dir() -> str:
     """The shared sample directory, or "" when not running multiprocess."""

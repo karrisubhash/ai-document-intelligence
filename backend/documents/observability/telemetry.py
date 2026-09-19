@@ -179,6 +179,25 @@ def llm_usage(response):
 
 
 @_safe
+def upload_rejected(reason, *, user_id=None):
+    """An upload refused before it was stored (documents.uploads).
+
+    WARNING rather than INFO: one is a user picking the wrong file, and a
+    run of them is someone probing what the platform will accept. The
+    filename is deliberately absent - it is user content.
+    """
+    metrics.upload_rejections.labels(reason=str(reason)).inc()
+
+    log_event(
+        logger,
+        logging.WARNING,
+        "security.upload.rejected",
+        reason=str(reason),
+        user_id=user_id,
+    )
+
+
+@_safe
 def authorization_denied(action, *, user_id=None, document_id=None):
     metrics.authz_denials.labels(action=str(action)).inc()
 

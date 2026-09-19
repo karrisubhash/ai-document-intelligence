@@ -19,18 +19,16 @@ from documents.benchmarks import extraction
 from documents.models import (
     AuditLog,
     Document,
-    DocumentContent,
     PageContent,
-    ProcessingEvent,
     ProcessingJob,
 )
 from documents.processing.context import FileType
 from documents.processing.errors import ErrorCode, StageError, TransientError
 from documents.processing.pipeline import PROCESSING_VERSION
 from documents.processing.stages.ingestion import detect_file_type
+from documents.services import create_document_version
 from documents.tasks import is_retryable
 from documents.tests import MEDIA_ROOT, make_user
-
 
 # --- Fixture builders -------------------------------------------------------
 
@@ -82,8 +80,7 @@ def make_pdf_bytes(page_texts):
     for offset in offsets:
         out += f"{offset:010d} 00000 n \n".encode()
     out += (
-        f"trailer\n<< /Size {size} /Root 1 0 R >>\n"
-        f"startxref\n{xref_offset}\n%%EOF\n"
+        f"trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n"
     ).encode()
 
     return bytes(out)
@@ -126,7 +123,9 @@ class IngestionTestCase(APITestCase):
 
     def setUp(self):
         super().setUp()
-        self.user = make_user("cs_faculty", UserProfile.Role.FACULTY, "Computer Science")
+        self.user = make_user(
+            "cs_faculty", UserProfile.Role.FACULTY, "Computer Science"
+        )
         self.client.force_authenticate(user=self.user)
 
     def upload(self, filename, content, content_type, title="Ingestion Fixture"):
@@ -135,7 +134,9 @@ class IngestionTestCase(APITestCase):
                 reverse("document-list"),
                 {
                     "title": title,
-                    "file": SimpleUploadedFile(filename, content, content_type=content_type),
+                    "file": SimpleUploadedFile(
+                        filename, content, content_type=content_type
+                    ),
                 },
                 format="multipart",
             )
@@ -156,6 +157,30 @@ class IngestionTestCase(APITestCase):
                     format="multipart",
                 )
         return response
+
+    def ingest_bypassing_admission(self, filename, content):
+        """Put a file through the pipeline without the API's admission check.
+
+        `documents.uploads` refuses an oversized or unparseable file in the
+        request, before anything is stored - which is the point of it, and
+        which means these tests can no longer reach the pipeline through the
+        API. They still have to run: the boundary check is a cheap filter on
+        a client-supplied name and size, the pipeline's checks are the
+        authoritative ones that sniff the actual bytes, and a test that only
+        covered the first would let the second rot.
+        """
+        document = Document.objects.create(
+            title="Pipeline Fixture",
+            owner=self.user,
+            department="Computer Science",
+        )
+        with self.captureOnCommitCallbacks(execute=True):
+            create_document_version(
+                document,
+                SimpleUploadedFile(filename, content),
+                uploaded_by=self.user,
+            )
+        return document
 
     def content_for(self, document_id):
         document = Document.objects.get(id=document_id)
@@ -204,7 +229,9 @@ class PagePreservationTests(IngestionTestCase):
         page = content.pages.first()
 
         self.assertEqual(content.page_count, 1)
-        self.assertEqual(page.extraction_method, PageContent.ExtractionMethod.PLAIN_TEXT)
+        self.assertEqual(
+            page.extraction_method, PageContent.ExtractionMethod.PLAIN_TEXT
+        )
         self.assertIn("75 percent", page.text)
 
     def test_extracted_text_remains_available_on_the_version(self):
@@ -276,8 +303,14 @@ class OcrPathTests(IngestionTestCase):
 
 class FileValidationTests(IngestionTestCase):
     def test_unsupported_type_is_rejected_at_validation(self):
+        """The extension said .pdf; the bytes are not a document.
+
+        This is what the API boundary cannot do. A name is client-supplied,
+        so the only honest answer to "what is this file" comes from reading
+        it, and that is VALIDATION's job.
+        """
         response = self.upload_expecting_failure(
-            "notes.xyz", b"not a supported document", "application/octet-stream"
+            "notes.pdf", b"not a supported document", "application/octet-stream"
         )
         job = self.job_for(response.data["id"])
 
@@ -290,11 +323,17 @@ class FileValidationTests(IngestionTestCase):
         )
 
     @override_settings(MAX_DOCUMENT_SIZE_BYTES=100)
-    def test_oversized_file_is_rejected(self):
-        response = self.upload_expecting_failure(
-            "big.pdf", make_pdf_bytes(["Body text " * 200]), "application/pdf"
-        )
-        job = self.job_for(response.data["id"])
+    def test_oversized_file_is_rejected_by_the_pipeline_too(self):
+        """Defence in depth: the size limit is enforced in the worker as
+        well as at the API, so a file that reached storage by any other
+        route - a management command, a restored backup, a future entry
+        point - is still refused."""
+        with self.assertRaises(StageError):
+            self.ingest_bypassing_admission(
+                "big.pdf", make_pdf_bytes(["Body text " * 200])
+            )
+        document = Document.objects.filter(title="Pipeline Fixture").first()
+        job = self.job_for(document.id)
 
         self.assertEqual(job.error_code, "FILE_TOO_LARGE")
 
@@ -324,7 +363,7 @@ class FileValidationTests(IngestionTestCase):
 
     def test_document_survives_a_failed_pipeline(self):
         response = self.upload_expecting_failure(
-            "notes.xyz", b"unsupported", "application/octet-stream"
+            "notes.pdf", b"unsupported", "application/octet-stream"
         )
         document = Document.objects.get(id=response.data["id"])
 
@@ -362,7 +401,7 @@ class FailureTaxonomyTests(IngestionTestCase):
 
     def test_permanent_failure_uses_exactly_one_attempt(self):
         response = self.upload_expecting_failure(
-            "notes.xyz", b"unsupported payload", "application/octet-stream"
+            "notes.pdf", b"unsupported payload", "application/octet-stream"
         )
         job = self.job_for(response.data["id"])
 
@@ -372,7 +411,7 @@ class FailureTaxonomyTests(IngestionTestCase):
 
     def test_permanent_failure_records_each_stage_once(self):
         response = self.upload_expecting_failure(
-            "notes.xyz", b"unsupported payload", "application/octet-stream"
+            "notes.pdf", b"unsupported payload", "application/octet-stream"
         )
         job = self.job_for(response.data["id"])
 
@@ -490,7 +529,9 @@ class ContentProvenanceTests(IngestionTestCase):
 
         contents = document.current_version.contents.all()
         self.assertEqual(contents.count(), 2)
-        self.assertNotEqual(contents[0].processing_job_id, contents[1].processing_job_id)
+        self.assertNotEqual(
+            contents[0].processing_job_id, contents[1].processing_job_id
+        )
 
     def test_processing_version_is_recorded(self):
         response = self.upload(
@@ -515,18 +556,14 @@ class ContentEndpointTests(IngestionTestCase):
         self.assertEqual(result.status_code, status.HTTP_200_OK)
         self.assertEqual(result.data["page_count"], 2)
         self.assertEqual(result.data["processing_version"], PROCESSING_VERSION)
-        self.assertEqual(
-            [page["page_number"] for page in result.data["pages"]], [1, 2]
-        )
+        self.assertEqual([page["page_number"] for page in result.data["pages"]], [1, 2])
         self.assertEqual(
             result.data["pages"][0]["extraction_method"],
             PageContent.ExtractionMethod.PDF_TEXT,
         )
 
     def test_requires_authentication(self):
-        response = self.upload(
-            "doc.pdf", make_pdf_bytes(["Secret"]), "application/pdf"
-        )
+        response = self.upload("doc.pdf", make_pdf_bytes(["Secret"]), "application/pdf")
         self.client.force_authenticate(user=None)
 
         result = self.client.get(

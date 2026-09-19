@@ -701,7 +701,49 @@ retrieved passage is hostile, the system abstains.
 
 ---
 
-## Malware scanning and rate limiting (§13)
+## Upload safety, malware scanning and rate limiting (§13)
+
+### What the API refuses before anything is stored
+
+The pipeline has always refused an oversized, empty or unparseable file. What it could not
+do is refuse it *in time*. INGESTION, SCANNING and VALIDATION run in the Celery worker,
+which is after the request returned `202` — and by then a `Document` row, a
+`DocumentVersion` row and the bytes themselves had been committed to `MEDIA_ROOT` or PUT
+into the bucket. The document was marked `FAILED` and every one of those artifacts stayed.
+
+So an authenticated caller could store arbitrary content, of arbitrary size, in the
+institution's object store, indefinitely, and the only trace was a failed job. Nothing the
+platform *read* was ever unrestricted; what it *kept* was.
+
+`documents/uploads.py` is the admission check that now runs first, inside the request:
+
+| Refused | Status | Why here and not only in the worker |
+|---|---|---|
+| empty file | 400 | nothing to process; DRF's `FileField` catches it first in practice |
+| over `MAX_DOCUMENT_SIZE_BYTES` | **413** | the bytes are never written, so a rejected upload costs no storage |
+| extension not one the pipeline parses | 400 | a `.zip` or `.exe` is never stored to be opened later |
+
+Both upload paths go through it — `POST /api/documents/` and
+`POST /api/documents/{id}/versions/` — because a rule on one door is not a rule.
+
+**This is deliberately the cheap half of the job.** It reads a client-supplied *name*, so it
+proves nothing about content: a `.pdf` that is not a PDF is admitted here and still fails at
+VALIDATION, which sniffs the actual bytes. The extension check exists to stop the
+obviously-inadmissible from being persisted, not to decide what a file is.
+
+**What it does not bound:** the request body has already been read by the time a serializer
+runs — Django's multipart parser spools it to a temporary file, which is then discarded.
+This bounds what gets *stored*, not what gets *transferred*. Bounding the transfer is
+nginx's `client_max_body_size` (55m, deliberately just above the application limit so the
+application produces the error message rather than the proxy). A deployment without that
+proxy still reads the whole body before rejecting it.
+
+Every refusal is audited as a `DOCUMENT_CREATE`/`DENIED` with the filename and, for an
+oversize, both the size and the limit — an operator needs to recognise a pattern, and needs
+the limit recorded beside the size because the setting changes. The file's *contents* are
+never recorded. `adi_upload_rejections_total{reason}` counts them, labelled from a fixed
+vocabulary rather than from anything the caller chose.
+
 
 ### Scanning runs before validation, and that order is deliberate
 

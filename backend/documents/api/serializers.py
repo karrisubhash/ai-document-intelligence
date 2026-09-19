@@ -13,6 +13,7 @@ from documents.models import (
     ProcessingEvent,
     ProcessingJob,
 )
+from documents.uploads import validate_upload
 
 
 class PageContentSerializer(serializers.ModelSerializer):
@@ -135,7 +136,24 @@ class DocumentSerializer(serializers.ModelSerializer):
         ]
 
 
-class DocumentCreateSerializer(serializers.Serializer):
+class UploadSerializer(serializers.Serializer):
+    """Shared admission check for every path that stores a file.
+
+    Both entry points - a new document and a new version of one - go
+    through `documents.uploads.validate_upload` before anything is written.
+    Leaving it on one of them would mean the rule could be walked around by
+    posting to the other, which is the sort of asymmetry an access review
+    finds and a test does not.
+    """
+
+    def validate_file(self, file_obj):
+        request = self.context.get("request")
+        return validate_upload(
+            file_obj, user=getattr(request, "user", None) if request else None
+        )
+
+
+class DocumentCreateSerializer(UploadSerializer):
     title = serializers.CharField(max_length=255)
     document_type = serializers.ChoiceField(
         choices=Document.DocumentType.choices,
@@ -151,7 +169,7 @@ class DocumentCreateSerializer(serializers.Serializer):
     file = serializers.FileField()
 
 
-class DocumentVersionCreateSerializer(serializers.Serializer):
+class DocumentVersionCreateSerializer(UploadSerializer):
     file = serializers.FileField()
 
 

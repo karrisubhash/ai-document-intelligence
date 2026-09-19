@@ -9,7 +9,13 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import UserProfile
-from documents.models import AuditLog, Document, DocumentVersion, ProcessingEvent, ProcessingJob
+from documents.models import (
+    AuditLog,
+    Document,
+    DocumentVersion,
+    ProcessingEvent,
+    ProcessingJob,
+)
 from documents.processing.errors import StageError
 
 User = get_user_model()
@@ -70,12 +76,16 @@ class DocumentUploadTests(AuthenticatedAPITestCase):
         # document has already progressed to COMPLETED - the important
         # contract is that the HTTP layer didn't block on processing and
         # a job/version were created as part of the same request.
-        self.assertIn(response.data["status"], [Document.Status.QUEUED, Document.Status.COMPLETED])
+        self.assertIn(
+            response.data["status"], [Document.Status.QUEUED, Document.Status.COMPLETED]
+        )
 
         document = Document.objects.get(id=response.data["id"])
         self.assertEqual(document.versions.count(), 1)
         self.assertEqual(document.versions.first().version_number, 1)
-        self.assertEqual(ProcessingJob.objects.filter(document_version__document=document).count(), 1)
+        self.assertEqual(
+            ProcessingJob.objects.filter(document_version__document=document).count(), 1
+        )
 
     def test_upload_requires_title(self):
         url = reverse("document-list")
@@ -178,7 +188,12 @@ class DocumentVersioningTests(AuthenticatedAPITestCase):
         with self.captureOnCommitCallbacks(execute=True):
             version_response = self.client.post(
                 reverse("document-versions", args=[document_id]),
-                {"file": make_txt_file(name="regulations_v2.txt", content=b"Minimum attendance is 80 percent.")},
+                {
+                    "file": make_txt_file(
+                        name="regulations_v2.txt",
+                        content=b"Minimum attendance is 80 percent.",
+                    )
+                },
                 format="multipart",
             )
 
@@ -280,7 +295,9 @@ class DocumentReprocessTests(AuthenticatedAPITestCase):
         document_id = create_response.data["id"]
 
         with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.post(reverse("document-reprocess", args=[document_id]))
+            response = self.client.post(
+                reverse("document-reprocess", args=[document_id])
+            )
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
 
@@ -342,7 +359,14 @@ class PipelineFailureTests(AuthenticatedAPITestCase):
                     {
                         "title": "Weird Format",
                         "file": SimpleUploadedFile(
-                            "notes.xyz", b"binary-ish content", content_type="application/octet-stream"
+                            # An admissible EXTENSION carrying content that
+                            # is not a document. `.xyz` no longer reaches the
+                            # pipeline - documents.uploads refuses it in the
+                            # request - and the interesting case was always
+                            # this one anyway: a filename that lies.
+                            "notes.pdf",
+                            b"binary-ish content",
+                            content_type="application/octet-stream",
                         ),
                     },
                     format="multipart",
@@ -407,7 +431,9 @@ class DocumentAuthorizationTests(APITestCase):
 
     def setUp(self):
         super().setUp()
-        self.cs_faculty = make_user("cs_faculty", UserProfile.Role.FACULTY, "Computer Science")
+        self.cs_faculty = make_user(
+            "cs_faculty", UserProfile.Role.FACULTY, "Computer Science"
+        )
         self.cs_faculty_other = make_user(
             "cs_faculty_2", UserProfile.Role.FACULTY, "Computer Science"
         )
@@ -611,7 +637,9 @@ class UploadOwnershipTests(APITestCase):
 
     def test_new_version_records_the_uploading_user(self):
         owner = make_user("cs_faculty", UserProfile.Role.FACULTY, "Computer Science")
-        dept_admin = make_user("cs_admin", UserProfile.Role.DEPARTMENT_ADMIN, "Computer Science")
+        dept_admin = make_user(
+            "cs_admin", UserProfile.Role.DEPARTMENT_ADMIN, "Computer Science"
+        )
 
         self.client.force_authenticate(user=owner)
         with self.captureOnCommitCallbacks(execute=True):
@@ -649,7 +677,9 @@ class AuditLogTests(APITestCase):
 
     def setUp(self):
         super().setUp()
-        self.owner = make_user("cs_faculty", UserProfile.Role.FACULTY, "Computer Science")
+        self.owner = make_user(
+            "cs_faculty", UserProfile.Role.FACULTY, "Computer Science"
+        )
         self.outsider = make_user(
             "mech_faculty", UserProfile.Role.FACULTY, "Mechanical Engineering"
         )
@@ -702,7 +732,9 @@ class AuditLogTests(APITestCase):
 
     def test_denied_download_is_audited(self):
         self.client.force_authenticate(user=self.outsider)
-        response = self.client.get(reverse("document-download", args=[self.document_id]))
+        response = self.client.get(
+            reverse("document-download", args=[self.document_id])
+        )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(
