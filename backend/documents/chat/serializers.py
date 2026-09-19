@@ -6,10 +6,15 @@ MAX_QUESTION_LENGTH = 2000
 
 
 class ChatRequestSerializer(serializers.Serializer):
-    question = serializers.CharField(max_length=MAX_QUESTION_LENGTH, trim_whitespace=True)
+    question = serializers.CharField(
+        max_length=MAX_QUESTION_LENGTH, trim_whitespace=True
+    )
     conversation_id = serializers.IntegerField(required=False, allow_null=True)
     document_type = serializers.ChoiceField(
-        choices=Document.DocumentType.choices, required=False, allow_blank=True, default=""
+        choices=Document.DocumentType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
     )
     department = serializers.CharField(
         max_length=255, required=False, allow_blank=True, default=""

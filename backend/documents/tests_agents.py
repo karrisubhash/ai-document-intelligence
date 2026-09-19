@@ -75,7 +75,7 @@ class PlannerTests(TestCase):
         self.assertTrue(all("," not in part for part in parts))
 
     def test_a_later_part_inherits_the_opening_interrogative(self):
-        """"the tuition" retrieves far worse than "What is the tuition"."""
+        """ "the tuition" retrieves far worse than "What is the tuition"."""
         parts = planner.plan(
             "What is the attendance minimum, the hostel curfew, and the bus fare?"
         )
@@ -85,7 +85,7 @@ class PlannerTests(TestCase):
             self.assertTrue(part.lower().startswith("what is"), part)
 
     def test_a_conjunction_inside_one_question_is_not_a_split(self):
-        """"late return and damage" is one question, not two."""
+        """ "late return and damage" is one question, not two."""
         question = "What is the fine for late return and damage?"
 
         self.assertEqual(planner.plan(question), [question])
@@ -254,9 +254,7 @@ class ChatPlanningTests(TestCase):
             run_pipeline(ProcessingJob.objects.create(document_version=version).id)
 
     def ask(self, question):
-        return self.client.post(
-            reverse("chat"), {"question": question}, format="json"
-        )
+        return self.client.post(reverse("chat"), {"question": question}, format="json")
 
     def test_the_endpoint_reports_whether_it_planned(self):
         response = self.ask(FOUR_PART)

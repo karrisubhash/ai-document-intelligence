@@ -65,7 +65,9 @@ def pack_data(**overrides):
             "CIRCULAR": [
                 {
                     "name": "circular_number",
-                    "patterns": [r"circular\s*no\.?\s*[:\-]?\s*(?P<value>[A-Z0-9/\-]+)"],
+                    "patterns": [
+                        r"circular\s*no\.?\s*[:\-]?\s*(?P<value>[A-Z0-9/\-]+)"
+                    ],
                 }
             ]
         },
@@ -108,7 +110,9 @@ class SchemaLoadingTests(TestCase):
 
     def test_rejects_field_with_no_patterns(self):
         with self.assertRaises(SchemaError):
-            load_pack_data(pack_data(schemas={"CIRCULAR": [{"name": "f", "patterns": []}]}))
+            load_pack_data(
+                pack_data(schemas={"CIRCULAR": [{"name": "f", "patterns": []}]})
+            )
 
     def test_rejects_duplicate_field_names(self):
         with self.assertRaises(SchemaError) as caught:
@@ -238,7 +242,10 @@ class MatchingTests(TestCase):
                     "CIRCULAR": [
                         {
                             "name": "f",
-                            "patterns": [r"first=(?P<value>\d+)", r"second=(?P<value>\d+)"],
+                            "patterns": [
+                                r"first=(?P<value>\d+)",
+                                r"second=(?P<value>\d+)",
+                            ],
                         }
                     ]
                 }
@@ -396,7 +403,10 @@ class ServiceBoundaryTests(TestCase):
         )
         self.job = ProcessingJob.objects.create(document_version=version)
         self.content = DocumentContent.objects.create(
-            document_version=version, processing_job=self.job, processing_version="t", page_count=1
+            document_version=version,
+            processing_job=self.job,
+            processing_version="t",
+            page_count=1,
         )
         PageContent.objects.create(
             content=self.content,
@@ -408,23 +418,21 @@ class ServiceBoundaryTests(TestCase):
 
     def run_with(self, values):
         StubExtractor.values = tuple(values)
-        with override_settings(
-            DOCUMENT_FIELD_EXTRACTOR=f"{__name__}.StubExtractor"
-        ):
+        with override_settings(DOCUMENT_FIELD_EXTRACTOR=f"{__name__}.StubExtractor"):
             return service.extract(self.content.id, processing_job=self.job)
 
     def good_value(self, **overrides):
         start = self.PAGE_TEXT.index("REG/2024/117")
-        data = dict(
-            field_name="circular_number",
-            status="FOUND",
-            value="REG/2024/117",
-            confidence=1.0,
-            page_number=1,
-            character_start=start,
-            character_end=start + len("REG/2024/117"),
-            matched_text="REG/2024/117",
-        )
+        data = {
+            "field_name": "circular_number",
+            "status": "FOUND",
+            "value": "REG/2024/117",
+            "confidence": 1.0,
+            "page_number": 1,
+            "character_start": start,
+            "character_end": start + len("REG/2024/117"),
+            "matched_text": "REG/2024/117",
+        }
         data.update(overrides)
         return ExtractedValue(**data)
 
@@ -513,9 +521,7 @@ class ServiceBoundaryTests(TestCase):
         self.assertNotEqual(first.id, second.id)
         self.assertEqual(ExtractionResult.objects.count(), 2)
         self.assertEqual(
-            list(
-                ExtractionResult.objects.order_by("id").values_list("id", flat=True)
-            ),
+            list(ExtractionResult.objects.order_by("id").values_list("id", flat=True)),
             [first.id, second.id],
         )
 
@@ -538,7 +544,10 @@ class FieldExtractionStageTests(TestCase):
         )
         self.job = ProcessingJob.objects.create(document_version=version)
         self.content = DocumentContent.objects.create(
-            document_version=version, processing_job=self.job, processing_version="t", page_count=1
+            document_version=version,
+            processing_job=self.job,
+            processing_version="t",
+            page_count=1,
         )
         PageContent.objects.create(
             content=self.content,

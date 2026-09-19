@@ -57,7 +57,9 @@ class Command(BaseCommand):
             extraction.write_report(report, path)
             self.stdout.write(self.style.SUCCESS(f"\nReport written to {path}"))
 
-        if any(value["mean_similarity"] is None for value in report["summary"].values()):
+        if any(
+            value["mean_similarity"] is None for value in report["summary"].values()
+        ):
             self.stdout.write(
                 self.style.WARNING(
                     "\nNo ground truth found for some documents - quality columns are "
@@ -80,8 +82,12 @@ class Command(BaseCommand):
                 name = name[:36] + "..."
 
             status = "ok" if result.succeeded else f"FAILED {result.error_code}"
-            similarity = "-" if result.similarity is None else f"{result.similarity:.3f}"
-            words = "-" if result.word_accuracy is None else f"{result.word_accuracy:.3f}"
+            similarity = (
+                "-" if result.similarity is None else f"{result.similarity:.3f}"
+            )
+            words = (
+                "-" if result.word_accuracy is None else f"{result.word_accuracy:.3f}"
+            )
 
             self.stdout.write(
                 f"{name:<40} {result.approach:<10} {str(result.file_type or '?'):<6} "
@@ -100,7 +106,9 @@ class Command(BaseCommand):
 
         for approach, values in summary.items():
             similarity = (
-                "-" if values["mean_similarity"] is None else f"{values['mean_similarity']:.3f}"
+                "-"
+                if values["mean_similarity"] is None
+                else f"{values['mean_similarity']:.3f}"
             )
             words = (
                 "-"

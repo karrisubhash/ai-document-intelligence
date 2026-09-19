@@ -57,13 +57,13 @@ def reindex_content_task(self, document_content_id: int):
         )
         return {"content_id": document_content_id, "skipped": True}
     except EmbeddingProviderUnavailable as exc:
-        raise self.retry(exc=exc, countdown=2**self.request.retries)
+        raise self.retry(exc=exc, countdown=2**self.request.retries) from exc
 
     try:
         summary = chunk_content(document_content_id)
     except EmbeddingProviderUnavailable as exc:
         # A provider that is briefly down should not abandon the re-index.
-        raise self.retry(exc=exc, countdown=2**self.request.retries)
+        raise self.retry(exc=exc, countdown=2**self.request.retries) from exc
     except DocumentContent.DoesNotExist:
         # The document was deleted while the re-index was queued. Nothing to
         # do, and retrying will not bring it back.

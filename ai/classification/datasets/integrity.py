@@ -193,7 +193,9 @@ def check(
 
 def render(report: IntegrityReport) -> str:
     lines = []
-    lines.append(f"{'split':<12}{'samples':>10}{'classes':>10}{'min/class':>12}{'max/class':>12}")
+    lines.append(
+        f"{'split':<12}{'samples':>10}{'classes':>10}{'min/class':>12}{'max/class':>12}"
+    )
     lines.append("-" * 56)
 
     for split, total in report.splits.items():

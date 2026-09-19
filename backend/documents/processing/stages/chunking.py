@@ -1,9 +1,9 @@
+from documents.observability import telemetry
 from documents.processing.chunking import chunk_content
 from documents.processing.chunking.exceptions import (
     ChunkingError,
     EmbeddingProviderUnavailable,
 )
-from documents.observability import telemetry
 from documents.processing.context import StageResult
 from documents.processing.errors import ErrorCode, StageError, TransientError
 

@@ -2,7 +2,7 @@ from django.apps import AppConfig
 
 
 class DocumentsConfig(AppConfig):
-    name = 'documents'
+    name = "documents"
 
     def ready(self):
         # Imported for the side effect of registering the receivers. Done

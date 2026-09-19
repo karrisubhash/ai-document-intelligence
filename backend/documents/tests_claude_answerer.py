@@ -274,9 +274,10 @@ class PromptContractTests(TestCase):
 
         kwargs = client.beta.messages.create.call_args.kwargs
         self.assertEqual(kwargs["model"], "claude-opus-5")
-        self.assertEqual(kwargs["system"], __import__(
-            "documents.rag.claude", fromlist=["SYSTEM"]
-        ).SYSTEM)
+        self.assertEqual(
+            kwargs["system"],
+            __import__("documents.rag.claude", fromlist=["SYSTEM"]).SYSTEM,
+        )
         self.assertEqual(kwargs["output_config"], {"effort": "medium"})
         # A policy decline should route to another model rather than
         # returning nothing.
@@ -298,9 +299,7 @@ class BedrockBackendTests(TestCase):
 
     def test_an_already_prefixed_model_is_not_double_prefixed(self):
         with override_settings(RAG_ANSWERER_MODEL="anthropic.claude-sonnet-5"):
-            self.assertEqual(
-                ClaudeAnswerer().model, "anthropic.claude-sonnet-5"
-            )
+            self.assertEqual(ClaudeAnswerer().model, "anthropic.claude-sonnet-5")
 
     def test_server_side_fallbacks_are_never_sent_to_bedrock(self):
         """The check that matters most here: server-side `fallbacks` is
@@ -364,9 +363,7 @@ class BedrockBackendTests(TestCase):
 
     def test_the_backend_is_recorded_on_the_answer(self):
         answerer = ClaudeAnswerer()
-        answerer._client = stub_client(
-            StubMessage("The minimum is 75 percent [1].")
-        )
+        answerer._client = stub_client(StubMessage("The minimum is 75 percent [1]."))
         context = build_context()
 
         response = answerer.answer(

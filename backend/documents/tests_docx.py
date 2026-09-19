@@ -30,7 +30,7 @@ def make_docx_bytes(paragraphs=(), tables=(), page_breaks=()):
 
     document = docx.Document()
     for index, text in enumerate(paragraphs):
-        paragraph = document.add_paragraph(text)
+        document.add_paragraph(text)
         if index in page_breaks:
             document.add_page_break()
 
@@ -253,7 +253,9 @@ class DocxPipelineTests(AuthenticatedAPITestCase):
         self.assertIn("Body text", page.text)
 
     def test_docx_never_reaches_ocr(self):
-        response = self.upload("r.docx", make_docx_bytes(paragraphs=["Has a text layer"]))
+        response = self.upload(
+            "r.docx", make_docx_bytes(paragraphs=["Has a text layer"])
+        )
         document = Document.objects.get(id=response.data["id"])
         job = ProcessingJob.objects.get(document_version=document.current_version)
         ocr_event = job.events.get(stage=ProcessingJob.Stage.OCR)
@@ -309,9 +311,7 @@ class DocxPipelineTests(AuthenticatedAPITestCase):
     def test_document_level_stats_land_on_the_content_row(self):
         response = self.upload(
             "stats.docx",
-            make_docx_bytes(
-                paragraphs=["body"], tables=[[["a", "b"]]]
-            ),
+            make_docx_bytes(paragraphs=["body"], tables=[[["a", "b"]]]),
         )
         document = Document.objects.get(id=response.data["id"])
         content = document.current_version.contents.first()

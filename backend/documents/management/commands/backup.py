@@ -169,9 +169,7 @@ class Command(BaseCommand):
     def _latest_migration() -> str:
         try:
             latest = (
-                MigrationRecorder(connection)
-                .migration_qs.order_by("-applied")
-                .first()
+                MigrationRecorder(connection).migration_qs.order_by("-applied").first()
             )
             return f"{latest.app}.{latest.name}" if latest else ""
         except Exception:  # pragma: no cover - defensive

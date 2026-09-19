@@ -5,7 +5,12 @@ import re
 import time
 
 from . import metrics
-from .context import HEADER, RESPONSE_HEADER, get_request_id, reset_request_id, set_request_id
+from .context import (
+    HEADER,
+    RESPONSE_HEADER,
+    reset_request_id,
+    set_request_id,
+)
 from .logging import log_event
 
 logger = logging.getLogger("adi.request")
@@ -82,9 +87,9 @@ class ObservabilityMiddleware:
             metrics.http_requests.labels(
                 method=request.method, route=route, status=status
             ).inc()
-            metrics.http_duration.labels(
-                method=request.method, route=route
-            ).observe(duration)
+            metrics.http_duration.labels(method=request.method, route=route).observe(
+                duration
+            )
 
             if response.status_code == 429:
                 metrics.throttled_requests.labels(route=route).inc()

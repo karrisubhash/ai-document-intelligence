@@ -95,8 +95,7 @@ def score_case(answer, case, ks=DEFAULT_KS) -> dict:
             str(k): round(metrics.recall_at_k(retrieved, relevant, k), 4) for k in ks
         },
         "precision_at_k": {
-            str(k): round(metrics.precision_at_k(retrieved, relevant, k), 4)
-            for k in ks
+            str(k): round(metrics.precision_at_k(retrieved, relevant, k), 4) for k in ks
         },
         "reciprocal_rank": round(metrics.reciprocal_rank(retrieved, relevant), 4),
         "citation_accuracy": round(metrics.citation_accuracy(cited, relevant), 4),

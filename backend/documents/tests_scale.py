@@ -7,14 +7,13 @@ workloads land on separate queues, and that queue depth is actually read
 from the broker rather than reported as a comfortable zero.
 """
 
-from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
 from documents.models import Document, DocumentContent, ProcessingJob
-from documents.observability import metrics, queues
+from documents.observability import queues
 from documents.processing.chunking import service as chunking_service
 from documents.processing.pipeline import run_pipeline
 from documents.tasks import process_document_task

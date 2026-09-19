@@ -7,7 +7,6 @@ from rest_framework.views import APIView
 
 from documents import authorization
 from documents.evaluation import compare_runs
-from documents.observability import telemetry
 from documents.models import (
     Conversation,
     EvaluationCaseResult,
@@ -15,6 +14,7 @@ from documents.models import (
     Feedback,
     Message,
 )
+from documents.observability import telemetry
 
 from .serializers import (
     EvaluationCaseResultSerializer,

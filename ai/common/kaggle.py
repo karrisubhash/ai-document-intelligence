@@ -135,7 +135,10 @@ def push_kernel(metadata: dict, source: str, credentials: Credentials) -> dict:
 
 def kernel_status(owner: str, slug: str, credentials: Credentials) -> dict:
     return request(
-        "GET", "/kernels/status", credentials, params={"userName": owner, "kernelSlug": slug}
+        "GET",
+        "/kernels/status",
+        credentials,
+        params={"userName": owner, "kernelSlug": slug},
     )
 
 
@@ -169,7 +172,9 @@ def wait_for_kernel(
         time.sleep(poll_seconds)
 
 
-def download_output(owner: str, slug: str, credentials: Credentials, destination: Path) -> list:
+def download_output(
+    owner: str, slug: str, credentials: Credentials, destination: Path
+) -> list:
     """Fetch a finished kernel's output files.
 
     /kernels/output returns per-file signed kaggleusercontent URLs; there
@@ -178,7 +183,9 @@ def download_output(owner: str, slug: str, credentials: Credentials, destination
     """
     destination.mkdir(parents=True, exist_ok=True)
     listing = request(
-        "GET", "/kernels/output", credentials,
+        "GET",
+        "/kernels/output",
+        credentials,
         params={"userName": owner, "kernelSlug": slug},
     )
 
@@ -189,7 +196,9 @@ def download_output(owner: str, slug: str, credentials: Credentials, destination
         if not name or not url:
             continue
 
-        req = urllib.request.Request(url, headers={"User-Agent": "ai-document-intelligence/0.1"})
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "ai-document-intelligence/0.1"}
+        )
         with urllib.request.urlopen(req, timeout=600) as response:
             (destination / name).write_bytes(response.read())
         written.append(name)

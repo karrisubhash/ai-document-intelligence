@@ -207,9 +207,7 @@ class PipelineFigureTests(TestCase):
         _, version, job = self.process(make_png_bytes("NOTICE"), "notice.png")
         run_pipeline(job.id)
 
-        self.assertEqual(
-            DocumentFigure.objects.filter(processing_job=job).count(), 1
-        )
+        self.assertEqual(DocumentFigure.objects.filter(processing_job=job).count(), 1)
 
     def test_nothing_is_recorded_when_the_detector_is_off(self):
         with override_settings(DOCUMENT_FIGURE_DETECTOR=""):
@@ -282,9 +280,9 @@ class FigureAbstentionTests(TestCase):
         retrievable in the ordinary way."""
         from documents.rag import engine
 
-        DocumentFigure.objects.filter(
-            document_version__document=self.document
-        ).update(description="Bar chart of enrolment by year", description_source="test")
+        DocumentFigure.objects.filter(document_version__document=self.document).update(
+            description="Bar chart of enrolment by year", description_source="test"
+        )
 
         self.assertEqual(engine._figure_hints([self.document.id]), [])
 

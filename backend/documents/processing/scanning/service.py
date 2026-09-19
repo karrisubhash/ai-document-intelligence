@@ -32,13 +32,9 @@ def get_scanner():
         )
 
     try:
-        return _load_scanner(
-            path, getattr(settings, "DOCUMENT_SCANNER_RULESET", "")
-        )
+        return _load_scanner(path, getattr(settings, "DOCUMENT_SCANNER_RULESET", ""))
     except ImportError as exc:
-        raise ScannerUnavailable(
-            f"Could not load scanner {path!r}: {exc}"
-        ) from exc
+        raise ScannerUnavailable(f"Could not load scanner {path!r}: {exc}") from exc
 
 
 def scan_file(file_path: str):

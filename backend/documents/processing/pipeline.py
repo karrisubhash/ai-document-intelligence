@@ -3,6 +3,7 @@ import time
 from django.db import transaction
 from django.utils import timezone
 
+from documents import storage
 from documents.models import (
     ClassificationResult,
     Document,
@@ -14,15 +15,12 @@ from documents.models import (
     ProcessingEvent,
     ProcessingJob,
 )
-
-from documents import storage
 from documents.observability import telemetry
 
 from .context import IngestionContext, StageResult
 from .errors import ErrorCode
-from .normalize import strip_nul
 from .figures import detector as figure_detector
-from .tables import detector as layout_detector
+from .normalize import strip_nul
 from .scanning import DocumentInfected
 from .stages import (
     chunking,
@@ -35,6 +33,7 @@ from .stages import (
     text_extraction,
     validation,
 )
+from .tables import detector as layout_detector
 
 # Bumped whenever the pipeline changes in a way that alters its output,
 # so stored content can be traced back to what produced it.
@@ -71,9 +70,9 @@ ANALYSIS_STAGES = [
 
 
 def run_pipeline(processing_job_id: int) -> None:
-    job = ProcessingJob.objects.select_related(
-        "document_version__document"
-    ).get(id=processing_job_id)
+    job = ProcessingJob.objects.select_related("document_version__document").get(
+        id=processing_job_id
+    )
     document_version = job.document_version
     document = document_version.document
 
@@ -146,8 +145,11 @@ def _run_stage(job, context, stage, stage_fn) -> None:
             job_id=job.id,
         )
         telemetry.stage_finished(
-            stage, event.status, time.monotonic() - started,
-            document_id=job.document_version.document_id, job_id=job.id,
+            stage,
+            event.status,
+            time.monotonic() - started,
+            document_id=job.document_version.document_id,
+            job_id=job.id,
         )
         raise
 

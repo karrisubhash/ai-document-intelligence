@@ -17,7 +17,6 @@ from rest_framework.test import APIClient
 from documents.models import Document, ProcessingJob
 from documents.observability import context, metrics, telemetry
 from documents.observability.logging import (
-    MAX_VALUE_LENGTH,
     REDACTED,
     StructuredFormatter,
     redact_value,
@@ -278,7 +277,9 @@ class PipelineTelemetryTests(TestCase):
         run_pipeline(job.id)
 
         self.assertEqual(
-            counter_value(metrics.pipeline_stages, stage="INGESTION", status="SUCCEEDED"),
+            counter_value(
+                metrics.pipeline_stages, stage="INGESTION", status="SUCCEEDED"
+            ),
             before + 1,
         )
 

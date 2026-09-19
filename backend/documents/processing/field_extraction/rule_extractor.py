@@ -20,9 +20,7 @@ from .exceptions import ExtractorUnavailable, NoSchemaForDocumentType
 from .matching import FOUND, find_fields
 from .schemas import SchemaError, load_pack
 
-DEFAULT_PACK = (
-    Path(__file__).resolve().parent / "packs" / "institutional-v1.json"
-)
+DEFAULT_PACK = Path(__file__).resolve().parent / "packs" / "institutional-v1.json"
 
 
 class RuleFieldExtractor:
@@ -32,9 +30,11 @@ class RuleFieldExtractor:
     version = "0.1.0"
 
     def __init__(self, pack_path=None):
-        path = pack_path or getattr(
-            settings, "DOCUMENT_FIELD_SCHEMA_PACK", ""
-        ) or DEFAULT_PACK
+        path = (
+            pack_path
+            or getattr(settings, "DOCUMENT_FIELD_SCHEMA_PACK", "")
+            or DEFAULT_PACK
+        )
         try:
             self.pack = load_pack(path)
         except SchemaError as exc:

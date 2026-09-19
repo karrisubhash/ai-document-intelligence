@@ -20,8 +20,6 @@ uncompressed total is checked here before anything is parsed.
 
 import zipfile
 
-from django.conf import settings
-
 from documents.processing.errors import ErrorCode, StageError, TransientError
 
 # The part every real Word document has. Its presence is what separates a
@@ -152,9 +150,12 @@ def _has_page_break(paragraph) -> bool:
         for break_element in run._element.findall(
             "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br"
         ):
-            if break_element.get(
-                "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type"
-            ) == "page":
+            if (
+                break_element.get(
+                    "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type"
+                )
+                == "page"
+            ):
                 return True
     return False
 

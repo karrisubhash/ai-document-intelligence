@@ -127,8 +127,7 @@ class Command(BaseCommand):
             )
         except FileNotFoundError as exc:
             raise CommandError(
-                "pg_restore is not installed - see postgresql-client in the "
-                "Dockerfile."
+                "pg_restore is not installed - see postgresql-client in the Dockerfile."
             ) from exc
 
         # pg_restore exits non-zero for notices that are not failures, so

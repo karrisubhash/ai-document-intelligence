@@ -23,9 +23,7 @@ class Command(BaseCommand):
         parser.add_argument("--load", help="Path to a dataset JSON file to import.")
         parser.add_argument("--dataset", help="Dataset name to run.")
         # NOT --version: Django reserves that for its own version flag.
-        parser.add_argument(
-            "--dataset-version", help="Dataset version to run."
-        )
+        parser.add_argument("--dataset-version", help="Dataset version to run.")
         parser.add_argument(
             "--as-user",
             help=(
@@ -104,7 +102,7 @@ class Command(BaseCommand):
         try:
             user = User.objects.get(username=options["as_user"])
         except User.DoesNotExist:
-            raise CommandError(f"No such user: {options['as_user']}")
+            raise CommandError(f"No such user: {options['as_user']}") from None
 
         query = EvaluationDataset.objects.filter(name=options["dataset"])
         if options["dataset_version"]:
@@ -166,9 +164,10 @@ class Command(BaseCommand):
         except json.JSONDecodeError as exc:
             raise CommandError(f"{path} is not valid JSON: {exc}") from exc
 
-        if payload.get("dataset") != run.dataset.name or payload.get(
-            "dataset_version"
-        ) != run.dataset.version:
+        if (
+            payload.get("dataset") != run.dataset.name
+            or payload.get("dataset_version") != run.dataset.version
+        ):
             raise CommandError(
                 f"Baseline is for {payload.get('dataset')} "
                 f"{payload.get('dataset_version')}, this run is "
@@ -236,7 +235,9 @@ class Command(BaseCommand):
         generation = run.metrics.get("generation", {})
 
         self.stdout.write("\n  Retrieval")
-        for k, value in sorted(retrieval.get("recall_at_k", {}).items(), key=lambda i: int(i[0])):
+        for k, value in sorted(
+            retrieval.get("recall_at_k", {}).items(), key=lambda i: int(i[0])
+        ):
             self.stdout.write(f"    recall@{k:<3} {value}")
         self.stdout.write(f"    MRR       {retrieval.get('mrr')}")
         self.stdout.write(f"    MAP       {retrieval.get('map')}")

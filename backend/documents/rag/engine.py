@@ -306,18 +306,18 @@ def ask(
     answerer = get_answerer()
     response = answerer.answer(question=question, context=built, prompt=prompt)
 
-    common = dict(
-        retrieved=len(retrieval.hits),
-        retrieved_document_ids=ranked_document_ids(reranked),
-        reranked=len(reranked),
-        passages_used=len(built.passages),
-        suspected_injections=built.suspected_injections,
-        model_name=response.model_name,
-        model_version=response.model_version,
-        generative=response.generative,
-        semantic_retrieval=retrieval.semantic,
-        reranker_name=reranker.name,
-    )
+    common = {
+        "retrieved": len(retrieval.hits),
+        "retrieved_document_ids": ranked_document_ids(reranked),
+        "reranked": len(reranked),
+        "passages_used": len(built.passages),
+        "suspected_injections": built.suspected_injections,
+        "model_name": response.model_name,
+        "model_version": response.model_version,
+        "generative": response.generative,
+        "semantic_retrieval": retrieval.semantic,
+        "reranker_name": reranker.name,
+    }
 
     if response.abstained:
         return _abstain(question, Abstention.MODEL_ABSTAINED, started, **common)

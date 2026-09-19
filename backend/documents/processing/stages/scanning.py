@@ -1,6 +1,6 @@
 from documents.observability import telemetry
 from documents.processing.context import StageResult
-from documents.processing.errors import ErrorCode, StageError, TransientError
+from documents.processing.errors import TransientError
 from documents.processing.scanning import (
     DocumentInfected,
     ScannerNotConfigured,

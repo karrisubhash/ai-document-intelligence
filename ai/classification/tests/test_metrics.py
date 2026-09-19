@@ -33,23 +33,23 @@ class KnownValueTests(unittest.TestCase):
 
     def test_invoice_precision_and_recall(self):
         invoice = next(c for c in self.report.per_class if c.label == "invoice")
-        self.assertAlmostEqual(invoice.precision, 1.0)      # 2 of 2 predicted
-        self.assertAlmostEqual(invoice.recall, 2 / 3)       # 2 of 3 actual
+        self.assertAlmostEqual(invoice.precision, 1.0)  # 2 of 2 predicted
+        self.assertAlmostEqual(invoice.recall, 2 / 3)  # 2 of 3 actual
         self.assertAlmostEqual(invoice.f1, 2 * 1.0 * (2 / 3) / (1.0 + 2 / 3))
 
     def test_letter_precision_and_recall(self):
         letter = next(c for c in self.report.per_class if c.label == "letter")
-        self.assertAlmostEqual(letter.precision, 1 / 2)     # 1 of 2 predicted
-        self.assertAlmostEqual(letter.recall, 1 / 2)        # 1 of 2 actual
+        self.assertAlmostEqual(letter.precision, 1 / 2)  # 1 of 2 predicted
+        self.assertAlmostEqual(letter.recall, 1 / 2)  # 1 of 2 actual
 
     def test_macro_f1_is_the_unweighted_mean(self):
         expected = sum(c.f1 for c in self.report.per_class) / len(LABELS)
         self.assertAlmostEqual(self.report.macro_f1, expected)
 
     def test_confusion_rows_are_actual_classes(self):
-        self.assertEqual(self.report.confusion[0], [2, 1, 0])   # invoice
-        self.assertEqual(self.report.confusion[1], [0, 1, 1])   # letter
-        self.assertEqual(self.report.confusion[2], [0, 0, 1])   # memo
+        self.assertEqual(self.report.confusion[0], [2, 1, 0])  # invoice
+        self.assertEqual(self.report.confusion[1], [0, 1, 1])  # letter
+        self.assertEqual(self.report.confusion[2], [0, 0, 1])  # memo
 
     def test_most_confused_ranks_off_diagonal_pairs(self):
         pairs = self.report.most_confused()
@@ -88,8 +88,12 @@ class AbstentionTests(unittest.TestCase):
         self.assertAlmostEqual(report.to_dict()["coverage"], 2 / 3, places=3)
 
     def test_coverage_is_reported_alongside_accuracy(self):
-        report = evaluate(["invoice"] * 4, ["unknown"] * 3 + ["invoice"], LABELS,
-                          abstain_label="unknown")
+        report = evaluate(
+            ["invoice"] * 4,
+            ["unknown"] * 3 + ["invoice"],
+            LABELS,
+            abstain_label="unknown",
+        )
         # Perfect accuracy on 25% coverage must be visibly distinguishable
         # from perfect accuracy on everything.
         self.assertAlmostEqual(report.accuracy, 1.0)

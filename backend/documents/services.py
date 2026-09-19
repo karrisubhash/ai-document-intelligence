@@ -26,9 +26,7 @@ def create_document_version(
     so the original artifact stays available as evidence.
     """
     next_version_number = (
-        document.versions.aggregate(models.Max("version_number"))[
-            "version_number__max"
-        ]
+        document.versions.aggregate(models.Max("version_number"))["version_number__max"]
         or 0
     ) + 1
 

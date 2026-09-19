@@ -7,9 +7,14 @@ MAX_QUERY_LENGTH = 1000
 
 class SearchRequestSerializer(serializers.Serializer):
     query = serializers.CharField(max_length=MAX_QUERY_LENGTH, trim_whitespace=True)
-    limit = serializers.IntegerField(required=False, default=10, min_value=1, max_value=50)
+    limit = serializers.IntegerField(
+        required=False, default=10, min_value=1, max_value=50
+    )
     document_type = serializers.ChoiceField(
-        choices=Document.DocumentType.choices, required=False, allow_blank=True, default=""
+        choices=Document.DocumentType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
     )
     department = serializers.CharField(
         max_length=255, required=False, allow_blank=True, default=""

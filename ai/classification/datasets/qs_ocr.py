@@ -145,7 +145,9 @@ def prepare(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, default=Path("ai/classification/data/qs_ocr"))
+    parser.add_argument(
+        "--data-dir", type=Path, default=Path("ai/classification/data/qs_ocr")
+    )
     parser.add_argument(
         "--manifest-dir",
         type=Path,

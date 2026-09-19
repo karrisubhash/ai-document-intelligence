@@ -16,9 +16,6 @@ from django.conf import settings
 from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 
-from documents.models import Document
-from documents.tests import make_user
-
 HAS_PG_DUMP = shutil.which("pg_dump") is not None
 
 
@@ -165,7 +162,9 @@ class RestoreSafetyTests(TestCase):
 
         self.assertTrue(Command._is_benign('relation "x" does not exist, skipping'))
         self.assertTrue(
-            Command._is_benign('unrecognized configuration parameter "transaction_timeout"')
+            Command._is_benign(
+                'unrecognized configuration parameter "transaction_timeout"'
+            )
         )
         self.assertTrue(Command._is_benign("Command was: SET transaction_timeout = 0;"))
         self.assertFalse(Command._is_benign("could not connect to server"))
@@ -187,9 +186,7 @@ class ProductionConfigurationTests(TestCase):
         the real gate and the one CI runs.
         """
         self.assertIsInstance(settings.SESSION_COOKIE_SECURE, bool)
-        self.assertEqual(
-            settings.SESSION_COOKIE_SECURE, settings.CSRF_COOKIE_SECURE
-        )
+        self.assertEqual(settings.SESSION_COOKIE_SECURE, settings.CSRF_COOKIE_SECURE)
 
     def test_production_values_pass_djangos_own_deploy_check(self):
         """The finish line for phase 10: zero issues, not "zero except the

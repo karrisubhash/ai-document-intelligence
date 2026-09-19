@@ -83,12 +83,18 @@ def build_kernel_source(argv: list) -> str:
 
 def training_argv(args) -> list:
     argv = [
-        "--arch", args.arch,
-        "--epochs", str(args.epochs),
-        "--batch-size", str(args.batch_size),
-        "--image-size", str(args.image_size),
-        "--workers", str(args.workers),
-        "--model-version", args.model_version,
+        "--arch",
+        args.arch,
+        "--epochs",
+        str(args.epochs),
+        "--batch-size",
+        str(args.batch_size),
+        "--image-size",
+        str(args.image_size),
+        "--workers",
+        str(args.workers),
+        "--model-version",
+        args.model_version,
     ]
     if args.per_class is not None:
         argv += ["--per-class", str(args.per_class)]
@@ -101,12 +107,18 @@ def training_argv(args) -> list:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", action="append", dest="datasets", default=None,
-                        help="Kaggle dataset to mount at /kaggle/input (repeatable). "
-                             "Defaults to a canonical-path image mirror plus the "
-                             "official split files.")
-    parser.add_argument("--require-gpu", action="store_true",
-                        help="Fail rather than fall back to CPU.")
+    parser.add_argument(
+        "--dataset",
+        action="append",
+        dest="datasets",
+        default=None,
+        help="Kaggle dataset to mount at /kaggle/input (repeatable). "
+        "Defaults to a canonical-path image mirror plus the "
+        "official split files.",
+    )
+    parser.add_argument(
+        "--require-gpu", action="store_true", help="Fail rather than fall back to CPU."
+    )
     parser.add_argument("--slug", default="rvlcdip-vision-baseline")
     parser.add_argument("--title", default="RVL-CDIP vision baseline")
     parser.add_argument("--arch", default="resnet50")
@@ -116,14 +128,24 @@ def main():
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--per-class", type=int, default=None)
-    parser.add_argument("--smoke", action="store_true",
-                        help="1 epoch, 20 images/class - proves the path cheaply.")
-    parser.add_argument("--output-dir", type=Path,
-                        default=REPO_ROOT / "ai" / "classification" / "artifacts")
-    parser.add_argument("--no-wait", action="store_true",
-                        help="Push and exit without polling.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Assemble and print the kernel without pushing.")
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="1 epoch, 20 images/class - proves the path cheaply.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=REPO_ROOT / "ai" / "classification" / "artifacts",
+    )
+    parser.add_argument(
+        "--no-wait", action="store_true", help="Push and exit without polling."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Assemble and print the kernel without pushing.",
+    )
     parser.add_argument("--poll-seconds", type=int, default=60)
     args = parser.parse_args()
 
@@ -131,8 +153,10 @@ def main():
 
     if args.dry_run:
         print(source)
-        print(f"\n--- {len(source.splitlines())} lines, "
-              f"{len(source.encode()) / 1024:.1f} KB ---")
+        print(
+            f"\n--- {len(source.splitlines())} lines, "
+            f"{len(source.encode()) / 1024:.1f} KB ---"
+        )
         return
 
     credentials = load_credentials()
@@ -167,15 +191,20 @@ def main():
         print(f"  [{time.time() - started:7.0f}s] {state}")
 
     status = wait_for_kernel(
-        credentials.username, args.slug, credentials,
-        poll_seconds=args.poll_seconds, on_poll=on_poll,
+        credentials.username,
+        args.slug,
+        credentials,
+        poll_seconds=args.poll_seconds,
+        on_poll=on_poll,
     )
     print(f"final state: {status.get('status')} {status.get('failureMessage') or ''}")
 
     if (status.get("status") or "").strip() != "complete":
         raise SystemExit("kernel did not complete; not downloading output.")
 
-    destination = args.output_dir / "document-classifier-vision" / f"v{args.model_version}"
+    destination = (
+        args.output_dir / "document-classifier-vision" / f"v{args.model_version}"
+    )
     written = download_output(credentials.username, args.slug, credentials, destination)
     print(f"downloaded {len(written)} file(s) -> {destination}")
     for name in written:

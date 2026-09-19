@@ -35,9 +35,7 @@ def get_classifier() -> DocumentClassifier:
             "rather than guessed."
         )
 
-    return _load_classifier(
-        path, getattr(settings, "DOCUMENT_CLASSIFIER_ARTIFACT", "")
-    )
+    return _load_classifier(path, getattr(settings, "DOCUMENT_CLASSIFIER_ARTIFACT", ""))
 
 
 def _validate(prediction: ClassificationPrediction) -> None:

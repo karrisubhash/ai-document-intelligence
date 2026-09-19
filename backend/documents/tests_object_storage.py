@@ -242,9 +242,7 @@ class PipelineOnRemoteStorageTests(TestCase):
     def test_indexing_still_produces_retrievable_chunks(self):
         _, version, _ = self.process_on_remote_storage()
 
-        self.assertTrue(
-            DocumentChunk.objects.filter(document_version=version).exists()
-        )
+        self.assertTrue(DocumentChunk.objects.filter(document_version=version).exists())
 
     def test_no_temporary_files_survive_the_job(self):
         import glob

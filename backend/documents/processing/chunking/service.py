@@ -211,7 +211,10 @@ def embed_chunks(chunks, provider) -> dict:
                     embedding=vector,
                     metadata=result.metadata,
                 )
-                for chunk, vector in zip(batch, result.vectors)
+                # strict=True: a provider that returned fewer vectors
+                # than chunks would otherwise embed a prefix and leave
+                # the rest unsearchable with nothing logged.
+                for chunk, vector in zip(batch, result.vectors, strict=True)
             ],
             update_conflicts=True,
             update_fields=["embedding", "dimensions", "semantic", "metadata"],

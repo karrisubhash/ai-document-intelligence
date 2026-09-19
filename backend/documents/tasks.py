@@ -2,8 +2,8 @@ from celery import shared_task
 from django.db import InterfaceError, OperationalError
 
 from .processing.errors import StageError
-from .processing.scanning import DocumentInfected
 from .processing.pipeline import run_pipeline
+from .processing.scanning import DocumentInfected
 
 MAX_RETRIES = 3
 
@@ -33,5 +33,5 @@ def process_document_task(self, processing_job_id: int):
         run_pipeline(processing_job_id)
     except Exception as exc:
         if is_retryable(exc):
-            raise self.retry(exc=exc, countdown=2**self.request.retries)
+            raise self.retry(exc=exc, countdown=2**self.request.retries) from exc
         raise

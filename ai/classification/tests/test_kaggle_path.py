@@ -84,7 +84,7 @@ class LayoutDiscoveryTests(unittest.TestCase):
     def test_per_class_cap_is_applied(self):
         base = self.build()
         (base / "train.txt").write_text(
-            "".join(f"images/a/b/one.tif 0\n" for _ in range(10)), encoding="utf-8"
+            "".join("images/a/b/one.tif 0\n" for _ in range(10)), encoding="utf-8"
         )
         items = train_vision.load_split(base / "train.txt", base, 3)
 
@@ -112,7 +112,14 @@ class CanonicalTreeTests(unittest.TestCase):
     def build(self, wrapper="images", letters=("a", "b", "c")):
         base = self.root / wrapper if wrapper else self.root
         for letter in letters:
-            leaf = base / f"images{letter}" / letter / letter / letter / f"{letter*3}06d00"
+            leaf = (
+                base
+                / f"images{letter}"
+                / letter
+                / letter
+                / letter
+                / f"{letter * 3}06d00"
+            )
             leaf.mkdir(parents=True, exist_ok=True)
             (leaf / "50486482-6482.tif").write_bytes(b"\x00")
         return base
@@ -180,7 +187,9 @@ class ImageFolderLayoutTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
-    def build(self, splits=("train", "test"), class_names=None, wrapper="RVL_Classification"):
+    def build(
+        self, splits=("train", "test"), class_names=None, wrapper="RVL_Classification"
+    ):
         class_names = class_names or ["advertisement", "letter", "scientific_report"]
         base = self.root / wrapper if wrapper else self.root
         for split in splits:
@@ -273,7 +282,9 @@ class KernelAssemblyTests(unittest.TestCase):
         self.assertEqual(namespace["LABELS"], LABELS)
 
     def test_training_arguments_are_forwarded(self):
-        source = submit_kaggle.build_kernel_source(["--epochs", "7", "--arch", "resnet18"])
+        source = submit_kaggle.build_kernel_source(
+            ["--epochs", "7", "--arch", "resnet18"]
+        )
         self.assertIn('"--epochs", "7"', source.replace("'", '"'))
         self.assertIn("resnet18", source)
 

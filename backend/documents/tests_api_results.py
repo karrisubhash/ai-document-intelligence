@@ -242,7 +242,11 @@ class ResultEndpointAuthorizationTests(AuthenticatedAPITestCase):
     def test_another_department_is_denied_every_result_endpoint(self):
         self.client.force_authenticate(user=self.outsider)
 
-        for route in ("document-classification", "document-extraction", "document-chunks"):
+        for route in (
+            "document-classification",
+            "document-extraction",
+            "document-chunks",
+        ):
             with self.subTest(route=route):
                 response = self.client.get(reverse(route, args=[self.document_id]))
                 self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

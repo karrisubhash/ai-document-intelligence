@@ -134,9 +134,9 @@ def extract(document_content_id: int, *, processing_job=None) -> ExtractionResul
     type; callers decide whether either is fatal or simply means "not
     applicable here".
     """
-    content = DocumentContent.objects.select_related(
-        "document_version__document"
-    ).get(id=document_content_id)
+    content = DocumentContent.objects.select_related("document_version__document").get(
+        id=document_content_id
+    )
     document = content.document_version.document
 
     extractor = get_extractor()
@@ -150,8 +150,7 @@ def extract(document_content_id: int, *, processing_job=None) -> ExtractionResul
     _validate(prediction, dict(pages))
 
     found = sum(
-        1 for value in prediction.values
-        if value.status == ExtractedField.Status.FOUND
+        1 for value in prediction.values if value.status == ExtractedField.Status.FOUND
     )
 
     with transaction.atomic():

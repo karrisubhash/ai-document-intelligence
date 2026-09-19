@@ -23,9 +23,7 @@ from typing import Protocol, runtime_checkable
 
 from .reranking import _terms
 
-ABSTENTION_TEXT = (
-    "I couldn't find enough information in the provided documents."
-)
+ABSTENTION_TEXT = "I couldn't find enough information in the provided documents."
 
 # Sentence splitting good enough for institutional prose. Deliberately not a
 # full NLP sentence tokenizer - the failure mode of splitting "Clause 4.2"
@@ -185,9 +183,10 @@ class ExtractiveAnswerer:
                 matched = query_terms & sentence_terms
                 coverage = len(matched) / len(query_terms)
 
-                if len(query_terms) >= self.MIN_MATCHED_TERMS and len(
-                    matched
-                ) < self.MIN_MATCHED_TERMS:
+                if (
+                    len(query_terms) >= self.MIN_MATCHED_TERMS
+                    and len(matched) < self.MIN_MATCHED_TERMS
+                ):
                     continue
 
                 if coverage >= self.MIN_COVERAGE:
@@ -265,9 +264,7 @@ class ExtractiveAnswerer:
             if len(chosen) >= self.MAX_SENTENCES:
                 break
 
-        parts = [
-            self._quote(passage, sentence) for passage, sentence, _ in chosen
-        ]
+        parts = [self._quote(passage, sentence) for passage, sentence, _ in chosen]
         text = " ".join(parts)
 
         return LLMResponse(

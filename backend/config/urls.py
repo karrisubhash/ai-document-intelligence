@@ -3,8 +3,8 @@ from django.urls import include, path
 from rest_framework.authtoken.views import ObtainAuthToken
 
 from config.health import health_check
-from documents.observability.views import metrics_view
 from documents.evaluation_api.views import FeedbackView
+from documents.observability.views import metrics_view
 from documents.throttling import LoginRateThrottle
 
 

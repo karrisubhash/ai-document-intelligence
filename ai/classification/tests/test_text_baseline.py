@@ -24,7 +24,9 @@ class NormalizationTests(unittest.TestCase):
     def test_each_step_can_be_turned_off(self):
         self.assertEqual(
             preprocessing.normalize(
-                "  A  B ", unicode_normalization=None, lowercase=False,
+                "  A  B ",
+                unicode_normalization=None,
+                lowercase=False,
                 collapse_whitespace=False,
             ),
             "  A  B ",
@@ -96,12 +98,24 @@ class ThresholdSelectionTests(unittest.TestCase):
 
     def test_picks_lowest_threshold_that_reaches_the_target(self):
         sweep = [
-            {"threshold": 0.0, "coverage": 1.0, "answered": 100,
-             "accuracy_when_answering": 0.70},
-            {"threshold": 0.5, "coverage": 0.6, "answered": 60,
-             "accuracy_when_answering": 0.91},
-            {"threshold": 0.9, "coverage": 0.2, "answered": 20,
-             "accuracy_when_answering": 0.99},
+            {
+                "threshold": 0.0,
+                "coverage": 1.0,
+                "answered": 100,
+                "accuracy_when_answering": 0.70,
+            },
+            {
+                "threshold": 0.5,
+                "coverage": 0.6,
+                "answered": 60,
+                "accuracy_when_answering": 0.91,
+            },
+            {
+                "threshold": 0.9,
+                "coverage": 0.2,
+                "answered": 20,
+                "accuracy_when_answering": 0.99,
+            },
         ]
 
         selection = select_threshold(sweep, 0.90)
@@ -113,10 +127,18 @@ class ThresholdSelectionTests(unittest.TestCase):
 
     def test_reports_shortfall_rather_than_pretending(self):
         sweep = [
-            {"threshold": 0.0, "coverage": 1.0, "answered": 100,
-             "accuracy_when_answering": 0.50},
-            {"threshold": 0.5, "coverage": 0.4, "answered": 40,
-             "accuracy_when_answering": 0.75},
+            {
+                "threshold": 0.0,
+                "coverage": 1.0,
+                "answered": 100,
+                "accuracy_when_answering": 0.50,
+            },
+            {
+                "threshold": 0.5,
+                "coverage": 0.4,
+                "answered": 40,
+                "accuracy_when_answering": 0.75,
+            },
         ]
 
         selection = select_threshold(sweep, 0.90)
@@ -129,10 +151,18 @@ class ThresholdSelectionTests(unittest.TestCase):
         """A cutoff that abstains on everything has undefined accuracy
         and must never be selected as though it were perfect."""
         sweep = [
-            {"threshold": 0.5, "coverage": 0.5, "answered": 50,
-             "accuracy_when_answering": 0.92},
-            {"threshold": 0.99, "coverage": 0.0, "answered": 0,
-             "accuracy_when_answering": 0.0},
+            {
+                "threshold": 0.5,
+                "coverage": 0.5,
+                "answered": 50,
+                "accuracy_when_answering": 0.92,
+            },
+            {
+                "threshold": 0.99,
+                "coverage": 0.0,
+                "answered": 0,
+                "accuracy_when_answering": 0.0,
+            },
         ]
 
         self.assertEqual(select_threshold(sweep, 0.90)["threshold"], 0.5)

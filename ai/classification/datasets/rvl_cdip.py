@@ -108,8 +108,10 @@ def main():
     )
     print(f"Done: {sum(counts.values())} samples.")
     if not args.with_images:
-        print("Manifests reference image paths that are not downloaded yet; "
-              "run with --with-images before training a vision model.")
+        print(
+            "Manifests reference image paths that are not downloaded yet; "
+            "run with --with-images before training a vision model."
+        )
 
 
 if __name__ == "__main__":

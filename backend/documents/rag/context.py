@@ -58,9 +58,10 @@ class Passage:
 
     @property
     def is_table(self) -> bool:
-        return bool(self.table_header) or (
-            getattr(self.chunk, "metadata", {}) or {}
-        ).get("kind") == "TABLE"
+        return (
+            bool(self.table_header)
+            or (getattr(self.chunk, "metadata", {}) or {}).get("kind") == "TABLE"
+        )
 
     @property
     def support_text(self) -> str:
@@ -120,9 +121,7 @@ def _fingerprint(text: str) -> str:
 
 def detect_injection(text: str) -> tuple:
     return tuple(
-        pattern.pattern
-        for pattern in INJECTION_PATTERNS
-        if pattern.search(text)
+        pattern.pattern for pattern in INJECTION_PATTERNS if pattern.search(text)
     )
 
 

@@ -115,9 +115,7 @@ def evaluate(
     apart.
     """
     if len(y_true) != len(y_pred):
-        raise ValueError(
-            f"y_true has {len(y_true)} items but y_pred has {len(y_pred)}"
-        )
+        raise ValueError(f"y_true has {len(y_true)} items but y_pred has {len(y_pred)}")
 
     index = {label: i for i, label in enumerate(labels)}
     unknown = {label for label in y_true if label not in index}
@@ -128,7 +126,7 @@ def evaluate(
     confusion = [[0] * size for _ in range(size)]
     abstained = 0
 
-    for actual, predicted in zip(y_true, y_pred):
+    for actual, predicted in zip(y_true, y_pred, strict=True):
         if abstain_label is not None and predicted == abstain_label:
             abstained += 1
             continue

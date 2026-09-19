@@ -142,8 +142,9 @@ class EmptyDepartmentIsNotATenantTests(TestCase):
     def test_listing_never_shows_more_than_retrieve_allows(self):
         """The two paths must agree, or the listing is itself the leak."""
         visible = set(
-            authorization.visible_documents(self.bob, Document.objects.all())
-            .values_list("id", flat=True)
+            authorization.visible_documents(
+                self.bob, Document.objects.all()
+            ).values_list("id", flat=True)
         )
         for document in Document.objects.all():
             allowed = authorization.can_view_document(self.bob, document)
@@ -256,9 +257,9 @@ class RetryDoesNotDuplicateContentTests(TestCase):
         run_pipeline(self.job.id)
         self.version.refresh_from_db()
 
-        pages = PageContent.objects.filter(
-            content__processing_job=self.job
-        ).order_by("page_number")
+        pages = PageContent.objects.filter(content__processing_job=self.job).order_by(
+            "page_number"
+        )
         self.assertEqual(
             self.version.extracted_text,
             "\n".join(page.text for page in pages).strip(),
@@ -357,8 +358,15 @@ class ValuePatternIsCaseSensitiveTests(TestCase):
             {
                 "name": "t",
                 "version": "1",
-                "schemas": {"X": [{"name": "c", "patterns": [r"code:\s*(?P<value>\S+)"],
-                                   "value_pattern": r"[A-Za-z]{2,4}\s?\d{3,5}"}]},
+                "schemas": {
+                    "X": [
+                        {
+                            "name": "c",
+                            "patterns": [r"code:\s*(?P<value>\S+)"],
+                            "value_pattern": r"[A-Za-z]{2,4}\s?\d{3,5}",
+                        }
+                    ]
+                },
             }
         )
         rule = pack.for_document_type("X").fields[0]

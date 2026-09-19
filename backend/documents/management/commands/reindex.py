@@ -3,7 +3,7 @@
 from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Q
 
-from documents.models import Document, DocumentContent
+from documents.models import DocumentContent
 from documents.observability import queues
 from documents.processing.chunking import service as chunking_service
 from documents.processing.chunking.exceptions import EmbeddingProviderNotConfigured
@@ -47,12 +47,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         try:
             provider = chunking_service.get_provider()
-        except EmbeddingProviderNotConfigured:
+        except EmbeddingProviderNotConfigured as exc:
             raise CommandError(
                 "No DOCUMENT_EMBEDDING_PROVIDER configured. Re-indexing "
                 "without one would delete existing vectors and write none "
                 "back, which is a worse state than the one you started in."
-            )
+            ) from exc
 
         contents = DocumentContent.objects.select_related(
             "document_version__document"
@@ -87,17 +87,13 @@ class Command(BaseCommand):
         self.stdout.write(f"Selected : {len(queued)}")
 
         if options["dry_run"]:
-            self.stdout.write(
-                self.style.WARNING("Dry run - nothing queued.")
-            )
+            self.stdout.write(self.style.WARNING("Dry run - nothing queued."))
             return
 
         if options["sync"]:
             for content_id in queued:
                 reindex_content_task(content_id)
-            self.stdout.write(
-                self.style.SUCCESS(f"Re-indexed {len(queued)} inline")
-            )
+            self.stdout.write(self.style.SUCCESS(f"Re-indexed {len(queued)} inline"))
         else:
             for content_id in queued:
                 reindex_content_task.delay(content_id)
@@ -107,6 +103,7 @@ class Command(BaseCommand):
 
         depths = queues.collect()
         if depths:
-            self.stdout.write("Queue depth: " + ", ".join(
-                f"{name}={depth}" for name, depth in sorted(depths.items())
-            ))
+            self.stdout.write(
+                "Queue depth: "
+                + ", ".join(f"{name}={depth}" for name, depth in sorted(depths.items()))
+            )

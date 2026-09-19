@@ -7,13 +7,15 @@ actually stored, and that a reprocess replaces tables rather than
 accumulating them.
 """
 
+from itertools import pairwise
+
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 
 from documents.models import Document, DocumentContent, DocumentTable, ProcessingJob
+from documents.processing.figures import service as figure_service
 from documents.processing.pipeline import run_pipeline
 from documents.processing.tables import detector
-from documents.processing.figures import service as figure_service
 from documents.processing.tables import service as table_service
 from documents.tests import MEDIA_ROOT, make_user
 
@@ -215,9 +217,7 @@ class PipelineTableTests(TestCase):
         )
 
     def test_the_stage_is_skipped_only_when_neither_detector_is_set(self):
-        with override_settings(
-            DOCUMENT_TABLE_DETECTOR="", DOCUMENT_FIGURE_DETECTOR=""
-        ):
+        with override_settings(DOCUMENT_TABLE_DETECTOR="", DOCUMENT_FIGURE_DETECTOR=""):
             table_service.reset_detector_cache()
             figure_service.reset_detector_cache()
             version, job = self.process(FEE_TABLE.encode())
@@ -245,7 +245,9 @@ class PipelineTableTests(TestCase):
     def test_a_document_with_no_tables_still_processes(self):
         version, job = self.process(PROSE.encode(), name="minutes.txt")
 
-        self.assertEqual(DocumentTable.objects.filter(document_version=version).count(), 0)
+        self.assertEqual(
+            DocumentTable.objects.filter(document_version=version).count(), 0
+        )
         job.refresh_from_db()
         self.assertEqual(job.status, ProcessingJob.Status.COMPLETED)
 
@@ -306,8 +308,12 @@ class FabricatingDetector:
 
 EMBEDDER = "documents.processing.embedding.hashing.HashingEmbeddingProvider"
 
-BIG_TABLE_PAGE = "FEE STRUCTURE 2024\n" + "Programme\tTuition\tExam Fee\n" + "".join(
-    f"Programme number {index:03d}\t{80000 + index}\t2500\n" for index in range(120)
+BIG_TABLE_PAGE = (
+    "FEE STRUCTURE 2024\n"
+    + "Programme\tTuition\tExam Fee\n"
+    + "".join(
+        f"Programme number {index:03d}\t{80000 + index}\t2500\n" for index in range(120)
+    )
 )
 
 
@@ -378,14 +384,11 @@ class TableChunkingTests(TestCase):
         ]
 
         self.assertGreater(len(parts), 1)
-        for earlier, later in zip(parts, parts[1:]):
+        for earlier, later in pairwise(parts):
             self.assertLessEqual(earlier.character_end, later.character_start)
 
         rows = [
-            line
-            for part in parts
-            for line in part.text.splitlines()
-            if "	" in line
+            line for part in parts for line in part.text.splitlines() if "	" in line
         ]
         self.assertEqual(len(rows), len(set(rows)), "a row appeared in two parts")
 
@@ -423,7 +426,9 @@ class TableChunkingTests(TestCase):
         chunks = splitter.split_page(1, BIG_TABLE_PAGE, chunk_size=400, tables=tables)
         parts = [c for c in chunks if c.metadata.get("kind") == "TABLE"]
 
-        self.assertGreater(len(parts), 1, "a 120-row table fitted in one 400-char chunk")
+        self.assertGreater(
+            len(parts), 1, "a 120-row table fitted in one 400-char chunk"
+        )
         for part in parts:
             # No half-rows: every line of every part is a complete row.
             for line in part.text.splitlines():

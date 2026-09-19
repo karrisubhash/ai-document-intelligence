@@ -149,9 +149,7 @@ def predict_with_threshold(model, texts, threshold: float) -> list[str]:
 
     for row in probabilities:
         best = int(row.argmax())
-        predictions.append(
-            classes[best] if row[best] >= threshold else UNKNOWN_LABEL
-        )
+        predictions.append(classes[best] if row[best] >= threshold else UNKNOWN_LABEL)
 
     return predictions
 
@@ -173,7 +171,7 @@ def sweep_thresholds(model, texts, truth, step: float = 0.05) -> list[dict]:
     threshold = 0.0
     while threshold < 1.0:
         answered = correct = 0
-        for actual, prediction, score in zip(truth, predicted, best_score):
+        for actual, prediction, score in zip(truth, predicted, best_score, strict=True):
             if score < threshold:
                 continue
             answered += 1
@@ -239,18 +237,34 @@ def measure_latency(model, texts, iterations: int = 200) -> float:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--manifest-dir", type=Path, default=None,
-                        help="Overrides dataset.manifest_dir from the config.")
+    parser.add_argument(
+        "--manifest-dir",
+        type=Path,
+        default=None,
+        help="Overrides dataset.manifest_dir from the config.",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_ARTIFACTS)
-    parser.add_argument("--model-version", default=None,
-                        help="Overrides model_version from the config.")
-    parser.add_argument("--per-class", type=int, default=None,
-                        help="Cap samples per class (for quick runs).")
-    parser.add_argument("--target-accuracy", type=float, default=0.90,
-                        help="Accuracy-when-answering the abstention "
-                             "threshold is fitted to reach on validation.")
-    parser.add_argument("--smoke", action="store_true",
-                        help="25 documents/class - proves the path cheaply.")
+    parser.add_argument(
+        "--model-version", default=None, help="Overrides model_version from the config."
+    )
+    parser.add_argument(
+        "--per-class",
+        type=int,
+        default=None,
+        help="Cap samples per class (for quick runs).",
+    )
+    parser.add_argument(
+        "--target-accuracy",
+        type=float,
+        default=0.90,
+        help="Accuracy-when-answering the abstention "
+        "threshold is fitted to reach on validation.",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="25 documents/class - proves the path cheaply.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -274,8 +288,7 @@ def main():
 
     print(f"config      {args.config}")
     print(f"manifests   {manifest_dir}")
-    print(f"model       {model_name} {version_label} "
-          f"({config['architecture']})\n")
+    print(f"model       {model_name} {version_label} ({config['architecture']})\n")
 
     samples = {split: load_split(manifest_dir, split, per_class) for split in SPLITS}
     loading_started = time.perf_counter()
@@ -292,9 +305,11 @@ def main():
     }
 
     for split in SPLITS:
-        print(f"{split:<11} {len(samples[split]):>6} documents, "
-              f"{empty_counts[split]:>4} with no OCR text "
-              f"({empty_counts[split] / max(1, len(samples[split])):.2%})")
+        print(
+            f"{split:<11} {len(samples[split]):>6} documents, "
+            f"{empty_counts[split]:>4} with no OCR text "
+            f"({empty_counts[split] / max(1, len(samples[split])):.2%})"
+        )
     print(f"read in {loading_seconds:.1f}s\n")
 
     model = build_pipeline(config)
@@ -311,19 +326,28 @@ def main():
     selection = select_threshold(sweep, args.target_accuracy)
     threshold = selection["threshold"]
 
-    print(f"abstention threshold {threshold:.2f} "
-          f"(target accuracy-when-answering {args.target_accuracy:.0%}, "
-          f"met: {selection['target_met']})")
-    print(f"  on validation: answers {selection['coverage']:.1%} of documents "
-          f"at {selection['accuracy_when_answering']:.1%} accuracy\n")
+    print(
+        f"abstention threshold {threshold:.2f} "
+        f"(target accuracy-when-answering {args.target_accuracy:.0%}, "
+        f"met: {selection['target_met']})"
+    )
+    print(
+        f"  on validation: answers {selection['coverage']:.1%} of documents "
+        f"at {selection['accuracy_when_answering']:.1%} accuracy\n"
+    )
 
     if not selection["target_met"]:
-        print("  NOTE: no threshold reached the target. The value above is "
-              "the best available, not a passing result.\n")
+        print(
+            "  NOTE: no threshold reached the target. The value above is "
+            "the best available, not a passing result.\n"
+        )
 
     # --- Evaluation ----------------------------------------------------
-    results = {"preprocessing": preprocessing, "threshold_sweep": sweep,
-               "threshold_selection": selection}
+    results = {
+        "preprocessing": preprocessing,
+        "threshold_sweep": sweep,
+        "threshold_selection": selection,
+    }
 
     for split in ("validation", "test"):
         raw = evaluate(truth[split], model.predict(texts[split]), list(LABELS))
@@ -348,8 +372,11 @@ def main():
         print()
 
     print("===== test confusion matrix (no abstention) =====")
-    print(render_confusion(evaluate(truth["test"], model.predict(texts["test"]),
-                                    list(LABELS))))
+    print(
+        render_confusion(
+            evaluate(truth["test"], model.predict(texts["test"]), list(LABELS))
+        )
+    )
     print()
 
     # --- Artifact ------------------------------------------------------
@@ -404,11 +431,15 @@ def main():
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
     (output / "labels.json").write_text(json.dumps(list(LABELS), indent=2))
 
-    print(f"artifact: {model_path} "
-          f"({metadata['model_size_bytes'] / 1e6:.1f} MB), "
-          f"{metadata['inference_ms_per_document']} ms/document")
-    print(f"comparable to published RVL-CDIP results: "
-          f"{metadata['comparable_to_published_rvlcdip']}")
+    print(
+        f"artifact: {model_path} "
+        f"({metadata['model_size_bytes'] / 1e6:.1f} MB), "
+        f"{metadata['inference_ms_per_document']} ms/document"
+    )
+    print(
+        f"comparable to published RVL-CDIP results: "
+        f"{metadata['comparable_to_published_rvlcdip']}"
+    )
 
 
 if __name__ == "__main__":

@@ -252,9 +252,7 @@ def aggregate_retrieval(per_case, ks=(1, 3, 5, 10)) -> RetrievalReport:
 
     for k in ks:
         report.recall_at_k[k] = _mean(recall_at_k(r, rel, k) for r, rel in scored)
-        report.precision_at_k[k] = _mean(
-            precision_at_k(r, rel, k) for r, rel in scored
-        )
+        report.precision_at_k[k] = _mean(precision_at_k(r, rel, k) for r, rel in scored)
         report.ndcg_at_k[k] = _mean(ndcg_at_k(r, rel, k) for r, rel in scored)
 
     report.mrr = _mean(reciprocal_rank(r, rel) for r, rel in scored)
@@ -296,11 +294,15 @@ def aggregate_generation(per_case) -> GenerationReport:
     if answered:
         report.groundedness = _mean(c.get("groundedness", 0.0) for c in answered)
         report.citation_accuracy = _mean(
-            citation_accuracy(c.get("cited_documents", []), c.get("relevant_documents", []))
+            citation_accuracy(
+                c.get("cited_documents", []), c.get("relevant_documents", [])
+            )
             for c in answered
         )
         report.source_coverage = _mean(
-            source_coverage(c.get("cited_documents", []), c.get("relevant_documents", []))
+            source_coverage(
+                c.get("cited_documents", []), c.get("relevant_documents", [])
+            )
             for c in answered
         )
         report.token_overlap = _mean(
@@ -331,7 +333,7 @@ NEUTRAL = ("cases", "answered", "abstained", "correct_abstentions")
 
 
 def metric_direction(key: str) -> str:
-    """"higher", "lower" or "neutral" for a flattened metric key."""
+    """ "higher", "lower" or "neutral" for a flattened metric key."""
     leaf = key.rsplit(".", 1)[-1]
 
     if any(token in leaf for token in LOWER_IS_BETTER):

@@ -62,7 +62,9 @@ class SplitFileParsingTests(unittest.TestCase):
         self.assertTrue(samples[0].input_path.endswith("1.tif"))
 
     def test_ignores_blank_lines(self):
-        samples = parse_split_lines("a.tif 1\n\n\nb.tif 2\n", "test", Path("/d"), "image")
+        samples = parse_split_lines(
+            "a.tif 1\n\n\nb.tif 2\n", "test", Path("/d"), "image"
+        )
         self.assertEqual(len(samples), 2)
 
     def test_rejects_out_of_range_label(self):
@@ -89,7 +91,7 @@ class BalancedSubsetTests(unittest.TestCase):
     def test_is_balanced_across_classes(self):
         subset = balanced_subset(self.make_pool(), per_class=10, seed=0)
 
-        counts = {label: 0 for label in LABELS}
+        counts = dict.fromkeys(LABELS, 0)
         for s in subset:
             counts[s.label] += 1
 
@@ -165,8 +167,14 @@ class IntegrityTests(unittest.TestCase):
         test_rows = read_manifest(self.manifests / "test.csv")
         self.write_split(
             "test",
-            test_rows[:-1] + [DatasetSample(shared.sample_id, "test", *(
-                (shared.label, shared.input_type, shared.input_path)))],
+            test_rows[:-1]
+            + [
+                DatasetSample(
+                    shared.sample_id,
+                    "test",
+                    *((shared.label, shared.input_type, shared.input_path)),
+                )
+            ],
         )
 
         report = integrity.check(self.manifests)

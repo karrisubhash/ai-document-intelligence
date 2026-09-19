@@ -1,0 +1,73 @@
+# Linter configuration.
+#
+# WHY THIS FILE EXISTS. `.github/workflows/ci.yml` has always run `ruff
+# check` and `ruff format --check` as the first job, and every other job in
+# the pipeline declares `needs: lint`. There was no configuration and no
+# pinned version, so the gate resolved to whatever ruff released that
+# morning and to its default rule set - which, measured on this repository
+# with ruff 0.16.8, was 245 findings and 82 files that would be reformatted.
+# The lint job would therefore have failed on its first execution, and with
+# it the tests, the security checks, the AI regression gate and the build.
+# A pipeline whose first gate cannot pass is not a pipeline.
+#
+# So the rules are stated here rather than inherited, and the version is
+# pinned in the workflow. An upgraded ruff can then only change this
+# project's standard when someone edits this file.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+extend-exclude = [
+    "**/migrations/*",
+    "backend/venv",
+    "frontend",
+]
+
+[tool.ruff.lint]
+# Explicit, not inherited. Each family earns its place:
+#
+#   E, W  pycodestyle       - the baseline everyone already writes to
+#   F     pyflakes          - unused imports and names, undefined names
+#   I     isort             - import order, which is otherwise argued about
+#   B     bugbear           - mutable default arguments, loop-variable
+#                             capture, `assertRaises(Exception)` - real bugs
+#   C4    comprehensions    - readability, cheap to satisfy
+#   UP    pyupgrade         - keeps the codebase on the Python it targets
+#   DJ    flake8-django     - Django-specific mistakes (nullable CharField,
+#                             models without __str__)
+#   T20   print             - print() in a service is a lost log line
+#
+# Deliberately NOT selected:
+#
+#   RUF012  every `permission_classes = [...]` on a DRF view is a mutable
+#           class attribute. It is the framework's own idiom; annotating 114
+#           of them with ClassVar teaches nobody anything.
+#   S       bandit overlaps with the `bandit -ll` step CI already runs, and
+#           duplicating it here means two places to justify the same finding.
+#   SIM     stylistic; its `multiple-with-statements` finding in particular
+#           would force nested test context managers onto one line, which is
+#           harder to read, not easier.
+select = ["E", "W", "F", "I", "B", "C4", "UP", "DJ", "T20"]
+
+ignore = [
+    # Line length is checked by the formatter, which knows when a long
+    # string or URL cannot be split. E501 on top of it only ever fires on
+    # the lines the formatter deliberately left alone.
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Management commands and scripts talk to an operator on stdout. That is
+# their interface, not a stray debug statement.
+"backend/documents/management/commands/*" = ["T20"]
+"infrastructure/*" = ["T20"]
+"ai/**/*" = ["T20"]
+
+# Tests assert on behaviour, and `assertRaises(Exception)` is sometimes
+# exactly the assertion - "this must not succeed", where naming the class
+# would make the test pass for the wrong reason.
+"backend/**/tests*.py" = ["B017"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["accounts", "documents", "config", "ai"]

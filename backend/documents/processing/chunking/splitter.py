@@ -37,10 +37,10 @@ MIN_CHUNK_SIZE = 100
 # Preferred split points, strongest first. Splitting on structure beats
 # splitting at a fixed offset, because it keeps clauses intact.
 BOUNDARY_PATTERNS = (
-    re.compile(r"\n\s*\n"),      # paragraph break
+    re.compile(r"\n\s*\n"),  # paragraph break
     re.compile(r"(?<=[.!?])\s+"),  # sentence end
-    re.compile(r"\n"),            # line break
-    re.compile(r"\s+"),           # any whitespace, last resort
+    re.compile(r"\n"),  # line break
+    re.compile(r"\s+"),  # any whitespace, last resort
 )
 
 

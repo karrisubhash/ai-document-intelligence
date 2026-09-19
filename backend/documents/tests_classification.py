@@ -86,7 +86,9 @@ class ClassificationContractTests(SimpleTestCase):
         self.assertIsInstance(StubClassifier(), DocumentClassifier)
 
     def test_unknown_label_is_recognisable(self):
-        self.assertTrue(UnknownLabelClassifier().predict(document_content_id=1).is_unknown)
+        self.assertTrue(
+            UnknownLabelClassifier().predict(document_content_id=1).is_unknown
+        )
         self.assertFalse(StubClassifier().predict(document_content_id=1).is_unknown)
 
 

@@ -145,8 +145,7 @@ class TextDocumentClassifier:
         )
 
         scored = [
-            (number, normalize(text, self._preprocessing))
-            for number, text in pages
+            (number, normalize(text, self._preprocessing)) for number, text in pages
         ]
         usable = [(number, text) for number, text in scored if text]
 
@@ -193,7 +192,10 @@ class TextDocumentClassifier:
                 "top_label": label,
                 "scores": {
                     name: round(float(score), 6)
-                    for name, score in zip(self._classes, averaged)
+                    # strict=True: classes and scores come from the same
+                    # artifact and must agree; if they do not, a label is
+                    # being reported against another class's score.
+                    for name, score in zip(self._classes, averaged, strict=True)
                 },
             },
         )

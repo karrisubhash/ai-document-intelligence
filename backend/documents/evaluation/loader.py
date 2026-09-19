@@ -83,8 +83,9 @@ def load_cases(data, dataset, *, source="<dict>"):
 
 
 @transaction.atomic
-def load_dataset(data, *, name=None, version=None, department="", user=None,
-                 source="<dict>"):
+def load_dataset(
+    data, *, name=None, version=None, department="", user=None, source="<dict>"
+):
     name = name or data.get("name")
     version = version or data.get("version")
     if not name or not version:

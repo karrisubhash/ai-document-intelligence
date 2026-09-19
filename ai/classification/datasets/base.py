@@ -7,9 +7,10 @@ or adding a college corpus later - does not touch the training code.
 
 import csv
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 # The canonical RVL-CDIP label order, index 0-15. Verified against
 # aharley/rvl_cdip dataset_infos.json rather than recalled - the integer

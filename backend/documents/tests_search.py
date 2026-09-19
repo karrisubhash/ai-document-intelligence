@@ -5,6 +5,8 @@ keeping its tests pure is what proves a chunking strategy can be benchmarked
 offline before it is adopted.
 """
 
+from itertools import pairwise
+
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
@@ -21,7 +23,6 @@ from documents.models import (
 )
 from documents.processing.chunking import service as chunking_service
 from documents.processing.chunking import splitter
-from documents.processing.chunking.exceptions import EmbeddingProviderNotConfigured
 from documents.processing.embedding.hashing import HashingEmbeddingProvider, embed_text
 from documents.processing.pipeline import run_pipeline
 from documents.search import service as search_service
@@ -100,7 +101,7 @@ class SplitterTests(TestCase):
         chunks = splitter.split_page(1, body, chunk_size=300, overlap=100)
 
         self.assertGreater(len(chunks), 2)
-        for earlier, later in zip(chunks, chunks[1:]):
+        for earlier, later in pairwise(chunks):
             self.assertLess(later.character_start, earlier.character_end)
 
     def test_rejects_nonsense_parameters(self):
@@ -116,7 +117,9 @@ class SplitterTests(TestCase):
 class HashingEmbeddingTests(TestCase):
     def test_is_deterministic_across_calls(self):
         """The worker that indexes and the process that searches must agree."""
-        self.assertEqual(embed_text("attendance policy"), embed_text("attendance policy"))
+        self.assertEqual(
+            embed_text("attendance policy"), embed_text("attendance policy")
+        )
 
     def test_vector_has_the_declared_width(self):
         provider = HashingEmbeddingProvider()
@@ -133,7 +136,7 @@ class HashingEmbeddingTests(TestCase):
 
     def test_shared_vocabulary_scores_higher_than_unrelated_text(self):
         def cosine(a, b):
-            return sum(x * y for x, y in zip(a, b))
+            return sum(x * y for x, y in zip(a, b, strict=True))
 
         query = embed_text("attendance requirement for examinations")
         related = embed_text("attendance minimum is 75 percent for examination")
@@ -587,7 +590,9 @@ class StaleContentRetrievalTests(TestCase):
 
         run_pipeline(ProcessingJob.objects.create(document_version=version).id)
 
-        self.assertEqual(version.contents.count(), 2, "the fixture no longer reprocesses")
+        self.assertEqual(
+            version.contents.count(), 2, "the fixture no longer reprocesses"
+        )
 
         after, _ = search_service.authorized_chunks(self.user)
         texts = [chunk.text for chunk in after]
@@ -673,9 +678,7 @@ class EmptySearchDiagnosticTests(TestCase):
         cause, not away from it."""
         document, version = self.make_document()
         run_pipeline(ProcessingJob.objects.create(document_version=version).id)
-        self.assertTrue(
-            DocumentChunk.objects.filter(document_version=version).exists()
-        )
+        self.assertTrue(DocumentChunk.objects.filter(document_version=version).exists())
 
         # Exactly what a stale worker leaves behind: content and chunks
         # exist, but nothing is marked as the live pass.

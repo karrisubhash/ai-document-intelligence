@@ -12,7 +12,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from documents import evaluation, rag
+from documents import rag
 from documents.evaluation import loader, metrics, runner
 from documents.models import (
     Conversation,
@@ -76,9 +76,7 @@ class RetrievalMetricTests(TestCase):
     def test_aggregate_skips_cases_with_no_relevant_documents(self):
         """Abstention cases have none, and averaging a vacuous 0.0 into
         recall would make a correct refusal look like a miss."""
-        report = metrics.aggregate_retrieval(
-            [([1], [1]), ([2], [])], ks=(1,)
-        )
+        report = metrics.aggregate_retrieval([([1], [1]), ([2], [])], ks=(1,))
         self.assertEqual(report.cases, 1)
         self.assertEqual(report.recall_at_k[1], 1.0)
 
@@ -102,11 +100,15 @@ class GenerationMetricTests(TestCase):
         """Named for what it measures: a wrong answer built from the right
         vocabulary scores well, which is why it is never reported alone."""
         self.assertEqual(
-            metrics.token_overlap("attendance is 75 percent", "attendance is 75 percent"),
+            metrics.token_overlap(
+                "attendance is 75 percent", "attendance is 75 percent"
+            ),
             1.0,
         )
         self.assertGreater(
-            metrics.token_overlap("attendance is 10 percent", "attendance is 75 percent"),
+            metrics.token_overlap(
+                "attendance is 10 percent", "attendance is 75 percent"
+            ),
             0.5,
         )
 
@@ -118,9 +120,9 @@ class GenerationMetricTests(TestCase):
     def test_aggregate_separates_the_two_abstention_failures(self):
         report = metrics.aggregate_generation(
             [
-                {"abstained": True, "expected_abstention": False},   # too shy
-                {"abstained": False, "expected_abstention": True},   # invented
-                {"abstained": True, "expected_abstention": True},    # correct
+                {"abstained": True, "expected_abstention": False},  # too shy
+                {"abstained": False, "expected_abstention": True},  # invented
+                {"abstained": True, "expected_abstention": True},  # correct
             ]
         )
         self.assertEqual(report.false_abstentions, 1)
@@ -132,8 +134,13 @@ class GenerationMetricTests(TestCase):
         inaccurate rather than cautious."""
         report = metrics.aggregate_generation(
             [
-                {"abstained": False, "expected_abstention": False, "groundedness": 1.0,
-                 "cited_documents": [1], "relevant_documents": [1]},
+                {
+                    "abstained": False,
+                    "expected_abstention": False,
+                    "groundedness": 1.0,
+                    "cited_documents": [1],
+                    "relevant_documents": [1],
+                },
                 {"abstained": True, "expected_abstention": True},
             ]
         )
@@ -159,9 +166,7 @@ class ComparisonTests(TestCase):
         self.assertIn("retrieval.mrr", report["improvements"])
 
     def test_tolerance_suppresses_noise(self):
-        report = metrics.compare(
-            {"a": 0.900}, {"a": 0.899}, tolerance=0.01
-        )
+        report = metrics.compare({"a": 0.900}, {"a": 0.899}, tolerance=0.01)
         self.assertEqual(report["regressions"], [])
 
     def test_falling_latency_is_an_improvement_not_a_regression(self):
@@ -243,7 +248,9 @@ class DatasetLoadingTests(TestCase):
 
     def test_accepts_ids_as_doc_prefixed_strings_or_plain_integers(self):
         dataset = loader.load_dataset(
-            self.payload(cases=[{"question": "q", "relevant_documents": ["doc_7", 8, "9"]}])
+            self.payload(
+                cases=[{"question": "q", "relevant_documents": ["doc_7", 8, "9"]}]
+            )
         )
         self.assertEqual(dataset.cases.get().relevant_documents, [7, 8, 9])
 
@@ -261,11 +268,13 @@ class DatasetLoadingTests(TestCase):
         with self.assertRaises(loader.DatasetError) as caught:
             loader.load_dataset(
                 self.payload(
-                    cases=[{
-                        "question": "q",
-                        "expect_abstention": True,
-                        "relevant_documents": ["doc_1"],
-                    }]
+                    cases=[
+                        {
+                            "question": "q",
+                            "expect_abstention": True,
+                            "relevant_documents": ["doc_1"],
+                        }
+                    ]
                 )
             )
         self.assertIn("cannot both", str(caught.exception))
@@ -317,8 +326,10 @@ class EvaluationRunTests(TestCase):
 
     def index(self, title, body):
         document = Document.objects.create(
-            title=title, document_type="REGULATION",
-            owner=self.user, department="Registry",
+            title=title,
+            document_type="REGULATION",
+            owner=self.user,
+            department="Registry",
         )
         version = document.versions.create(
             version_number=1,
@@ -342,7 +353,9 @@ class EvaluationRunTests(TestCase):
                     {
                         "question": "What is the minimum attendance required?",
                         "expected_answer": "75 percent",
-                        "relevant_documents": [self.documents["Attendance Regulation"].id],
+                        "relevant_documents": [
+                            self.documents["Attendance Regulation"].id
+                        ],
                     },
                     {
                         "question": "How many books can a student borrow?",
@@ -430,7 +443,9 @@ class EvaluationRunTests(TestCase):
         first = runner.run_dataset(self.dataset(), self.user)
         other_dataset = loader.load_dataset(
             {
-                "name": "other", "version": "1.0.0", "department": "Registry",
+                "name": "other",
+                "version": "1.0.0",
+                "department": "Registry",
                 "cases": [{"question": "q", "expect_abstention": True}],
             }
         )
@@ -593,7 +608,9 @@ class FeedbackTests(TestCase):
             role=Message.Role.USER,
             content="What is the minimum attendance?",
         )
-        response = self.client.post(self.url(question), {"rating": "HELPFUL"}, format="json")
+        response = self.client.post(
+            self.url(question), {"rating": "HELPFUL"}, format="json"
+        )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_rejects_an_unknown_rating(self):

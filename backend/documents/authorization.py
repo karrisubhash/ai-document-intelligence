@@ -23,7 +23,10 @@ def get_profile(user) -> UserProfile:
 
 
 def is_system_admin(user) -> bool:
-    return bool(user.is_superuser) or get_profile(user).role == UserProfile.Role.SYSTEM_ADMIN
+    return (
+        bool(user.is_superuser)
+        or get_profile(user).role == UserProfile.Role.SYSTEM_ADMIN
+    )
 
 
 def shares_department(profile, document) -> bool:

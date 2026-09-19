@@ -34,7 +34,11 @@ IMAGE_SUFFIXES = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 OFFICIAL_SPLIT_BASE = (
     "https://huggingface.co/datasets/aharley/rvl_cdip/resolve/main/data"
 )
-OFFICIAL_SPLIT_FILES = {"train": "train.txt", "validation": "val.txt", "test": "test.txt"}
+OFFICIAL_SPLIT_FILES = {
+    "train": "train.txt",
+    "validation": "val.txt",
+    "test": "test.txt",
+}
 SPLIT_FILE_NAMES = {
     "train": ("train.txt", "text_train.txt"),
     "validation": ("val.txt", "validation.txt", "text_val.txt"),
@@ -266,7 +270,7 @@ def select_device(torch, *, allow_cpu_fallback: bool = True):
             f"torch {torch.__version__}: {type(exc).__name__}: {str(exc)[:200]}"
         )
         if not allow_cpu_fallback:
-            raise SystemExit(f"GPU required but unusable. {message}")
+            raise SystemExit(f"GPU required but unusable. {message}") from exc
         print(f"WARNING: {message}\n  falling back to CPU")
         return torch.device("cpu"), f"CPU fallback ({name} unusable)"
 
@@ -464,8 +468,10 @@ def main():
         # protocol stays the published 320k/40k/40k.
         canonical_images = locate_canonical_images(root)
         if canonical_images is not None:
-            print(f"canonical image tree at {canonical_images}; "
-                  f"fetching official split files")
+            print(
+                f"canonical image tree at {canonical_images}; "
+                f"fetching official split files"
+            )
             split_files = fetch_official_splits(Path(args.output_dir) / "splits")
 
     if "train" in split_files:
@@ -473,9 +479,11 @@ def main():
         layout = "split_files"
         print(f"layout: split files { {k: str(v) for k, v in split_files.items()} }")
 
-        first_line = split_files["train"].read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()[0]
+        first_line = (
+            split_files["train"]
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()[0]
+        )
         relative = first_line.rsplit(" ", 1)[0]
         image_root = (
             canonical_images
@@ -500,8 +508,10 @@ def main():
             )
 
         layout = "imagefolder"
-        print(f"layout: imagefolder, splits={sorted(folders)}, "
-              f"train classes={len(folders['train'])}")
+        print(
+            f"layout: imagefolder, splits={sorted(folders)}, "
+            f"train classes={len(folders['train'])}"
+        )
 
         train_items = load_imagefolder_split(folders["train"], args.per_class)
         eval_items = {
@@ -517,8 +527,7 @@ def main():
             "No validation or test split found - refusing to train a model "
             "that cannot be evaluated."
         )
-    print(f"train {len(train_items)} | "
-          f"{ {k: len(v) for k, v in eval_items.items()} }")
+    print(f"train {len(train_items)} | { {k: len(v) for k, v in eval_items.items()} }")
 
     train_loader, eval_loaders = make_loaders(
         train_items, eval_items, args.image_size, args.batch_size, args.workers
@@ -535,8 +544,11 @@ def main():
         loss, _, _ = run_epoch(model, train_loader, device, optimizer, scaler)
         schedule.step()
 
-        entry = {"epoch": epoch, "train_loss": round(loss, 4),
-                 "seconds": round(time.time() - epoch_started, 1)}
+        entry = {
+            "epoch": epoch,
+            "train_loss": round(loss, 4),
+            "seconds": round(time.time() - epoch_started, 1),
+        }
 
         if "validation" in eval_loaders:
             _, truth, predicted = run_epoch(model, eval_loaders["validation"], device)
@@ -563,8 +575,14 @@ def main():
             print(f"\n{render_confusion(report)}")
 
     weights_path = output / "model.pt"
-    torch.save({"architecture": args.arch, "labels": list(LABELS),
-                "state_dict": model.state_dict()}, weights_path)
+    torch.save(
+        {
+            "architecture": args.arch,
+            "labels": list(LABELS),
+            "state_dict": model.state_dict(),
+        },
+        weights_path,
+    )
 
     metadata = {
         "model_name": "document-classifier-vision",
@@ -598,11 +616,15 @@ def main():
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
     (output / "labels.json").write_text(json.dumps(list(LABELS), indent=2))
 
-    print(f"\nartifact: {weights_path} "
-          f"({metadata['model_size_bytes'] / 1e6:.1f} MB), "
-          f"{metadata['inference_ms_per_image']} ms/image")
-    print(f"comparable to published RVL-CDIP results: "
-          f"{metadata['comparable_to_published_rvlcdip']}")
+    print(
+        f"\nartifact: {weights_path} "
+        f"({metadata['model_size_bytes'] / 1e6:.1f} MB), "
+        f"{metadata['inference_ms_per_image']} ms/image"
+    )
+    print(
+        f"comparable to published RVL-CDIP results: "
+        f"{metadata['comparable_to_published_rvlcdip']}"
+    )
 
 
 if __name__ == "__main__":
