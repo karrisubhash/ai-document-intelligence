@@ -526,9 +526,17 @@ class TransportSecurityTests(SimpleTestCase):
     def test_secure_cookies_are_not_exempted(self):
         """Only the redirect is lifted for tests. If someone widens the
         exemption to cookies, HSTS or the proxy header, the suite stops
-        exercising the configuration a deployment actually uses."""
+        exercising the configuration a deployment actually uses.
+
+        Compared against the MODULE's DEBUG, not the live setting. The test
+        runner forces `settings.DEBUG = False` after the module has loaded,
+        so on a developer machine with DJANGO_DEBUG=True the live value
+        disagrees with the one the cookie flags were derived from, and the
+        assertion failed on every laptop while passing in CI."""
         from django.conf import settings
 
+        import config.settings as settings_module
+
         self.assertTrue(settings.RUNNING_TESTS, "these tests run under the runner")
-        self.assertEqual(settings.SESSION_COOKIE_SECURE, not settings.DEBUG)
-        self.assertEqual(settings.CSRF_COOKIE_SECURE, not settings.DEBUG)
+        self.assertEqual(settings.SESSION_COOKIE_SECURE, not settings_module.DEBUG)
+        self.assertEqual(settings.CSRF_COOKIE_SECURE, not settings_module.DEBUG)
