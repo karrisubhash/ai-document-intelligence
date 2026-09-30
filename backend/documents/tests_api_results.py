@@ -249,7 +249,7 @@ class ResultEndpointAuthorizationTests(AuthenticatedAPITestCase):
         ):
             with self.subTest(route=route):
                 response = self.client.get(reverse(route, args=[self.document_id]))
-                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_a_denied_read_is_audited(self):
         self.client.force_authenticate(user=self.outsider)

@@ -25,7 +25,7 @@ from documents.models import (
     ProcessingJob,
 )
 from documents.processing.classification import service as classification_service
-from documents.processing.errors import StageError
+from documents.processing.errors import ErrorCode, StageError
 from documents.processing.field_extraction import service as extraction_service
 from documents.processing.field_extraction.matching import FOUND, INVALID, find_field
 from documents.processing.field_extraction.rule_extractor import DEFAULT_PACK
@@ -176,9 +176,25 @@ class RetryDoesNotDuplicateContentTests(TestCase):
         self.document.save(update_fields=["current_version"])
         self.job = ProcessingJob.objects.create(document_version=self.version)
 
+    def retry(self):
+        """Run the job again the way a genuine Celery retry would.
+
+        A retry follows a retryable FAILURE: the pipeline marks the job
+        FAILED and Celery re-invokes it. Re-running a job that COMPLETED is
+        a different event - a broker redelivery - which the pipeline now
+        skips outright (tests_lifecycle pins that). So between runs the job
+        is put back in the state a real retry finds it in.
+        """
+        ProcessingJob.objects.filter(pk=self.job.pk).update(
+            status=ProcessingJob.Status.FAILED,
+            error_code=ErrorCode.INFRASTRUCTURE_ERROR,
+        )
+        run_pipeline(self.job.id)
+
     def test_rerunning_the_same_job_replaces_rather_than_appends(self):
-        for _ in range(3):
-            run_pipeline(self.job.id)
+        run_pipeline(self.job.id)
+        for _ in range(2):
+            self.retry()
 
         self.assertEqual(
             DocumentContent.objects.filter(processing_job=self.job).count(), 1
@@ -189,8 +205,9 @@ class RetryDoesNotDuplicateContentTests(TestCase):
 
     def test_the_attempt_counter_still_records_every_try(self):
         """Deduplicating output must not erase the evidence of retries."""
-        for _ in range(3):
-            run_pipeline(self.job.id)
+        run_pipeline(self.job.id)
+        for _ in range(2):
+            self.retry()
 
         self.job.refresh_from_db()
         self.assertEqual(self.job.attempt, 3)
@@ -198,7 +215,7 @@ class RetryDoesNotDuplicateContentTests(TestCase):
     def test_events_from_earlier_attempts_are_preserved(self):
         run_pipeline(self.job.id)
         first = self.job.events.count()
-        run_pipeline(self.job.id)
+        self.retry()
 
         self.assertEqual(self.job.events.count(), first * 2)
 
@@ -208,7 +225,7 @@ class RetryDoesNotDuplicateContentTests(TestCase):
 
         with override_settings(DOCUMENT_FIELD_EXTRACTOR=RULE_EXTRACTOR):
             run_pipeline(self.job.id)
-            run_pipeline(self.job.id)
+            self.retry()
 
         self.assertEqual(
             ExtractionResult.objects.filter(processing_job=self.job).count(), 1
@@ -240,7 +257,7 @@ class RetryDoesNotDuplicateContentTests(TestCase):
         )
 
         with self.assertRaises(StageError):
-            run_pipeline(self.job.id)
+            self.retry()
 
         self.assertEqual(
             DocumentContent.objects.filter(processing_job=self.job).count(),

@@ -664,8 +664,14 @@ class ResponseShapeTests(DiscoveryTestCase):
                 "document_type",
                 "department",
                 "owner",
+                # Added with archival and the product frontend: who owns it,
+                # readably, and whether it is archived. Additive - every
+                # field a consumer already read is unchanged.
+                "owner_username",
                 "status",
                 "current_version",
+                "is_archived",
+                "archived_at",
                 "created_at",
                 "updated_at",
             },

@@ -8,7 +8,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import UserProfile
+from accounts.models import Department, UserProfile
 from documents.models import (
     AuditLog,
     Document,
@@ -479,7 +479,7 @@ class DocumentAuthorizationTests(APITestCase):
         self.client.force_authenticate(user=self.mech_faculty)
         response = self.client.get(reverse("document-detail", args=[document_id]))
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_system_admin_can_view_any_department(self):
         document_id = self.upload_as(self.mech_faculty)
@@ -537,7 +537,7 @@ class DocumentAuthorizationTests(APITestCase):
         self.client.force_authenticate(user=self.mech_faculty)
         response = self.client.delete(reverse("document-detail", args=[document_id]))
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Document.objects.filter(id=document_id).exists())
 
     def test_other_department_user_cannot_reprocess(self):
@@ -546,7 +546,7 @@ class DocumentAuthorizationTests(APITestCase):
         self.client.force_authenticate(user=self.mech_faculty)
         response = self.client.post(reverse("document-reprocess", args=[document_id]))
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_other_department_user_cannot_list_versions(self):
         document_id = self.upload_as(self.cs_faculty)
@@ -554,7 +554,7 @@ class DocumentAuthorizationTests(APITestCase):
         self.client.force_authenticate(user=self.mech_faculty)
         response = self.client.get(reverse("document-versions", args=[document_id]))
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_other_department_user_cannot_download(self):
         document_id = self.upload_as(self.cs_faculty)
@@ -562,7 +562,7 @@ class DocumentAuthorizationTests(APITestCase):
         self.client.force_authenticate(user=self.mech_faculty)
         response = self.client.get(reverse("document-download", args=[document_id]))
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_authorized_user_can_download(self):
         document_id = self.upload_as(self.cs_faculty)
@@ -618,6 +618,8 @@ class UploadOwnershipTests(APITestCase):
         self.assertEqual(document.versions.first().uploaded_by, user)
 
     def test_system_admin_may_set_department_explicitly(self):
+        # Departments are a registry now, not free text.
+        Department.objects.create(name="Mechanical Engineering")
         admin = make_user("sys_admin", UserProfile.Role.SYSTEM_ADMIN, "")
         self.client.force_authenticate(user=admin)
 
@@ -634,6 +636,25 @@ class UploadOwnershipTests(APITestCase):
 
         document = Document.objects.get(id=response.data["id"])
         self.assertEqual(document.department, "Mechanical Engineering")
+
+    def test_system_admin_cannot_upload_into_an_unregistered_department(self):
+        """A typo used to create a tenant nobody belonged to."""
+        admin = make_user("sys_admin", UserProfile.Role.SYSTEM_ADMIN, "")
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            reverse("document-list"),
+            {
+                "title": "Misfiled Circular",
+                "department": "Mechanical Enginering",
+                "file": make_txt_file(),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("department", response.data)
+        self.assertFalse(Document.objects.filter(title="Misfiled Circular").exists())
 
     def test_new_version_records_the_uploading_user(self):
         owner = make_user("cs_faculty", UserProfile.Role.FACULTY, "Computer Science")
@@ -720,7 +741,7 @@ class AuditLogTests(APITestCase):
         self.client.force_authenticate(user=self.outsider)
         response = self.client.get(reverse("document-detail", args=[self.document_id]))
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(
             AuditLog.objects.filter(
                 user=self.outsider,
@@ -736,7 +757,7 @@ class AuditLogTests(APITestCase):
             reverse("document-download", args=[self.document_id])
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(
             AuditLog.objects.filter(
                 user=self.outsider,

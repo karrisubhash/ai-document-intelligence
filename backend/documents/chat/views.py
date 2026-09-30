@@ -1,6 +1,8 @@
 from django.db import transaction
+from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from rest_framework import status
+from rest_framework.generics import ListAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,8 +16,23 @@ from documents.throttling import BurstUserThrottle
 
 from .serializers import (
     ChatRequestSerializer,
+    ConversationRenameSerializer,
     ConversationSerializer,
+    ConversationSummarySerializer,
 )
+
+# A conversation is titled from its first question until its owner renames
+# it. Truncated at a word boundary so the list reads as titles, not as
+# questions cut mid-word.
+TITLE_LENGTH = 80
+
+
+def _title_from(question: str) -> str:
+    question = " ".join(question.split())
+    if len(question) <= TITLE_LENGTH:
+        return question
+    cut = question[:TITLE_LENGTH].rsplit(" ", 1)[0]
+    return f"{cut}..."
 
 
 class ChatView(APIView):
@@ -94,7 +111,11 @@ class ChatView(APIView):
                 },
             )
             # touch() so the conversation sorts by recency.
-            conversation.save(update_fields=["updated_at"])
+            update_fields = ["updated_at"]
+            if not conversation.title:
+                conversation.title = _title_from(data["question"])
+                update_fields.append("title")
+            conversation.save(update_fields=update_fields)
 
         record_event(
             user=request.user,
@@ -174,9 +195,44 @@ class ChatView(APIView):
         )
 
 
+class ConversationListView(ListAPIView):
+    """The caller's own conversations, most recent first. Never anyone
+    else's - a conversation is a record of what was disclosed to one user
+    under their own authorization."""
+
+    serializer_class = ConversationSummarySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            Conversation.objects.filter(owner=self.request.user)
+            .annotate(message_count=Count("messages"))
+            .order_by("-updated_at", "-id")
+        )
+
+
 class ConversationDetailView(APIView):
+    """Read, rename or delete one of the caller's conversations.
+
+    Another user's id is a 404, not a 403, for the same reason documents
+    are: a conversation's existence is itself something only its owner
+    should be able to confirm.
+    """
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
         conversation = get_object_or_404(Conversation, id=pk, owner=request.user)
         return Response(ConversationSerializer(conversation).data)
+
+    def patch(self, request, pk):
+        conversation = get_object_or_404(Conversation, id=pk, owner=request.user)
+        serializer = ConversationRenameSerializer(conversation, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ConversationSerializer(conversation).data)
+
+    def delete(self, request, pk):
+        conversation = get_object_or_404(Conversation, id=pk, owner=request.user)
+        conversation.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

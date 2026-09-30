@@ -1,22 +1,11 @@
 from django.contrib import admin
 from django.urls import include, path
-from rest_framework.authtoken.views import ObtainAuthToken
 
-from config.health import health_check
+from accounts.api.views import DepartmentListView
+from config.health import health_check, readiness_check
 from documents.evaluation_api.views import FeedbackView
 from documents.observability.views import metrics_view
-from documents.throttling import LoginRateThrottle
-
-
-class ThrottledObtainAuthToken(ObtainAuthToken):
-    """The login endpoint is the one place an unauthenticated caller can
-    make the server do real work with attacker-chosen input."""
-
-    throttle_classes = [LoginRateThrottle]
-
-
-obtain_auth_token = ThrottledObtainAuthToken.as_view()
-
+from documents.operations.views import DashboardView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -29,9 +18,18 @@ urlpatterns = [
         FeedbackView.as_view(),
         name="message-feedback",
     ),
-    path("api/auth/token/", obtain_auth_token, name="api-token-auth"),
+    # Login, logout, CSRF, password change and API tokens. The token
+    # endpoint keeps its old path and name so existing scripts still work;
+    # it now issues expiring tokens (accounts.authentication).
     path("api/auth/", include("accounts.api.urls")),
+    path("api/departments/", DepartmentListView.as_view(), name="department-list"),
+    path("api/dashboard/", DashboardView.as_view(), name="dashboard"),
+    # Administration: accounts and departments (accounts app), and the
+    # operational read models - audit, jobs, system status (documents app).
+    path("api/admin/", include("accounts.api.admin_urls")),
+    path("api/admin/", include("documents.operations.urls")),
     path("health/", health_check),
+    path("ready/", readiness_check),
     path("metrics", metrics_view, name="metrics"),
 ]
 

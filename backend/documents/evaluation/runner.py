@@ -76,7 +76,12 @@ def capture_configuration() -> dict:
         },
         "retrieval": {
             "depth": getattr(settings, "RAG_RETRIEVAL_DEPTH", None),
-            "relevance_floor": getattr(settings, "RAG_RELEVANCE_FLOOR", None),
+            # The EFFECTIVE floor, not the setting. The setting is unset by
+            # default and each reranker then supplies its own, so recording
+            # the setting stored "None" beside a score that had in fact run
+            # at 0.15 or 0.30 - and two runs at different floors would have
+            # looked identically configured.
+            "relevance_floor": rag.engine.resolve_relevance_floor(reranker),
             "candidates": getattr(settings, "SEARCH_CANDIDATES", None),
             "context_budget": getattr(settings, "RAG_CONTEXT_BUDGET", None),
             "max_passages": getattr(settings, "RAG_MAX_PASSAGES", None),

@@ -17,6 +17,13 @@ class ErrorCode:
     MALWARE_DETECTED = "MALWARE_DETECTED"
     SCAN_FAILED = "SCAN_FAILED"
     INFRASTRUCTURE_ERROR = "INFRASTRUCTURE_ERROR"
+    # The job ran past its Celery soft time limit. Permanent: a document
+    # that took longer than the limit once will take as long again.
+    TIMEOUT = "TIMEOUT"
+    # The job stopped reporting progress - the worker was killed, or hit
+    # its hard time limit, and nothing marked the job finished. Set by
+    # `manage.py recover_stalled_jobs`, never by the pipeline itself.
+    STALLED = "STALLED"
     UNEXPECTED_ERROR = "UNEXPECTED_ERROR"
 
 

@@ -81,8 +81,12 @@ INSTALLED_APPS = [
 ]
 
 REST_FRAMEWORK = {
+    # Tokens for scripts and service clients, and they EXPIRE - see
+    # accounts.authentication. Sessions for the browser: an httpOnly cookie
+    # the frontend's JavaScript cannot read, with CSRF enforced on every
+    # unsafe request by SessionAuthentication.
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.TokenAuthentication",
+        "accounts.authentication.ExpiringTokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
@@ -762,6 +766,24 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.getenv("CELERY_PREFETCH_MULTIPLIER", 
 # pipeline is idempotent per job - see _discard_previous_attempt.
 CELERY_TASK_ACKS_LATE = True
 
+# Time limits. Without them a Tesseract or poppler subprocess that hangs on
+# a pathological page holds its worker forever, and with prefetch at one
+# the queue behind it simply stops. The SOFT limit raises inside the task,
+# which the pipeline records as TIMEOUT - a permanent failure, because a
+# document that took this long once will take as long again. The HARD
+# limit kills the process for a task that ignored the soft one; that job
+# is left PROCESSING, and `manage.py recover_stalled_jobs` is what finds it.
+#
+# 15 minutes is generous for the documents this platform bounds at ingest
+# (50 MB, 500 pages); measure before raising it.
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "900"))
+CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "960"))
+
+# A PROCESSING job whose row has not been touched for this long is presumed
+# lost. Above the hard limit plus Redis's one-hour visibility timeout, so
+# recovery never races a redelivery that is about to finish the job.
+STALLED_JOB_MINUTES = int(os.getenv("STALLED_JOB_MINUTES", "120"))
+
 
 # --- Transport security (spec §21, §13) -----------------------------------
 # Everything here is driven by DEBUG rather than a separate settings module,
@@ -824,6 +846,19 @@ SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = False
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
+
+# Sessions live in Redis with a database copy behind them: a lookup per
+# request is a cache hit, and a Redis restart signs nobody out.
+SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
+
+# An absolute lifetime of one working day rather than Django's two weeks.
+# A records platform left signed in on a shared lab machine for a fortnight
+# is a disclosure waiting for its first passer-by.
+SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", str(8 * 60 * 60)))
+
+# API tokens (scripts, CI, service clients) expire after this many hours
+# and must be re-issued. See accounts.authentication.
+TOKEN_TTL_HOURS = int(os.getenv("TOKEN_TTL_HOURS", "12"))
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"

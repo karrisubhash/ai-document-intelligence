@@ -38,6 +38,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "retrieved",
             "passages_used",
             "duration_ms",
+            "metadata",
             "created_at",
         ]
         read_only_fields = fields
@@ -50,3 +51,27 @@ class ConversationSerializer(serializers.ModelSerializer):
         model = Conversation
         fields = ["id", "title", "department", "created_at", "updated_at", "messages"]
         read_only_fields = fields
+
+
+class ConversationSummarySerializer(serializers.ModelSerializer):
+    message_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Conversation
+        fields = [
+            "id",
+            "title",
+            "department",
+            "created_at",
+            "updated_at",
+            "message_count",
+        ]
+        read_only_fields = fields
+
+
+class ConversationRenameSerializer(serializers.ModelSerializer):
+    title = serializers.CharField(max_length=255, trim_whitespace=True)
+
+    class Meta:
+        model = Conversation
+        fields = ["title"]

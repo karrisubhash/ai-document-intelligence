@@ -110,7 +110,11 @@ def authorized_chunks(user):
     History is still in the database and still reachable through the
     version endpoints. It is simply not what a question gets answered from.
     """
-    documents = authorization.visible_documents(user, Document.objects.all())
+    # Archived documents keep their chunks - restoring one must not need a
+    # re-index - but they are not what a question is answered from.
+    documents = authorization.visible_documents(
+        user, Document.objects.filter(archived_at__isnull=True)
+    )
 
     return DocumentChunk.objects.filter(
         document_version__document__in=documents,

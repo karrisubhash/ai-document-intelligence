@@ -584,7 +584,7 @@ class ContentEndpointTests(IngestionTestCase):
         self.client.force_authenticate(user=outsider)
         result = self.client.get(reverse("document-content", args=[document_id]))
 
-        self.assertEqual(result.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(result.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(
             AuditLog.objects.filter(
                 user=outsider,

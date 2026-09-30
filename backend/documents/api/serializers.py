@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from documents import authorization
 from documents.api import discovery
 from documents.models import (
     ClassificationResult,
@@ -7,6 +8,8 @@ from documents.models import (
     DocumentChunk,
     DocumentChunkEmbedding,
     DocumentContent,
+    DocumentFigure,
+    DocumentTable,
     DocumentVersion,
     ExtractedField,
     ExtractionResult,
@@ -109,6 +112,12 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
 
 class DocumentSerializer(serializers.ModelSerializer):
     current_version = DocumentVersionSerializer(read_only=True)
+    owner_username = serializers.SerializerMethodField()
+    is_archived = serializers.BooleanField(read_only=True)
+    # What the CALLER may do with this document. A hint for the interface -
+    # which buttons to show - and nothing more: every action is decided
+    # again by DocumentAccessPolicy when it is attempted.
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
@@ -118,8 +127,12 @@ class DocumentSerializer(serializers.ModelSerializer):
             "document_type",
             "department",
             "owner",
+            "owner_username",
             "status",
             "current_version",
+            "is_archived",
+            "archived_at",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
@@ -132,9 +145,19 @@ class DocumentSerializer(serializers.ModelSerializer):
             "owner",
             "status",
             "current_version",
+            "archived_at",
             "created_at",
             "updated_at",
         ]
+
+    def get_owner_username(self, document):
+        return document.owner.get_username() if document.owner_id else ""
+
+    def get_can_manage(self, document):
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return authorization.can_manage_document(request.user, document)
 
 
 class DocumentVersionSummarySerializer(serializers.ModelSerializer):
@@ -174,6 +197,8 @@ class DocumentListSerializer(serializers.ModelSerializer):
     """
 
     current_version = DocumentVersionSummarySerializer(read_only=True)
+    owner_username = serializers.SerializerMethodField()
+    is_archived = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Document
@@ -183,12 +208,18 @@ class DocumentListSerializer(serializers.ModelSerializer):
             "document_type",
             "department",
             "owner",
+            "owner_username",
             "status",
             "current_version",
+            "is_archived",
+            "archived_at",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_owner_username(self, document):
+        return document.owner.get_username() if document.owner_id else ""
 
 
 class DocumentListQuerySerializer(serializers.Serializer):
@@ -234,6 +265,14 @@ class DocumentListQuerySerializer(serializers.Serializer):
     updated_after = serializers.CharField(required=False, allow_blank=True, default="")
     updated_before = serializers.CharField(required=False, allow_blank=True, default="")
     ordering = serializers.CharField(required=False, allow_blank=True, default="")
+    # Archived documents are out of the default listing, the way they are
+    # out of search. "true" lists only them; "all" lists both.
+    archived = serializers.ChoiceField(
+        choices=["false", "true", "all"],
+        required=False,
+        allow_blank=True,
+        default="false",
+    )
 
     def validate_owner(self, value):
         if value == "":
@@ -445,5 +484,41 @@ class DocumentChunkSerializer(serializers.ModelSerializer):
             "metadata",
             "created_at",
             "embeddings",
+        ]
+        read_only_fields = fields
+
+
+class DocumentTableSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DocumentTable
+        fields = [
+            "id",
+            "table_index",
+            "page_number",
+            "character_start",
+            "character_end",
+            "header",
+            "rows",
+            "row_count",
+            "column_count",
+            "detector",
+            "detector_version",
+        ]
+        read_only_fields = fields
+
+
+class DocumentFigureSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DocumentFigure
+        fields = [
+            "id",
+            "figure_index",
+            "page_number",
+            "width",
+            "height",
+            "description",
+            "description_source",
+            "detector",
+            "detector_version",
         ]
         read_only_fields = fields

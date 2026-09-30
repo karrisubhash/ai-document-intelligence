@@ -56,6 +56,25 @@ class Document(models.Model):
         default=Status.UPLOADED,
     )
 
+    # Archival - the reversible half of the deletion policy. An archived
+    # document keeps every version, extraction pass and audit row, and the
+    # people who could read it still can; what it loses is reach. It is out
+    # of search, out of RAG and out of the default listing, and it accepts
+    # no new version and no reprocessing until someone restores it.
+    #
+    # A timestamp rather than a status value on purpose: archiving is
+    # orthogonal to processing. A COMPLETED document that is archived is
+    # still completed, and folding the two into one field would make
+    # restoring it a guess about which status it used to have.
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -120,3 +139,7 @@ class Document(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def is_archived(self) -> bool:
+        return self.archived_at is not None

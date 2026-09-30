@@ -211,5 +211,11 @@ def apply(queryset, data: dict):
     if data.get("updated_before") is not None:
         queryset = queryset.filter(updated_at__lte=data["updated_before"])
 
+    archived = data.get("archived") or "false"
+    if archived == "false":
+        queryset = queryset.filter(archived_at__isnull=True)
+    elif archived == "true":
+        queryset = queryset.filter(archived_at__isnull=False)
+
     ordering = _with_tiebreak(data.get("ordering") or DEFAULT_ORDERING)
     return queryset.order_by(*ordering)

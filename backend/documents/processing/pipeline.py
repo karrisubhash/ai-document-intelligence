@@ -1,5 +1,7 @@
+import logging
 import time
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction
 from django.utils import timezone
 
@@ -34,6 +36,8 @@ from .stages import (
     validation,
 )
 from .tables import detector as layout_detector
+
+logger = logging.getLogger("adi.pipeline")
 
 # Bumped whenever the pipeline changes in a way that alters its output,
 # so stored content can be traced back to what produced it.
@@ -75,6 +79,20 @@ def run_pipeline(processing_job_id: int) -> None:
     )
     document_version = job.document_version
     document = document_version.document
+
+    # A message can arrive for a job that no longer wants running. Brokers
+    # redeliver under acks_late, so a job that COMPLETED can be delivered
+    # again and would re-run the whole pipeline; and a job that was
+    # declared STALLED has already been replaced by a fresh one, so running
+    # it would put two passes in a race to be the live one. FAILED jobs are
+    # NOT skipped in general - a retryable failure is marked FAILED and then
+    # retried through this same path.
+    if _is_terminal(job):
+        logger.info(
+            "pipeline.skipped_terminal_job",
+            extra={"job_id": job.id, "status": job.status, "error": job.error_code},
+        )
+        return
 
     _mark_started(job, document)
 
@@ -131,7 +149,7 @@ def _run_stage(job, context, stage, stage_fn) -> None:
         event.status = ProcessingEvent.Status.FAILED
         event.message = str(exc)
         event.metadata = {
-            "error_code": getattr(exc, "code", ErrorCode.UNEXPECTED_ERROR),
+            "error_code": _error_code(exc),
             "duration_seconds": round(time.monotonic() - started, 3),
         }
         event.completed_at = timezone.now()
@@ -139,7 +157,7 @@ def _run_stage(job, context, stage, stage_fn) -> None:
 
         telemetry.stage_failed(
             stage,
-            getattr(exc, "code", ErrorCode.UNEXPECTED_ERROR),
+            _error_code(exc),
             getattr(exc, "retryable", False),
             document_id=job.document_version.document_id,
             job_id=job.id,
@@ -349,8 +367,7 @@ def _mark_started(job: ProcessingJob, document: Document) -> None:
         ]
     )
 
-    document.status = Document.Status.PROCESSING
-    document.save(update_fields=["status", "updated_at"])
+    _set_document_status(job, document, Document.Status.PROCESSING)
 
 
 def _mark_completed(job: ProcessingJob, document: Document) -> None:
@@ -358,11 +375,13 @@ def _mark_completed(job: ProcessingJob, document: Document) -> None:
     job.completed_at = timezone.now()
     job.save(update_fields=["status", "completed_at", "updated_at"])
 
-    document.status = Document.Status.COMPLETED
-    document.save(update_fields=["status", "updated_at"])
+    _set_document_status(job, document, Document.Status.COMPLETED)
 
     telemetry.job_finished(
-        document.status, document_id=document.id, job_id=job.id, attempt=job.attempt
+        Document.Status.COMPLETED,
+        document_id=document.id,
+        job_id=job.id,
+        attempt=job.attempt,
     )
 
 
@@ -370,11 +389,7 @@ def _mark_failed(job: ProcessingJob, document: Document, exc: Exception) -> None
     quarantined = isinstance(exc, DocumentInfected)
 
     job.status = ProcessingJob.Status.FAILED
-    job.error_code = (
-        ErrorCode.MALWARE_DETECTED
-        if quarantined
-        else getattr(exc, "code", ErrorCode.UNEXPECTED_ERROR)
-    )
+    job.error_code = ErrorCode.MALWARE_DETECTED if quarantined else _error_code(exc)
     job.error_message = str(exc)
     job.completed_at = timezone.now()
     job.save(
@@ -390,11 +405,56 @@ def _mark_failed(job: ProcessingJob, document: Document, exc: Exception) -> None
     # A quarantined document is not a failed one. FAILED invites a retry;
     # QUARANTINED is a decision not to touch the file, and collapsing the
     # two would lose exactly the distinction an operator needs (spec 10.1).
-    document.status = (
-        Document.Status.QUARANTINED if quarantined else Document.Status.FAILED
-    )
-    document.save(update_fields=["status", "updated_at"])
+    outcome = Document.Status.QUARANTINED if quarantined else Document.Status.FAILED
+    _set_document_status(job, document, outcome)
 
     telemetry.job_finished(
-        document.status, document_id=document.id, job_id=job.id, attempt=job.attempt
+        outcome, document_id=document.id, job_id=job.id, attempt=job.attempt
     )
+
+
+def _is_terminal(job: ProcessingJob) -> bool:
+    return job.status == ProcessingJob.Status.COMPLETED or (
+        job.status == ProcessingJob.Status.FAILED
+        and job.error_code == ErrorCode.STALLED
+    )
+
+
+def _error_code(exc: Exception) -> str:
+    # Celery raises this INSIDE the task when the soft time limit passes,
+    # so it arrives here like any other exception. Named, because
+    # UNEXPECTED_ERROR on a job that simply took too long sends whoever
+    # reads it looking for a bug.
+    if isinstance(exc, SoftTimeLimitExceeded):
+        return ErrorCode.TIMEOUT
+    return getattr(exc, "code", ErrorCode.UNEXPECTED_ERROR)
+
+
+def _set_document_status(job: ProcessingJob, document: Document, status) -> None:
+    """Move the document's status - but only if this job speaks for it.
+
+    A document's status describes its CURRENT version. Every job used to
+    write it unconditionally, so a job for version 1 that finished after
+    version 2 had been uploaded marked the document COMPLETED while version
+    2 was still queued - or FAILED while version 2 was fine. A failed run on
+    a superseded version must not be able to corrupt the state of the one
+    people are reading.
+
+    One conditional UPDATE, so the check and the write cannot be separated
+    by a concurrent upload.
+    """
+    updated = Document.objects.filter(
+        pk=document.pk, current_version_id=job.document_version_id
+    ).update(status=status, updated_at=timezone.now())
+
+    if updated:
+        document.status = status
+    else:
+        logger.info(
+            "pipeline.status_not_applied",
+            extra={
+                "job_id": job.id,
+                "document_id": document.pk,
+                "reason": "job is for a superseded version",
+            },
+        )
