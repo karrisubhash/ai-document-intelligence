@@ -1,248 +1,416 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { api } from "../api/client";
-import { DOCUMENT_TYPES, type ChatResponse } from "../api/types";
-import { useToken } from "../auth/AuthContext";
-import { Banner, Empty, ErrorBox, Excerpt, Field, Pill } from "../components/ui";
+import { ApiError, api } from "../api/client";
+import { useResource, type Resource } from "../api/hooks";
+import type { Citation, ConversationSummary, Paginated } from "../api/types";
+import {
+  Answer,
+  SourceDialog,
+  fromMessage,
+  fromResponse,
+  type AnswerView,
+} from "../components/chat/Answer";
+import {
+  Alert,
+  Button,
+  ConfirmDialog,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+  errorMessage,
+  useDocumentTitle,
+  useToast,
+} from "../components/ui";
+import { formatRelative } from "../lib/format";
 
-/** Renders [1]-style citation markers as something the eye can follow. */
-function AnswerText({ text }: { text: string }) {
-  const parts = text.split(/(\[\d+\])/g);
-
-  return (
-    <p className="answer">
-      {parts.map((part, index) =>
-        /^\[\d+\]$/.test(part) ? (
-          <span key={index} className="marker">
-            {part}
-          </span>
-        ) : (
-          <span key={index}>{part}</span>
-        ),
-      )}
-    </p>
-  );
+interface Turn {
+  key: string;
+  question: string;
+  answer: AnswerView | null;
+  error?: unknown;
 }
 
-function Turn({ turn }: { turn: ChatResponse }) {
+const SUGGESTIONS = [
+  "What is the minimum attendance required to sit the end-semester examination?",
+  "How long do I have to apply for revaluation?",
+  "What is the hostel curfew on Saturdays?",
+];
+
+function ConversationList({
+  activeId,
+  conversations,
+  onNew,
+  onChanged,
+}: {
+  activeId: number | null;
+  conversations: Resource<Paginated<ConversationSummary>>;
+  onNew: () => void;
+  onChanged: () => void;
+}) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [renaming, setRenaming] = useState<ConversationSummary | null>(null);
+  const [deleting, setDeleting] = useState<ConversationSummary | null>(null);
+  const [title, setTitle] = useState("");
+  const [pending, setPending] = useState(false);
+
   return (
-    <div className="panel">
-      <div className="question">{turn.question}</div>
-
-      {turn.abstained ? (
-        <Banner tone="warn" title="Abstained">
-          {turn.abstention_reason || "No reason recorded."}
-          <div className="small">
-            An abstention is a successful outcome: the alternative is a confident
-            answer with nothing behind it.
-          </div>
-        </Banner>
-      ) : null}
-
-      <AnswerText text={turn.answer} />
-
-      <div className="chips">
-        <Pill tone={turn.model.generative ? "info" : "muted"}>
-          {turn.model.generative
-            ? `generative · ${turn.model.name} ${turn.model.version}`
-            : `extractive · ${turn.model.name} ${turn.model.version}`}
-        </Pill>
-        <Pill tone={turn.retrieval.semantic ? "ok" : "warn"}>
-          {turn.retrieval.semantic ? "semantic retrieval" : "lexical retrieval"}
-        </Pill>
-        <Pill tone={turn.grounding.support_ratio >= 0.5 ? "ok" : "warn"}>
-          support {(turn.grounding.support_ratio * 100).toFixed(0)}%
-        </Pill>
-        {turn.retrieval.suspected_injections > 0 ? (
-          <Pill tone="bad" title="Passages matching prompt-injection patterns">
-            {turn.retrieval.suspected_injections} suspected injection(s)
-          </Pill>
-        ) : null}
-        <Pill tone="muted">{turn.duration_ms} ms</Pill>
-      </div>
-
-      {!turn.model.generative ? (
-        <p className="muted small">
-          The bundled answerer quotes retrieved passages verbatim rather than writing
-          prose. It cannot hallucinate, and it cannot synthesise across passages
-          either.
-        </p>
-      ) : null}
-
-      <div className="fields">
-        <Field label="Retrieved">{turn.retrieval.retrieved}</Field>
-        <Field label="Reranked">{turn.retrieval.reranked}</Field>
-        <Field label="Passages used">{turn.retrieval.passages_used}</Field>
-        <Field label="Reranker">{turn.retrieval.reranker || "—"}</Field>
-      </div>
-
-      {turn.grounding.failures.length > 0 ? (
-        <Banner tone="bad" title="Grounding failures">
-          <ul className="notes">
-            {turn.grounding.failures.map((failure) => (
-              <li key={failure}>{failure}</li>
-            ))}
-          </ul>
-        </Banner>
-      ) : null}
-
-      {turn.citations.length > 0 ? (
-        <div className="citations">
-          <h4>Citations</h4>
-          {turn.citations.map((citation) => (
-            <div key={citation.chunk_id} className="citation">
-              <div className="panel-head">
-                <div>
-                  <span className="marker">[{citation.marker}]</span>{" "}
-                  <Link to={`/documents/${citation.document_id}`}>
-                    {citation.document_title}
-                  </Link>
-                  <span className="muted small">
-                    {" "}
-                    · page {citation.page_number} · chars {citation.character_start}–
-                    {citation.character_end}
-                  </span>
-                </div>
-                <Pill tone="muted">relevance {citation.relevance.toFixed(3)}</Pill>
+    <aside className="conversations" aria-label="Conversations">
+      <Button variant="primary" className="btn-block" onClick={onNew}>
+        New question
+      </Button>
+      {conversations.loading && !conversations.data ? (
+        <Skeleton lines={5} />
+      ) : conversations.error ? (
+        <ErrorState error={conversations.error} onRetry={conversations.reload} />
+      ) : conversations.data?.results.length ? (
+        <ul className="conversation-list">
+          {conversations.data.results.map((conversation) => (
+            <li
+              key={conversation.id}
+              className={`conversation${conversation.id === activeId ? " active" : ""}`}
+            >
+              <Link to={`/ask/${conversation.id}`} className="conversation-link">
+                <span className="conversation-title">
+                  {conversation.title || "Untitled conversation"}
+                </span>
+                <span className="conversation-meta">{formatRelative(conversation.updated_at)}</span>
+              </Link>
+              <div className="conversation-actions">
+                <button
+                  type="button"
+                  className="icon-button icon-button-sm"
+                  aria-label={`Rename ${conversation.title || "conversation"}`}
+                  onClick={() => {
+                    setTitle(conversation.title);
+                    setRenaming(conversation);
+                  }}
+                >
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  className="icon-button icon-button-sm"
+                  aria-label={`Delete ${conversation.title || "conversation"}`}
+                  onClick={() => setDeleting(conversation)}
+                >
+                  🗑
+                </button>
               </div>
-              <Excerpt text={citation.text} limit={400} />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <Empty>No citations — nothing in the answer points at a stored passage.</Empty>
-      )}
-
-      {turn.notes.length > 0 ? (
-        <ul className="notes">
-          {turn.notes.map((note) => (
-            <li key={note}>{note}</li>
+            </li>
           ))}
         </ul>
-      ) : null}
-    </div>
+      ) : (
+        <p className="muted small">Your conversations will appear here.</p>
+      )}
+
+      <Dialog
+        open={Boolean(renaming)}
+        onClose={() => setRenaming(null)}
+        title="Rename conversation"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRenaming(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              loading={pending}
+              disabled={!title.trim()}
+              onClick={async () => {
+                if (!renaming) return;
+                setPending(true);
+                try {
+                  await api.renameConversation(renaming.id, title.trim());
+                  setRenaming(null);
+                  onChanged();
+                } catch (caught) {
+                  toast(errorMessage(caught), "danger");
+                } finally {
+                  setPending(false);
+                }
+              }}
+            >
+              Save
+            </Button>
+          </>
+        }
+      >
+        <label className="field-label" htmlFor="conversation-title">
+          Title
+        </label>
+        <input
+          id="conversation-title"
+          className="input"
+          value={title}
+          maxLength={255}
+          onChange={(event) => setTitle(event.target.value)}
+        />
+      </Dialog>
+
+      <ConfirmDialog
+        open={Boolean(deleting)}
+        title="Delete this conversation?"
+        confirmLabel="Delete"
+        pending={pending}
+        onClose={() => setDeleting(null)}
+        onConfirm={async () => {
+          if (!deleting) return;
+          setPending(true);
+          try {
+            await api.deleteConversation(deleting.id);
+            if (deleting.id === activeId) navigate("/ask", { replace: true });
+            setDeleting(null);
+            onChanged();
+          } catch (caught) {
+            toast(errorMessage(caught), "danger");
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        <p>The questions and answers in it are removed. The documents are not affected.</p>
+      </ConfirmDialog>
+    </aside>
   );
 }
 
 export default function ChatPage() {
-  const token = useToken();
+  useDocumentTitle("Ask");
+  const params = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const conversationId = params.conversationId ? Number(params.conversationId) : null;
 
-  const [question, setQuestion] = useState("");
-  const [documentType, setDocumentType] = useState("");
-  const [department, setDepartment] = useState("");
-  const [conversationId, setConversationId] = useState<number | null>(null);
-  const [turns, setTurns] = useState<ChatResponse[]>([]);
-  const [error, setError] = useState<unknown>(null);
-  const [busy, setBusy] = useState(false);
+  const handoff = (location.state ?? {}) as {
+    question?: string;
+    documentId?: number;
+    documentTitle?: string;
+  };
+  const [scope, setScope] = useState<{ id: number; title: string } | null>(
+    handoff.documentId ? { id: handoff.documentId, title: handoff.documentTitle ?? "" } : null,
+  );
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
+  const conversations = useResource(() => api.conversations(), []);
+  const history = useResource(() => api.conversation(conversationId!), [conversationId], {
+    enabled: conversationId !== null,
+  });
 
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [draft, setDraft] = useState(handoff.question ?? "");
+  const [sending, setSending] = useState(false);
+  const [inspecting, setInspecting] = useState<{ citation: Citation; quote: string } | null>(
+    null,
+  );
+  const thread = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  // Which conversation the turns on screen belong to. A conversation this
+  // page has just created already shows its turns with their live response
+  // data, so it is not rebuilt from history; any OTHER conversation is.
+  const [turnsFor, setTurnsFor] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (conversationId === null) {
+      setTurns([]);
+      setTurnsFor(null);
+      return;
+    }
+    if (turnsFor === conversationId) return;
+    if (!history.data || history.data.id !== conversationId) return;
+    const rebuilt: Turn[] = [];
+    const messages = history.data.messages;
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
+      if (message.role !== "USER") continue;
+      const reply = messages[index + 1];
+      rebuilt.push({
+        key: `m${message.id}`,
+        question: message.content,
+        answer: reply && reply.role === "ASSISTANT" ? fromMessage(reply) : null,
+      });
+    }
+    setTurns(rebuilt);
+    setTurnsFor(conversationId);
+  }, [conversationId, history.data, turnsFor]);
+
+  useEffect(() => {
+    thread.current?.scrollTo({ top: thread.current.scrollHeight, behavior: "smooth" });
+  }, [turns]);
+
+  // A question handed over from the dashboard or search is sent at once.
+  const sentHandoff = useRef(false);
+  useEffect(() => {
+    if (handoff.question && !sentHandoff.current && conversationId === null) {
+      sentHandoff.current = true;
+      void send(handoff.question);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const send = async (text: string) => {
+    const question = text.trim();
+    if (!question || sending) return;
+    const key = `t${Date.now()}`;
+    setTurns((current) => [...current, { key, question, answer: null }]);
+    setDraft("");
+    setSending(true);
     try {
-      const answer = await api.chat(token, {
+      const response = await api.chat({
         question,
         conversation_id: conversationId,
-        document_type: documentType,
-        department,
+        ...(scope ? { document_id: scope.id } : {}),
       });
-
-      setConversationId(answer.conversation_id);
-      setTurns((current) => [answer, ...current]);
-      setQuestion("");
+      setTurns((current) =>
+        current.map((turn) => (turn.key === key ? { ...turn, answer: fromResponse(response) } : turn)),
+      );
+      if (conversationId === null) {
+        setTurnsFor(response.conversation_id);
+        navigate(`/ask/${response.conversation_id}`, { replace: true, state: {} });
+      }
+      conversations.reload();
     } catch (caught) {
-      setError(caught);
+      setTurns((current) =>
+        current.map((turn) => (turn.key === key ? { ...turn, error: caught } : turn)),
+      );
     } finally {
-      setBusy(false);
+      setSending(false);
+      composer.current?.focus();
     }
-  }
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void send(draft);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void send(draft);
+    }
+  };
+
+  const startNew = () => {
+    setTurns([]);
+    setScope(null);
+    navigate("/ask");
+    composer.current?.focus();
+  };
+
+  const loadingHistory = conversationId !== null && history.loading && !turns.length;
 
   return (
-    <div className="stack">
-      <form className="card" onSubmit={submit}>
-        <div className="card-head">
-          <h2>Ask</h2>
-          <div className="card-head-right">
-            {conversationId ? (
-              <Pill tone="muted">conversation #{conversationId}</Pill>
-            ) : null}
-            <button
-              type="button"
-              className="button button-quiet"
-              disabled={busy || conversationId === null}
-              onClick={() => {
-                setConversationId(null);
-                setTurns([]);
-              }}
-            >
-              New conversation
-            </button>
-          </div>
-        </div>
+    <div className="chat">
+      <ConversationList
+        activeId={conversationId}
+        conversations={conversations}
+        onNew={startNew}
+        onChanged={conversations.reload}
+      />
 
-        <p className="muted">
-          Retrieval → reranking → context → answer, over the documents you are
-          authorized to read. Every answer carries its citations, its grounding
-          check, and what produced it.
-        </p>
-
-        <label>
-          <span>Question</span>
-          <textarea
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            rows={3}
-            placeholder="What is the minimum attendance requirement?"
-            required
-          />
-        </label>
-
-        <div className="row">
-          <label>
-            <span>Type</span>
-            <select
-              value={documentType}
-              onChange={(event) => setDocumentType(event.target.value)}
-            >
-              <option value="">any</option>
-              {DOCUMENT_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            <span>Department</span>
-            <input
-              value={department}
-              onChange={(event) => setDepartment(event.target.value)}
-              placeholder="any"
+      <section className="chat-main" aria-label="Conversation">
+        <div className="thread" ref={thread} aria-live="polite" aria-busy={sending}>
+          {history.error && conversationId !== null && !turns.length ? (
+            <ErrorState
+              error={history.error}
+              title="This conversation could not be opened"
             />
+          ) : loadingHistory ? (
+            <Skeleton lines={6} />
+          ) : !turns.length ? (
+            <EmptyState title="Ask a question about your documents" icon="✦">
+              <p>
+                Answers are built only from documents you are allowed to read, and every claim
+                cites the passage it came from. When the documents do not say, you will be told
+                so instead of getting a guess.
+              </p>
+              <div className="suggestions">
+                {SUGGESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    className="chip"
+                    onClick={() => void send(suggestion)}
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </EmptyState>
+          ) : (
+            turns.map((turn) => (
+              <article key={turn.key} className="turn">
+                <div className="bubble bubble-user">
+                  <p>{turn.question}</p>
+                </div>
+                <div className="bubble bubble-assistant">
+                  {turn.answer ? (
+                    <Answer
+                      answer={turn.answer}
+                      onInspect={(citation, quote) => setInspecting({ citation, quote })}
+                    />
+                  ) : turn.error ? (
+                    <Alert tone="danger" title="No answer">
+                      {turn.error instanceof ApiError && turn.error.status === 429
+                        ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
+                        : errorMessage(turn.error)}
+                    </Alert>
+                  ) : (
+                    <div className="thinking">
+                      <span className="spinner" aria-hidden="true" />
+                      <span>Searching your documents and checking the evidence…</span>
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+
+        <form className="composer" onSubmit={submit}>
+          {scope ? (
+            <div className="scope">
+              <span>
+                Asking about <strong>{scope.title || `document ${scope.id}`}</strong> only
+              </span>
+              <button type="button" className="link-button" onClick={() => setScope(null)}>
+                Search all documents
+              </button>
+            </div>
+          ) : null}
+          <label htmlFor="composer" className="visually-hidden">
+            Your question
           </label>
-        </div>
+          <div className="composer-row">
+            <textarea
+              id="composer"
+              ref={composer}
+              className="input composer-input"
+              rows={2}
+              maxLength={2000}
+              placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            <Button type="submit" variant="primary" loading={sending} disabled={!draft.trim()}>
+              Ask
+            </Button>
+          </div>
+          <p className="composer-hint muted small">
+            Follow-up questions like “what about MECH?” use this conversation for context.
+          </p>
+        </form>
+      </section>
 
-        <ErrorBox error={error} />
-
-        <button className="button" type="submit" disabled={busy || !question.trim()}>
-          {busy ? "Thinking…" : "Ask"}
-        </button>
-      </form>
-
-      {turns.length === 0 ? (
-        <div className="card">
-          <Empty>No questions asked in this conversation yet.</Empty>
-        </div>
-      ) : (
-        <div className="stack">
-          {turns.map((turn) => (
-            <Turn key={turn.message_id} turn={turn} />
-          ))}
-        </div>
-      )}
+      <SourceDialog
+        citation={inspecting?.citation ?? null}
+        quote={inspecting?.quote}
+        onClose={() => setInspecting(null)}
+      />
     </div>
   );
 }

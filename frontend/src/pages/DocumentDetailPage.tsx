@@ -1,283 +1,471 @@
-import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useState, type FormEvent } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { api } from "../api/client";
-import { usePolling, useResource } from "../api/hooks";
-import { DOCUMENT_TYPES, type DocumentType } from "../api/types";
-import { useToken } from "../auth/AuthContext";
-import ChunksTab from "../components/tabs/ChunksTab";
-import ClassificationTab from "../components/tabs/ClassificationTab";
-import ContentTab from "../components/tabs/ContentTab";
-import FieldsTab from "../components/tabs/FieldsTab";
-import PipelineTab from "../components/tabs/PipelineTab";
+import { ApiError, api, saveBlob } from "../api/client";
+import { useAction, usePolling, useResource } from "../api/hooks";
+import { DOCUMENT_TYPES, type DocumentDetail, type DocumentType } from "../api/types";
 import {
-  Empty,
-  ErrorBox,
+  ContentPanel,
+  FieldsPanel,
+  FiguresPanel,
+  PreviewPanel,
+  ProcessingPanel,
+  TablesPanel,
+} from "../components/document/Panels";
+import VersionsPanel from "../components/document/VersionsPanel";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  ConfirmDialog,
+  DescriptionList,
+  Dialog,
+  ErrorState,
   Field,
-  Pill,
-  Spinner,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+  TabPanel,
   Tabs,
-  formatBytes,
-  formatTime,
-  toneForDocumentStatus,
+  errorMessage,
+  useDocumentTitle,
+  useToast,
 } from "../components/ui";
+import { formatBytes, formatDateTime, formatPercent } from "../lib/format";
+import { IN_FLIGHT, TYPE_LABEL, humanize } from "../lib/labels";
 
 const TABS = [
-  { id: "pipeline", label: "Pipeline" },
-  { id: "content", label: "Content" },
-  { id: "classification", label: "Classification" },
+  { id: "overview", label: "Overview" },
+  { id: "preview", label: "Preview" },
+  { id: "text", label: "Text" },
   { id: "fields", label: "Fields" },
-  { id: "chunks", label: "Chunks" },
+  { id: "tables", label: "Tables" },
+  { id: "figures", label: "Figures" },
   { id: "versions", label: "Versions" },
-] as const;
+  { id: "processing", label: "Processing" },
+];
 
-type TabId = (typeof TABS)[number]["id"];
-
-const IN_FLIGHT = new Set(["UPLOADED", "QUEUED", "PROCESSING"]);
-
-export default function DocumentDetailPage() {
-  const token = useToken();
-  const navigate = useNavigate();
-  const params = useParams();
-  const documentId = Number(params.id);
-
-  const [tab, setTab] = useState<TabId>("pipeline");
-  const [action, setAction] = useState<unknown>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const document = useResource(() => api.document(token, documentId), [token, documentId]);
-  const jobs = useResource(() => api.processing(token, documentId), [token, documentId]);
-  const versions = useResource(() => api.versions(token, documentId), [token, documentId]);
-
-  const inFlight =
-    (document.data ? IN_FLIGHT.has(document.data.status) : false) ||
-    (jobs.data ?? []).some((job) => job.status === "QUEUED" || job.status === "PROCESSING");
-
-  usePolling(() => {
-    document.reload();
-    jobs.reload();
-  }, inFlight);
-
-  // Derived output (content, classification, fields, chunks) only changes
-  // when the pipeline writes something, so keying the tabs on the
-  // document's own updated_at refreshes them exactly then - and not on
-  // every poll tick.
-  const refreshKey = document.data
-    ? `${document.data.status}:${document.data.updated_at}`
-    : "initial";
-
-  async function run(label: string, task: () => Promise<unknown>) {
-    setBusy(true);
-    setAction(null);
-    setNotice(null);
-
-    try {
-      await task();
-      setNotice(label);
-      document.reload();
-      jobs.reload();
-      versions.reload();
-    } catch (caught) {
-      setAction(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (document.loading && !document.data) return <Spinner />;
-  if (document.error) return <ErrorBox error={document.error} />;
-  if (!document.data) return null;
-
-  const doc = document.data;
-  const version = doc.current_version;
+function Overview({ document }: { document: DocumentDetail }) {
+  const classification = useResource(
+    () => api.classification(document.id),
+    [document.id, document.status],
+  );
+  const version = document.current_version;
+  const verdict = classification.data?.[0];
 
   return (
-    <div className="stack">
-      <div className="card">
-        <div className="card-head">
-          <div>
-            <Link to="/documents" className="link">
-              ← Documents
-            </Link>
-            <h2 className="title-row">
-              {doc.title}
-              <Pill tone={toneForDocumentStatus(doc.status)}>{doc.status}</Pill>
-              {inFlight ? <Pill tone="busy">following…</Pill> : null}
-            </h2>
-          </div>
-        </div>
+    <div className="grid-2">
+      <Card title="Details">
+        <DescriptionList
+          items={[
+            ["Type", TYPE_LABEL[document.document_type]],
+            ["Department", document.department || "None (visible to the owner only)"],
+            ["Owner", document.owner_username || "—"],
+            ["Status", <StatusBadge key="s" status={document.status} />],
+            ["Created", formatDateTime(document.created_at)],
+            ["Last updated", formatDateTime(document.updated_at)],
+            ...(document.is_archived
+              ? ([["Archived", formatDateTime(document.archived_at)]] as [string, string][])
+              : []),
+          ]}
+        />
+      </Card>
+      <div className="stack">
+        <Card title="Current file">
+          {version ? (
+            <DescriptionList
+              items={[
+                ["File", version.file_name],
+                ["Version", `v${version.version_number}`],
+                ["Size", formatBytes(version.file_size)],
+                ["Format", version.mime_type || "—"],
+                ["Uploaded", formatDateTime(version.created_at)],
+              ]}
+            />
+          ) : (
+            <p className="muted">No file has been uploaded.</p>
+          )}
+        </Card>
+        <Card title="Classification">
+          {classification.loading && !classification.data ? (
+            <Skeleton lines={2} />
+          ) : verdict ? (
+            <DescriptionList
+              items={[
+                [
+                  "Predicted type",
+                  verdict.predicted_label ? humanize(verdict.predicted_label) : "Unsure — abstained",
+                ],
+                ["Confidence", formatPercent(verdict.confidence)],
+                ["Model", `${verdict.model_name} ${verdict.model_version}`],
+              ]}
+            />
+          ) : (
+            <p className="muted">
+              Not classified. Classification runs only when a classifier is configured; it
+              never guesses a label.
+            </p>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
 
-        <div className="fields">
-          <Field label="ID">{doc.id}</Field>
-          <Field label="Type">
+function EditDialog({
+  document,
+  open,
+  onClose,
+  onSaved,
+}: {
+  document: DocumentDetail;
+  open: boolean;
+  onClose: () => void;
+  onSaved: (document: DocumentDetail) => void;
+}) {
+  const [title, setTitle] = useState(document.title);
+  const [type, setType] = useState<DocumentType>(document.document_type);
+  const save = useAction((next: { title: string; document_type: DocumentType }) =>
+    api.updateDocument(document.id, next),
+  );
+  const fieldErrors = save.error instanceof ApiError ? save.error.fieldErrors() : {};
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const result = await save.run({ title: title.trim(), document_type: type });
+    if (result.ok) onSaved(result.value);
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Edit details"
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" form="edit-document" loading={save.pending}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <form id="edit-document" className="stack" onSubmit={submit}>
+        <Field label="Title" error={fieldErrors.title} required>
+          {(props) => (
+            <input
+              {...props}
+              className="input"
+              value={title}
+              maxLength={255}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          )}
+        </Field>
+        <Field label="Type" error={fieldErrors.document_type}>
+          {(props) => (
             <select
-              value={doc.document_type}
-              disabled={busy}
-              onChange={(event) =>
-                run("Type updated.", () =>
-                  api.updateDocument(token, doc.id, {
-                    document_type: event.target.value as DocumentType,
-                  }),
-                )
-              }
+              {...props}
+              className="input"
+              value={type}
+              onChange={(event) => setType(event.target.value as DocumentType)}
             >
-              {DOCUMENT_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
+              {DOCUMENT_TYPES.map((value) => (
+                <option key={value} value={value}>
+                  {TYPE_LABEL[value]}
                 </option>
               ))}
             </select>
-          </Field>
-          <Field label="Department">
-            {doc.department || <span className="muted">unset</span>}
-          </Field>
-          <Field label="Owner">{doc.owner ?? "—"}</Field>
-          <Field label="Uploaded">{formatTime(doc.created_at)}</Field>
-          <Field label="Updated">{formatTime(doc.updated_at)}</Field>
-        </div>
+          )}
+        </Field>
+        <p className="muted small">
+          The department cannot be changed here: it decides who may read the document.
+        </p>
+        {save.error && !Object.keys(fieldErrors).length ? (
+          <Alert tone="danger">{errorMessage(save.error)}</Alert>
+        ) : null}
+      </form>
+    </Dialog>
+  );
+}
 
-        {version ? (
-          <div className="fields">
-            <Field label="Version">v{version.version_number}</Field>
-            <Field label="File">{version.file_name}</Field>
-            <Field label="Size">{formatBytes(version.file_size)}</Field>
-            <Field label="MIME">{version.mime_type || "—"}</Field>
-            <Field label="SHA-256">
-              <code className="mono small">{version.checksum}</code>
-            </Field>
-          </div>
-        ) : (
-          <Empty>This document has no version.</Empty>
-        )}
+export default function DocumentDetailPage() {
+  const { id } = useParams();
+  const documentId = Number(id);
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [params, setParams] = useSearchParams();
+  const tab = TABS.some((item) => item.id === params.get("tab")) ? params.get("tab")! : "overview";
 
-        <div className="actions">
-          <button
-            className="button"
-            disabled={busy}
-            onClick={() =>
-              run("202 Accepted — reprocess queued.", () => api.reprocess(token, doc.id))
-            }
-          >
-            Reprocess
-          </button>
+  const resource = useResource(() => api.document(documentId), [documentId], {
+    enabled: Number.isFinite(documentId),
+  });
+  const document = resource.data;
+  useDocumentTitle(document?.title ?? "Document");
+  usePolling(resource.reload, Boolean(document && IN_FLIGHT.includes(document.status)));
 
-          <button
-            className="button button-quiet"
-            disabled={busy || !version}
-            onClick={() =>
-              run("Downloaded.", () =>
-                api.download(token, doc.id, version?.file_name ?? `document-${doc.id}`),
-              )
-            }
-          >
-            Download original
-          </button>
+  const [editing, setEditing] = useState(false);
+  const [confirm, setConfirm] = useState<"delete" | "archive" | null>(null);
 
-          <label className="button button-quiet file-button">
-            Upload new version
-            <input
-              type="file"
-              disabled={busy}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                void run("202 Accepted — new version queued.", () =>
-                  api.uploadVersion(token, doc.id, file),
-                );
-                event.target.value = "";
-              }}
-            />
-          </label>
+  const reprocess = useAction(() => api.reprocess(documentId));
+  const archive = useAction(() =>
+    document?.is_archived ? api.restore(documentId) : api.archive(documentId),
+  );
+  const remove = useAction(() => api.deleteDocument(documentId));
+  const [downloading, setDownloading] = useState(false);
 
-          <button
-            className="button button-danger"
-            disabled={busy}
-            onClick={() => {
-              if (!window.confirm(`Delete "${doc.title}" and all of its versions?`)) {
-                return;
+  const selectTab = (next: string) => {
+    const nextParams = new URLSearchParams();
+    nextParams.set("tab", next);
+    setParams(nextParams, { replace: true });
+  };
+
+  if (!Number.isFinite(documentId)) return <ErrorState error={new Error("Invalid document id")} />;
+  if (resource.loading && !document) {
+    return (
+      <div className="page">
+        <Skeleton lines={3} />
+      </div>
+    );
+  }
+  if (resource.error || !document) {
+    return (
+      <div className="page">
+        <ErrorState
+          error={resource.error}
+          onRetry={resource.reload}
+          title="This document could not be opened"
+        />
+        <p>
+          <Link to="/documents" className="link">
+            Back to documents
+          </Link>
+        </p>
+      </div>
+    );
+  }
+
+  const version = document.current_version;
+  const page = Number(params.get("page") || "1") || 1;
+  const start = params.has("start") ? Number(params.get("start")) : null;
+  const end = params.has("end") ? Number(params.get("end")) : null;
+
+  const runReprocess = async () => {
+    const result = await reprocess.run();
+    if (result.ok) {
+      toast("Reprocessing started.");
+      resource.reload();
+      selectTab("processing");
+    }
+  };
+
+  const download = async () => {
+    if (!version) return;
+    setDownloading(true);
+    try {
+      saveBlob(await api.fileBlob(document.id), version.file_name);
+    } catch (caught) {
+      toast(errorMessage(caught), "danger");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="page">
+      <nav aria-label="Breadcrumb" className="breadcrumb">
+        <Link to="/documents">Documents</Link>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{document.title}</span>
+      </nav>
+
+      <PageHeader
+        title={document.title}
+        description={
+          <span className="badge-row">
+            <StatusBadge status={document.status} />
+            <Badge tone="neutral">{TYPE_LABEL[document.document_type]}</Badge>
+            {document.department ? <Badge tone="neutral">{document.department}</Badge> : null}
+            {document.is_archived ? <Badge tone="muted">Archived</Badge> : null}
+            {version ? (
+              <span className="muted small">
+                {version.file_name} · v{version.version_number} · {formatBytes(version.file_size)}
+              </span>
+            ) : null}
+          </span>
+        }
+        actions={
+          <div className="button-row">
+            <Button
+              variant="primary"
+              disabled={document.status !== "COMPLETED" || document.is_archived}
+              title={
+                document.is_archived
+                  ? "Archived documents are not searched"
+                  : document.status !== "COMPLETED"
+                    ? "Available once processing has finished"
+                    : undefined
               }
-              void api
-                .deleteDocument(token, doc.id)
-                .then(() => navigate("/documents"))
-                .catch(setAction);
+              onClick={() =>
+                navigate("/ask", { state: { documentId: document.id, documentTitle: document.title } })
+              }
+            >
+              Ask about this document
+            </Button>
+            <Button onClick={download} loading={downloading} disabled={!version}>
+              Download
+            </Button>
+            {document.can_manage ? (
+              <>
+                <Button onClick={() => setEditing(true)}>Edit</Button>
+                <Button
+                  onClick={runReprocess}
+                  loading={reprocess.pending}
+                  disabled={document.is_archived || !version}
+                >
+                  Reprocess
+                </Button>
+                <Button onClick={() => setConfirm("archive")}>
+                  {document.is_archived ? "Restore" : "Archive"}
+                </Button>
+                <Button variant="danger" onClick={() => setConfirm("delete")}>
+                  Delete
+                </Button>
+              </>
+            ) : null}
+          </div>
+        }
+      />
+
+      {reprocess.error ? (
+        <Alert
+          tone={reprocess.error instanceof ApiError && reprocess.error.status === 409 ? "info" : "danger"}
+          title={
+            reprocess.error instanceof ApiError && reprocess.error.status === 409
+              ? "Already processing"
+              : "Could not reprocess"
+          }
+        >
+          {reprocess.error instanceof ApiError && reprocess.error.status === 409
+            ? "A run for this version is already queued or in progress. Follow it on the Processing tab."
+            : errorMessage(reprocess.error)}
+        </Alert>
+      ) : null}
+
+      {document.status === "QUARANTINED" ? (
+        <Alert tone="warning" title="Quarantined by the security scan">
+          This file was not processed because the scan found something it will not open —
+          for example a disguised executable, macros or active content. It is kept for review
+          but is not searchable or previewable.
+        </Alert>
+      ) : document.status === "FAILED" ? (
+        <Alert tone="danger" title="Processing failed">
+          The Processing tab shows which stage failed and why.
+          {document.can_manage ? " You can reprocess it after fixing the cause." : ""}
+        </Alert>
+      ) : document.is_archived ? (
+        <Alert tone="info" title="Archived">
+          Archived documents keep their history but are left out of search and answers.
+        </Alert>
+      ) : null}
+
+      <Tabs tabs={TABS} selected={tab} onSelect={selectTab} label="Document sections" />
+      <TabPanel id={tab}>
+        {tab === "overview" ? <Overview document={document} /> : null}
+        {tab === "preview" ? <PreviewPanel document={document} /> : null}
+        {tab === "text" ? (
+          <ContentPanel
+            document={document}
+            page={page}
+            start={start}
+            end={end}
+            onPage={(next) => {
+              const nextParams = new URLSearchParams();
+              nextParams.set("tab", "text");
+              nextParams.set("page", String(next));
+              setParams(nextParams, { replace: true });
             }}
-          >
-            Delete
-          </button>
-        </div>
+          />
+        ) : null}
+        {tab === "fields" ? <FieldsPanel document={document} /> : null}
+        {tab === "tables" ? <TablesPanel document={document} /> : null}
+        {tab === "figures" ? <FiguresPanel document={document} /> : null}
+        {tab === "versions" ? (
+          <VersionsPanel document={document} onChanged={resource.reload} />
+        ) : null}
+        {tab === "processing" ? (
+          <ProcessingPanel document={document} onSettled={resource.reload} />
+        ) : null}
+      </TabPanel>
 
-        {notice ? <div className="banner banner-ok">{notice}</div> : null}
-        <ErrorBox error={action} />
-      </div>
+      {editing ? (
+        <EditDialog
+          document={document}
+          open={editing}
+          onClose={() => setEditing(false)}
+          onSaved={(saved) => {
+            setEditing(false);
+            resource.setData({ ...document, ...saved });
+            toast("Details saved.");
+          }}
+        />
+      ) : null}
 
-      <div className="card">
-        <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <ConfirmDialog
+        open={confirm === "archive"}
+        title={document.is_archived ? "Restore this document?" : "Archive this document?"}
+        confirmLabel={document.is_archived ? "Restore" : "Archive"}
+        tone="primary"
+        pending={archive.pending}
+        error={archive.error}
+        onClose={() => {
+          archive.clearError();
+          setConfirm(null);
+        }}
+        onConfirm={async () => {
+          const result = await archive.run();
+          if (result.ok) {
+            resource.setData({ ...document, ...result.value });
+            setConfirm(null);
+            toast(result.value.is_archived ? "Document archived." : "Document restored.");
+          }
+        }}
+      >
+        <p>
+          {document.is_archived
+            ? "It will be searchable again and included in answers straight away — nothing needs re-indexing."
+            : "It stays readable here with its full history, but is left out of search and answers and accepts no new versions until restored."}
+        </p>
+      </ConfirmDialog>
 
-        <div className="tab-body">
-          {tab === "pipeline" ? (
-            <>
-              <ErrorBox error={jobs.error} />
-              <PipelineTab jobs={jobs.data ?? []} />
-            </>
-          ) : null}
-
-          {tab === "content" ? (
-            <ContentTab documentId={doc.id} refreshKey={refreshKey} />
-          ) : null}
-
-          {tab === "classification" ? (
-            <ClassificationTab documentId={doc.id} refreshKey={refreshKey} />
-          ) : null}
-
-          {tab === "fields" ? (
-            <FieldsTab documentId={doc.id} refreshKey={refreshKey} />
-          ) : null}
-
-          {tab === "chunks" ? (
-            <ChunksTab documentId={doc.id} refreshKey={refreshKey} />
-          ) : null}
-
-          {tab === "versions" ? (
-            <>
-              <ErrorBox error={versions.error} />
-              {(versions.data ?? []).length === 0 ? (
-                <Empty>No versions recorded.</Empty>
-              ) : (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>File</th>
-                      <th>Size</th>
-                      <th>MIME</th>
-                      <th>SHA-256</th>
-                      <th>Uploaded</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(versions.data ?? []).map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          v{item.version_number}
-                          {version?.id === item.id ? (
-                            <span className="muted small"> · current</span>
-                          ) : null}
-                        </td>
-                        <td>{item.file_name}</td>
-                        <td className="muted small">{formatBytes(item.file_size)}</td>
-                        <td className="muted small">{item.mime_type || "—"}</td>
-                        <td className="mono small truncate">{item.checksum}</td>
-                        <td className="muted small">{formatTime(item.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </>
-          ) : null}
-        </div>
-      </div>
+      <ConfirmDialog
+        open={confirm === "delete"}
+        title="Delete this document permanently?"
+        confirmLabel="Delete permanently"
+        pending={remove.pending}
+        error={remove.error}
+        onClose={() => {
+          remove.clearError();
+          setConfirm(null);
+        }}
+        onConfirm={async () => {
+          const result = await remove.run();
+          if (result.ok) {
+            toast("Document deleted.");
+            navigate("/documents", { replace: true });
+          }
+        }}
+      >
+        <p>
+          Every version, its extracted text and its search index are removed, and the files
+          are deleted from storage. The audit trail keeps a record that it existed. This
+          cannot be undone — archive it instead if it may be needed again.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

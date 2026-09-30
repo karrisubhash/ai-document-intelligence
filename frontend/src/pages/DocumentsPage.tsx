@@ -1,230 +1,279 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api/client";
-import { useResource, usePolling } from "../api/hooks";
-import { DOCUMENT_TYPES, type DocumentType } from "../api/types";
-import { useAuth, useToken } from "../auth/AuthContext";
+import { useDebouncedValue, usePolling, useResource } from "../api/hooks";
+import { DOCUMENT_STATUSES, DOCUMENT_TYPES } from "../api/types";
+import UploadDialog from "../components/UploadDialog";
 import {
-  Empty,
-  ErrorBox,
-  Pill,
-  Spinner,
-  formatBytes,
-  formatTime,
-  toneForDocumentStatus,
+  Badge,
+  Button,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Pagination,
+  Skeleton,
+  StatusBadge,
+  useDocumentTitle,
 } from "../components/ui";
+import { formatBytes, formatRelative } from "../lib/format";
+import { IN_FLIGHT, STATUS_LABEL, TYPE_LABEL } from "../lib/labels";
 
-const IN_FLIGHT = new Set(["UPLOADED", "QUEUED", "PROCESSING"]);
-
-function UploadForm({ onUploaded }: { onUploaded: () => void }) {
-  const token = useToken();
-  const { me } = useAuth();
-
-  const [title, setTitle] = useState("");
-  const [documentType, setDocumentType] = useState<DocumentType>("GENERAL");
-  const [department, setDepartment] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [accepted, setAccepted] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  // Only a system admin may file a document outside their own department;
-  // the API pins everyone else's upload to their profile regardless of
-  // what is sent, so offering the input to them would be a lie.
-  const canChooseDepartment = me?.role === "SYSTEM_ADMIN";
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!file) return;
-
-    setBusy(true);
-    setError(null);
-    setAccepted(null);
-
-    try {
-      const created = await api.upload(token, {
-        title,
-        document_type: documentType,
-        department: canChooseDepartment ? department : undefined,
-        file,
-      });
-
-      setAccepted(
-        `202 Accepted — document #${created.id} queued. Processing runs in the worker.`,
-      );
-      setTitle("");
-      setFile(null);
-      (event.target as HTMLFormElement).reset();
-      onUploaded();
-    } catch (caught) {
-      setError(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form className="card" onSubmit={submit}>
-      <h2>Upload</h2>
-
-      <div className="row">
-        <label className="grow">
-          <span>Title</span>
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Exam Regulations 2024"
-            required
-          />
-        </label>
-
-        <label>
-          <span>Type</span>
-          <select
-            value={documentType}
-            onChange={(event) => setDocumentType(event.target.value as DocumentType)}
-          >
-            {DOCUMENT_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {canChooseDepartment ? (
-          <label>
-            <span>Department</span>
-            <input
-              value={department}
-              onChange={(event) => setDepartment(event.target.value)}
-              placeholder={me?.department || "unset"}
-            />
-          </label>
-        ) : null}
-      </div>
-
-      <label>
-        <span>File — PDF, DOCX, TXT or image</span>
-        <input
-          type="file"
-          accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.tif,.tiff"
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-          required
-        />
-      </label>
-
-      <ErrorBox error={error} />
-      {accepted ? <div className="banner banner-ok">{accepted}</div> : null}
-
-      <button className="button" type="submit" disabled={busy || !file}>
-        {busy ? "Uploading…" : "Upload"}
-      </button>
-    </form>
-  );
-}
+const SORTS: [string, string][] = [
+  ["-updated_at", "Recently updated"],
+  ["-created_at", "Newest first"],
+  ["created_at", "Oldest first"],
+  ["title", "Title A–Z"],
+  ["-title", "Title Z–A"],
+  ["status", "Status"],
+];
 
 export default function DocumentsPage() {
-  const token = useToken();
-  const [page, setPage] = useState(1);
+  useDocumentTitle("Documents");
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const [uploading, setUploading] = useState(false);
 
-  const documents = useResource(() => api.documents(token, page), [token, page]);
+  const page = Number(params.get("page") || "1") || 1;
+  const status = params.get("status") ?? "";
+  const documentType = params.get("type") ?? "";
+  const department = params.get("department") ?? "";
+  const ordering = params.get("sort") ?? "-updated_at";
+  const archived = (params.get("archived") as "false" | "true" | "all" | null) ?? "false";
+  const mine = params.get("mine") === "1";
 
-  // Follow anything still moving through the pipeline. Upload returns 202
-  // and the worker does the rest, so without this the list would show a
-  // queued document forever until someone reloaded the page.
-  const inFlight = (documents.data?.results ?? []).some((doc) =>
-    IN_FLIGHT.has(doc.status),
+  const [searchInput, setSearchInput] = useState(params.get("q") ?? "");
+  const search = useDebouncedValue(searchInput.trim(), 350);
+
+  const update = (changes: Record<string, string>) => {
+    const next = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(changes)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    // Any change to what is being listed starts again at page one.
+    if (!("page" in changes)) next.delete("page");
+    setParams(next, { replace: true });
+  };
+
+  useEffect(() => {
+    if (search !== (params.get("q") ?? "")) update({ q: search });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  const departments = useResource(() => api.departments(), []);
+  const documents = useResource(
+    () =>
+      api.documents({
+        page,
+        search,
+        status,
+        document_type: documentType,
+        department,
+        ordering,
+        archived,
+        owner: mine ? "me" : undefined,
+      }),
+    [page, search, status, documentType, department, ordering, archived, mine],
   );
-  usePolling(documents.reload, inFlight);
+
+  const rows = documents.data?.results ?? [];
+  const anyInFlight = rows.some((row) => IN_FLIGHT.includes(row.status));
+  usePolling(documents.reload, anyInFlight);
+
+  const filtered = Boolean(search || status || documentType || department || mine);
 
   return (
-    <div className="stack">
-      <UploadForm onUploaded={documents.reload} />
+    <div className="page">
+      <PageHeader
+        title="Documents"
+        description="Everything you have access to. Uploads are scanned, read and indexed in the background."
+        actions={
+          <Button variant="primary" onClick={() => setUploading(true)}>
+            Upload document
+          </Button>
+        }
+      />
 
-      <section className="card">
-        <div className="card-head">
-          <h2>Documents</h2>
-          <div className="card-head-right">
-            {inFlight ? <Pill tone="busy">following the queue…</Pill> : null}
-            <button className="button button-quiet" onClick={documents.reload}>
-              Refresh
+      <div className="toolbar" role="search" aria-label="Filter documents">
+        <input
+          type="search"
+          className="input toolbar-search"
+          placeholder="Search titles and file names…"
+          aria-label="Search titles and file names"
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.target.value)}
+        />
+        <select
+          className="input"
+          aria-label="Status"
+          value={status}
+          onChange={(event) => update({ status: event.target.value })}
+        >
+          <option value="">Any status</option>
+          {DOCUMENT_STATUSES.map((value) => (
+            <option key={value} value={value}>
+              {STATUS_LABEL[value]}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          aria-label="Type"
+          value={documentType}
+          onChange={(event) => update({ type: event.target.value })}
+        >
+          <option value="">Any type</option>
+          {DOCUMENT_TYPES.map((value) => (
+            <option key={value} value={value}>
+              {TYPE_LABEL[value]}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          aria-label="Department"
+          value={department}
+          onChange={(event) => update({ department: event.target.value })}
+        >
+          <option value="">Any department</option>
+          {(departments.data ?? []).map((item) => (
+            <option key={item.id} value={item.name}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          aria-label="Sort by"
+          value={ordering}
+          onChange={(event) => update({ sort: event.target.value })}
+        >
+          {SORTS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <div className="segmented" role="group" aria-label="Archive">
+          {(
+            [
+              ["false", "Active"],
+              ["true", "Archived"],
+              ["all", "All"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`segment${archived === value ? " active" : ""}`}
+              aria-pressed={archived === value}
+              onClick={() => update({ archived: value === "false" ? "" : value })}
+            >
+              {label}
             </button>
-          </div>
+          ))}
         </div>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={mine}
+            onChange={(event) => update({ mine: event.target.checked ? "1" : "" })}
+          />
+          Only mine
+        </label>
+      </div>
 
-        <ErrorBox error={documents.error} />
-
-        {documents.loading && !documents.data ? <Spinner /> : null}
-
-        {documents.data && documents.data.results.length === 0 ? (
-          <Empty>
-            No documents visible to you. That is either an empty instance or the
-            department boundary doing its job — the list shows exactly what you may
-            retrieve, nothing more.
-          </Empty>
-        ) : null}
-
-        {documents.data && documents.data.results.length > 0 ? (
+      {documents.error && !documents.data ? (
+        <ErrorState error={documents.error} onRetry={documents.reload} />
+      ) : documents.loading && !documents.data ? (
+        <div className="card card-body">
+          <Skeleton lines={6} />
+        </div>
+      ) : rows.length === 0 ? (
+        <EmptyState
+          title={filtered ? "No documents match these filters" : "No documents yet"}
+          action={
+            filtered ? (
+              <Button
+                onClick={() => {
+                  setSearchInput("");
+                  setParams(new URLSearchParams(), { replace: true });
+                }}
+              >
+                Clear filters
+              </Button>
+            ) : (
+              <Button variant="primary" onClick={() => setUploading(true)}>
+                Upload a document
+              </Button>
+            )
+          }
+        >
+          {filtered
+            ? "Try a different search or remove a filter."
+            : "Upload a regulation, policy, circular or form to make it searchable."}
+        </EmptyState>
+      ) : (
+        <div className="table-wrap" aria-busy={documents.loading}>
           <table className="table">
+            <caption className="visually-hidden">Documents</caption>
             <thead>
               <tr>
-                <th>#</th>
-                <th>Title</th>
-                <th>Type</th>
-                <th>Department</th>
-                <th>Status</th>
-                <th>Current version</th>
-                <th>Uploaded</th>
+                <th scope="col">Title</th>
+                <th scope="col">Type</th>
+                <th scope="col">Department</th>
+                <th scope="col">Owner</th>
+                <th scope="col">Status</th>
+                <th scope="col">Updated</th>
               </tr>
             </thead>
             <tbody>
-              {documents.data.results.map((doc) => (
-                <tr key={doc.id}>
-                  <td className="muted">{doc.id}</td>
+              {rows.map((row) => (
+                <tr key={row.id}>
                   <td>
-                    <Link to={`/documents/${doc.id}`}>{doc.title}</Link>
+                    <Link to={`/documents/${row.id}`} className="table-title">
+                      {row.title}
+                    </Link>
+                    <span className="table-sub">
+                      {row.current_version
+                        ? `${row.current_version.file_name} · v${row.current_version.version_number} · ${formatBytes(row.current_version.file_size)}`
+                        : "No file"}
+                    </span>
                   </td>
-                  <td>{doc.document_type}</td>
-                  <td>{doc.department || <span className="muted">unset</span>}</td>
+                  <td>{TYPE_LABEL[row.document_type]}</td>
+                  <td>{row.department || <span className="muted">—</span>}</td>
+                  <td>{row.owner_username || <span className="muted">—</span>}</td>
                   <td>
-                    <Pill tone={toneForDocumentStatus(doc.status)}>{doc.status}</Pill>
+                    <div className="badge-row">
+                      <StatusBadge status={row.status} />
+                      {row.is_archived ? <Badge tone="muted">Archived</Badge> : null}
+                    </div>
                   </td>
-                  <td className="muted small">
-                    {doc.current_version
-                      ? `v${doc.current_version.version_number} · ${doc.current_version.file_name} · ${formatBytes(doc.current_version.file_size)}`
-                      : "none"}
-                  </td>
-                  <td className="muted small">{formatTime(doc.created_at)}</td>
+                  <td title={row.updated_at}>{formatRelative(row.updated_at)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : null}
+        </div>
+      )}
 
-        {documents.data && (documents.data.next || documents.data.previous) ? (
-          <div className="pager">
-            <button
-              className="button button-quiet"
-              disabled={!documents.data.previous}
-              onClick={() => setPage((current) => current - 1)}
-            >
-              Previous
-            </button>
-            <span className="muted small">
-              page {page} · {documents.data.count} document(s)
-            </span>
-            <button
-              className="button button-quiet"
-              disabled={!documents.data.next}
-              onClick={() => setPage((current) => current + 1)}
-            >
-              Next
-            </button>
-          </div>
-        ) : null}
-      </section>
+      {documents.data ? (
+        <Pagination
+          page={page}
+          count={documents.data.count}
+          onPage={(next) => update({ page: String(next) })}
+        />
+      ) : null}
+
+      <UploadDialog
+        open={uploading}
+        onClose={() => setUploading(false)}
+        onUploaded={(document) => {
+          setUploading(false);
+          navigate(`/documents/${document.id}`);
+        }}
+      />
     </div>
   );
 }

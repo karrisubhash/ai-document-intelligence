@@ -6,17 +6,20 @@ export interface Resource<T> {
   data: T | null;
   error: unknown;
   loading: boolean;
-  /** Present only when the call failed with a status; 404 is often normal. */
+  /** The HTTP status of a failed call, when there was one. */
   status: number | null;
   reload: () => void;
+  /** Replace the data locally, e.g. after a successful mutation. */
+  setData: (value: T | null) => void;
 }
 
 /**
- * Loads one API call and re-runs it when `deps` change or `reload` is called.
+ * Loads one API call, and again when `deps` change or `reload` is called.
  *
- * A 404 is kept as data-less rather than thrown at the UI, because several
- * of these endpoints answer 404 for the perfectly ordinary case of "the
- * pipeline has not produced this yet".
+ * Data from the previous load is kept while a reload of the same deps runs,
+ * so a table does not flash empty every time it refreshes; `loading` says a
+ * load is in flight either way. Responses that arrive after a newer load started are
+ * discarded, so a slow early request can never overwrite a fast later one.
  */
 export function useResource<T>(
   loader: () => Promise<T>,
@@ -24,7 +27,6 @@ export function useResource<T>(
   options: { enabled?: boolean } = {},
 ): Resource<T> {
   const enabled = options.enabled ?? true;
-
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [status, setStatus] = useState<number | null>(null);
@@ -34,7 +36,21 @@ export function useResource<T>(
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
 
+  // New deps mean a different thing is being loaded (another document, a
+  // different page), and showing the old one's data while it loads - or
+  // after it fails - would put the wrong content under the new heading.
+  // A reload of the SAME deps keeps its data, so a refresh never flashes.
+  const key = JSON.stringify(deps);
+  const lastKey = useRef(key);
+
   useEffect(() => {
+    if (lastKey.current !== key) {
+      lastKey.current = key;
+      setData(null);
+      setError(null);
+      setStatus(null);
+    }
+
     if (!enabled) {
       setLoading(false);
       return;
@@ -53,7 +69,6 @@ export function useResource<T>(
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
-        setData(null);
         setError(caught);
         setStatus(caught instanceof ApiError ? caught.status : null);
       })
@@ -64,31 +79,69 @@ export function useResource<T>(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, nonce, ...deps]);
+  }, [enabled, nonce, key]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { data, error, loading, status, reload };
+  return { data, error, loading, status, reload, setData };
 }
 
 /**
- * Calls `tick` on an interval while `active` is true.
- *
- * Used to follow a document through the pipeline: processing is
- * asynchronous by design, so a console that only showed the state at page
- * load would make a working queue look like a stuck one. The polling stops
- * as soon as nothing is in flight - there is no value in hammering an idle
- * API.
+ * Calls `tick` on an interval while `active` is true, and not at all while
+ * the tab is hidden - a background tab polling a document through OCR is
+ * load on the API that nobody is looking at.
  */
-export function usePolling(tick: () => void, active: boolean, intervalMs = 2500) {
+export function usePolling(tick: () => void, active: boolean, intervalMs = 3000) {
   const tickRef = useRef(tick);
   tickRef.current = tick;
 
   useEffect(() => {
     if (!active) return;
-
-    const id = window.setInterval(() => tickRef.current(), intervalMs);
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") tickRef.current();
+    }, intervalMs);
     return () => window.clearInterval(id);
   }, [active, intervalMs]);
+}
+
+export function useDebouncedValue<T>(value: T, delayMs = 300): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(id);
+  }, [value, delayMs]);
+  return debounced;
+}
+
+/**
+ * An explicit outcome, because `undefined` cannot tell a failed call from a
+ * successful one that returns nothing (a 204 DELETE).
+ */
+export type ActionResult<R> = { ok: true; value: R } | { ok: false; error: unknown };
+
+/**
+ * Runs an async action with pending and error state, for buttons and forms.
+ * The error is returned rather than thrown into React, so the caller decides
+ * whether it belongs inline, in a toast, or on a field.
+ */
+export function useAction<A extends unknown[], R>(action: (...args: A) => Promise<R>) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const actionRef = useRef(action);
+  actionRef.current = action;
+
+  const run = useCallback(async (...args: A): Promise<ActionResult<R>> => {
+    setPending(true);
+    setError(null);
+    try {
+      return { ok: true, value: await actionRef.current(...args) };
+    } catch (caught) {
+      setError(caught);
+      return { ok: false, error: caught };
+    } finally {
+      setPending(false);
+    }
+  }, []);
+
+  return { run, pending, error, clearError: () => setError(null) };
 }

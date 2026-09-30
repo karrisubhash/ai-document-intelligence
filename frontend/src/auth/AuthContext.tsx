@@ -4,75 +4,99 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 
-import { ApiError, api, readToken, writeToken } from "../api/client";
-import type { Me } from "../api/types";
+import { ApiError, api, setUnauthorizedHandler } from "../api/client";
+import type { Capabilities, Me } from "../api/types";
+
+type SessionState = "checking" | "signed-in" | "signed-out";
 
 interface AuthState {
-  token: string | null;
   me: Me | null;
-  /** True until the stored token has been checked against the API. */
-  restoring: boolean;
+  state: SessionState;
+  /** Set when the session ended underneath the user rather than by sign-out. */
+  expired: boolean;
   login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
+  refresh: () => Promise<void>;
+  can: (capability: keyof Capabilities) => boolean;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => readToken());
   const [me, setMe] = useState<Me | null>(null);
-  const [restoring, setRestoring] = useState<boolean>(() => readToken() !== null);
+  const [state, setState] = useState<SessionState>("checking");
+  const [expired, setExpired] = useState(false);
+  const meRef = useRef<Me | null>(null);
+  meRef.current = me;
 
-  const logout = useCallback(() => {
-    writeToken(null);
-    setToken(null);
-    setMe(null);
+  const refresh = useCallback(async () => {
+    try {
+      setMe(await api.me());
+      setState("signed-in");
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        setMe(null);
+        setState("signed-out");
+        return;
+      }
+      // Network failure or a 5xx: the session may be perfectly valid, so
+      // this is not a sign-out. The login screen says the server is
+      // unreachable rather than asking for a password it cannot check.
+      setMe(null);
+      setState("signed-out");
+      throw error;
+    }
   }, []);
 
-  // A stored token is a claim, not a session. It is verified against
-  // /api/auth/me before the console shows anything, so a revoked or stale
-  // token lands on the login screen instead of a wall of 401s.
+  // The session is a cookie the page cannot read, so the only way to know
+  // whether one exists is to ask the server.
   useEffect(() => {
-    if (!token) {
+    refresh().catch(() => undefined);
+  }, [refresh]);
+
+  // Any API call that comes back 401 means the session is gone - it hit
+  // its eight-hour lifetime, or the password was changed elsewhere. The
+  // user lands on the login screen with an explanation instead of a page
+  // full of errors.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      if (meRef.current) setExpired(true);
       setMe(null);
-      setRestoring(false);
-      return;
-    }
-
-    let cancelled = false;
-    setRestoring(true);
-
-    api
-      .me(token)
-      .then((profile) => {
-        if (!cancelled) setMe(profile);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        if (error instanceof ApiError && error.status === 401) logout();
-      })
-      .finally(() => {
-        if (!cancelled) setRestoring(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token, logout]);
+      setState("signed-out");
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    const { token: issued } = await api.login(username, password);
-    writeToken(issued);
-    setToken(issued);
+    const profile = await api.login(username, password);
+    setExpired(false);
+    setMe(profile);
+    setState("signed-in");
   }, []);
 
+  const logout = useCallback(async () => {
+    try {
+      await api.logout();
+    } finally {
+      setMe(null);
+      setExpired(false);
+      setState("signed-out");
+    }
+  }, []);
+
+  const can = useCallback(
+    (capability: keyof Capabilities) => Boolean(me?.capabilities?.[capability]),
+    [me],
+  );
+
   const value = useMemo<AuthState>(
-    () => ({ token, me, restoring, login, logout }),
-    [token, me, restoring, login, logout],
+    () => ({ me, state, expired, login, logout, refresh, can }),
+    [me, state, expired, login, logout, refresh, can],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -84,13 +108,9 @@ export function useAuth(): AuthState {
   return context;
 }
 
-/**
- * The token, for the pages that only run when signed in. Throwing rather
- * than returning null keeps every caller from re-checking something the
- * router already guaranteed.
- */
-export function useToken(): string {
-  const { token } = useAuth();
-  if (!token) throw new Error("useToken used outside an authenticated route");
-  return token;
+/** The signed-in user, for screens that only render when there is one. */
+export function useMe(): Me {
+  const { me } = useAuth();
+  if (!me) throw new Error("useMe used outside an authenticated route");
+  return me;
 }
