@@ -100,6 +100,10 @@ class BuiltContext:
     dropped_as_duplicate: int = 0
     dropped_as_tiny: int = 0
     suspected_injections: int = 0
+    # What the user actually typed, when retrieval ran on a widened
+    # follow-up. Answerers use it to decide what the answer must be ABOUT;
+    # the widened question only decided which passages were read.
+    focus: str = ""
 
     @property
     def is_empty(self) -> bool:
@@ -213,5 +217,19 @@ def render(context: BuiltContext, question: str) -> str:
         body += [passage.text, "-----", ""]
         lines += body
 
-    lines += ["QUESTION", question]
+    if context.focus and context.focus.strip() != question.strip():
+        # A follow-up. The model is given the user's own words as THE
+        # question, and the earlier context as context - not the widened
+        # retrieval string, which reads as a garbled sentence ("What about
+        # condonation? minimum attendance required sit end semester").
+        lines += [
+            "QUESTION",
+            context.focus,
+            "",
+            "(This is a follow-up in a conversation. The retrieval query, which",
+            " includes terms from the user's earlier questions, was:",
+            f" {question})",
+        ]
+    else:
+        lines += ["QUESTION", question]
     return "\n".join(lines)

@@ -384,3 +384,65 @@ class ChatTitleAndSourceTests(APITestCase):
 
         self.assertEqual(wrong_document.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(outsider.status_code, status.HTTP_404_NOT_FOUND)
+
+
+@override_settings(**EAGER)
+class DocumentScopedQuestionTests(APITestCase):
+    """Ask about ONE document - narrowed after the permission filter."""
+
+    def setUp(self):
+        self.owner = make_user("scope_owner")
+        self.outsider = make_user("scope_outsider", department="Mechanical")
+        self.client.force_authenticate(self.owner)
+        # Passages long enough to survive context construction, which drops
+        # fragments below a minimum length on purpose.
+        self.first = self.upload(
+            "Hostel Rules",
+            b"Clause 3.1 Curfew\nThe hostel curfew is 10 pm on weekdays and 11 pm on "
+            b"Saturdays. Residents returning after the curfew must sign the late "
+            b"register at the warden's office.\n",
+        )
+        self.second = self.upload(
+            "Library Rules",
+            b"Clause 2.4 Closing\nThe library curfew is 8 pm on weekdays and 5 pm on "
+            b"Saturdays. Readers must leave the reading rooms by the curfew and return "
+            b"borrowed reference books to the desk.\n",
+        )
+
+    def upload(self, title, content):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("document-list"),
+                {"title": title, "file": make_txt_file(content=content)},
+                format="multipart",
+            )
+        return response.data["id"]
+
+    def test_search_can_be_narrowed_to_one_document(self):
+        response = self.client.post(
+            reverse("search"),
+            {"query": "curfew weekdays", "document_id": self.second},
+            format="json",
+        )
+        documents = {hit["document_id"] for hit in response.data["results"]}
+        self.assertEqual(documents, {self.second})
+
+    def test_a_scoped_question_cites_only_that_document(self):
+        response = self.client.post(
+            reverse("chat"),
+            {"question": "What is the curfew on weekdays?", "document_id": self.first},
+            format="json",
+        )
+        self.assertFalse(response.data["abstained"], response.data)
+        cited = {citation["document_id"] for citation in response.data["citations"]}
+        self.assertEqual(cited, {self.first})
+
+    def test_scoping_to_a_document_you_cannot_read_finds_nothing(self):
+        """Not an error: an error would confirm the id exists."""
+        response = client_for(self.outsider).post(
+            reverse("search"),
+            {"query": "curfew", "document_id": self.first},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])

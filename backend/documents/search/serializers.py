@@ -19,6 +19,7 @@ class SearchRequestSerializer(serializers.Serializer):
     department = serializers.CharField(
         max_length=255, required=False, allow_blank=True, default=""
     )
+    document_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
 
 class SearchHitSerializer(serializers.Serializer):

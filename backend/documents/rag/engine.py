@@ -274,6 +274,8 @@ def ask(
     *,
     document_type: str = "",
     department: str = "",
+    document_id: int | None = None,
+    focus: str = "",
     retrieval_depth: int = None,
     relevance_floor: float = None,
 ) -> RagAnswer:
@@ -296,6 +298,7 @@ def ask(
         limit=depth,
         document_type=document_type,
         department=department,
+        document_id=document_id,
     )
     timings["retrieval"] = _elapsed_ms(stage_started)
 
@@ -370,6 +373,7 @@ def ask(
             timings=timings,
         )
 
+    built.focus = (focus or "").strip()
     prompt = context_builder.render(built, question)
 
     # --- Answer -----------------------------------------------------------

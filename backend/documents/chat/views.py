@@ -71,6 +71,11 @@ class ChatView(APIView):
             resolved.question,
             document_type=data.get("document_type", ""),
             department=data.get("department", ""),
+            document_id=data.get("document_id"),
+            # The user's own words, when the question was widened as a
+            # follow-up: retrieval searched on the widened form, the answer
+            # must still be about what was actually asked.
+            focus=resolved.original if resolved.rewritten else "",
         )
 
         with transaction.atomic():

@@ -19,6 +19,8 @@ class ChatRequestSerializer(serializers.Serializer):
     department = serializers.CharField(
         max_length=255, required=False, allow_blank=True, default=""
     )
+    # Ask about one document. Narrows retrieval after the permission filter.
+    document_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
 
 class MessageSerializer(serializers.ModelSerializer):

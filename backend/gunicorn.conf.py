@@ -61,3 +61,16 @@ def child_exit(server, worker):
     from prometheus_client import multiprocess
 
     multiprocess.mark_process_dead(worker.pid)
+
+
+def post_worker_init(worker):
+    """Load the configured local models before this worker takes traffic.
+
+    Otherwise the first search each worker serves after a deploy or a
+    --max-requests recycle pays for the model load while a person waits.
+    See documents/processing/warmup.py.
+    """
+    from documents.processing import warmup
+
+    if warmup.enabled():
+        warmup.warm(reason="gunicorn")

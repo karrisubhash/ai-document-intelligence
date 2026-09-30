@@ -160,6 +160,14 @@ class ExtractiveAnswerer:
         if not query_terms or context.is_empty:
             return self._abstain(prompt)
 
+        # On a follow-up, the terms the user actually typed. A sentence that
+        # addresses none of them is not an answer to THIS question, however
+        # well it matches the earlier turns' vocabulary. Measured: "What
+        # about condonation?" after an attendance question quoted the
+        # attendance clause back, because the borrowed terms outnumbered
+        # the user's one.
+        focus_terms = set(_terms(getattr(context, "focus", "") or ""))
+
         scored = []
         skipped_hostile = 0
 
@@ -187,6 +195,21 @@ class ExtractiveAnswerer:
                     len(query_terms) >= self.MIN_MATCHED_TERMS
                     and len(matched) < self.MIN_MATCHED_TERMS
                 ):
+                    continue
+
+                if focus_terms:
+                    focused = focus_terms & sentence_terms
+                    if not focused:
+                        continue
+                    # Ranked by how much of what the user asked it covers
+                    # first; the widened question only breaks ties. The
+                    # coverage floor is then applied to the user's words,
+                    # which is the question actually being answered.
+                    focus_coverage = len(focused) / len(focus_terms)
+                    if focus_coverage >= self.MIN_COVERAGE:
+                        scored.append(
+                            (focus_coverage + coverage / 10, passage, sentence)
+                        )
                     continue
 
                 if coverage >= self.MIN_COVERAGE:

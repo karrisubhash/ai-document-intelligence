@@ -81,6 +81,8 @@ import time
 
 from django.conf import settings
 
+from documents.processing.model_cache import load_cached_first
+
 from .reranking import LexicalReranker, RerankedChunk
 
 logger = logging.getLogger("adi.rerank")
@@ -241,7 +243,15 @@ class LocalCrossEncoderReranker:
             started = time.monotonic()
 
             try:
-                model = self._construct(CrossEncoder, torch.nn.Sigmoid())
+                model = load_cached_first(
+                    lambda local_files_only: self._construct(
+                        CrossEncoder,
+                        torch.nn.Sigmoid(),
+                        local_files_only=local_files_only,
+                    ),
+                    model_id=self.model_id,
+                    refuse=(LocalRerankUnavailable,),
+                )
             except LocalRerankUnavailable:
                 raise
             except Exception as exc:
@@ -267,7 +277,7 @@ class LocalCrossEncoderReranker:
             self._model = model
             return self._model
 
-    def _construct(self, cross_encoder, activation):
+    def _construct(self, cross_encoder, activation, *, local_files_only=False):
         """Build the model with its output activation forced to sigmoid.
 
         The keyword was renamed in sentence-transformers 4.0
@@ -283,6 +293,7 @@ class LocalCrossEncoderReranker:
                 activation_fn=activation,
                 max_length=MAX_LENGTH,
                 device=self.device,
+                local_files_only=local_files_only,
             )
         except TypeError:
             logger.info(
@@ -296,6 +307,7 @@ class LocalCrossEncoderReranker:
                 default_activation_function=activation,
                 max_length=MAX_LENGTH,
                 device=self.device,
+                local_files_only=local_files_only,
             )
         except TypeError as exc:
             raise LocalRerankUnavailable(

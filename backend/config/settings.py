@@ -393,6 +393,11 @@ EMBEDDING_LOCAL_BATCH_SIZE = int(os.getenv("EMBEDDING_LOCAL_BATCH_SIZE", "32"))
 # claim GPU memory from whatever else is using it.
 EMBEDDING_LOCAL_DEVICE = os.getenv("EMBEDDING_LOCAL_DEVICE", "cpu")
 
+# Load configured in-process models when a gunicorn or Celery worker starts,
+# instead of on the first request that needs them. See
+# documents/processing/warmup.py. Off under the test runner regardless.
+AI_WARMUP = os.getenv("AI_WARMUP", "True").lower() == "true"
+
 # Threads torch may use, or 0 to leave its own choice alone. It has to be
 # stated here rather than read from the environment by the provider: Django
 # settings do not fall back to os.environ, so a knob the provider reads with

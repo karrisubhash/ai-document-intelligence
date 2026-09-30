@@ -1,6 +1,7 @@
 import os
 
 from celery import Celery
+from celery.signals import worker_process_init
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
@@ -34,3 +35,17 @@ app.autodiscover_tasks()
 # of line someone tidies away later, and this is where a reader already
 # looks to find out which modules the worker knows about.
 app.autodiscover_tasks(related_name="tasks_reindex")
+
+
+@worker_process_init.connect
+def warm_models(**kwargs):
+    """Load the embedding model in each worker child before its first task.
+
+    Indexing embeds every chunk, so an unwarmed child loads the model inside
+    the first document's INDEXING stage. Embedding only: workers never
+    rerank. See documents/processing/warmup.py.
+    """
+    from documents.processing import warmup
+
+    if warmup.enabled():
+        warmup.warm(reason="celery", components=("embedding",))

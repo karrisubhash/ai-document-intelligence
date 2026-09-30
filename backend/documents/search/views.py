@@ -35,6 +35,7 @@ class SearchView(APIView):
             limit=data["limit"],
             document_type=data.get("document_type", ""),
             department=data.get("department", ""),
+            document_id=data.get("document_id"),
         )
 
         record_event(

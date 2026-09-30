@@ -225,6 +225,7 @@ def search(
     limit: int = 10,
     document_type: str = "",
     department: str = "",
+    document_id: int | None = None,
 ) -> SearchResponse:
     query = (query or "").strip()
     if not query:
@@ -241,6 +242,12 @@ def search(
         )
     if department:
         queryset = queryset.filter(document_version__document__department=department)
+    if document_id:
+        # Scoped questions ("ask about this document"). Applied AFTER the
+        # authorization filter like every other narrowing, so naming a
+        # document you cannot read returns nothing - not an error that
+        # would confirm the id exists.
+        queryset = queryset.filter(document_version__document_id=document_id)
 
     response = SearchResponse(query=query, authorized_documents=documents.count())
 

@@ -71,6 +71,7 @@ import time
 
 from django.conf import settings
 
+from ..model_cache import load_cached_first
 from .base import EmbeddingBatch
 
 logger = logging.getLogger("adi.embedding")
@@ -217,7 +218,14 @@ class LocalEmbeddingProvider:
             started = time.monotonic()
 
             try:
-                model = SentenceTransformer(self.model_id, device=self.device)
+                model = load_cached_first(
+                    lambda local_files_only: SentenceTransformer(
+                        self.model_id,
+                        device=self.device,
+                        local_files_only=local_files_only,
+                    ),
+                    model_id=self.model_id,
+                )
             except Exception as exc:
                 # Nearly always a download that could not happen: no
                 # network, no writable cache, or HF_HUB_OFFLINE set over an

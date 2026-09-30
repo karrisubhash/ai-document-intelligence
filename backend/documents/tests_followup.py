@@ -13,9 +13,11 @@ expensive, which is why both sides are tested:
 
 from dataclasses import dataclass
 
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
+from rest_framework.test import APIClient
 
 from documents.rag import followup
+from documents.tests import MEDIA_ROOT, make_txt_file, make_user
 
 
 @dataclass
@@ -174,3 +176,77 @@ class ContextualizeTests(SimpleTestCase):
         self.assertFalse(meta["rewritten"])
         self.assertEqual(meta["original_question"], "")
         self.assertEqual(meta["resolved_question"], "")
+
+
+@override_settings(
+    MEDIA_ROOT=MEDIA_ROOT,
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class FollowUpAnswersTheNewQuestionTests(TestCase):
+    """Resolution widens RETRIEVAL; the answer must still be about what the
+    user just asked.
+
+    Found in the end-to-end browser run: "What about condonation?" after an
+    attendance question was resolved correctly, retrieved the right
+    document - and quoted the attendance clause back, because the borrowed
+    terms outnumbered the user's one and decided which sentences were
+    chosen. The condonation clause sat two lines below it.
+    """
+
+    REGULATIONS = (
+        b"Clause 4.2 Attendance\n"
+        b"A student must maintain a minimum of 75 percent attendance in each course to\n"
+        b"be eligible for the end-semester examination.\n\n"
+        b"Clause 4.3 Condonation\n"
+        b"A student with attendance between 65 and 75 percent may apply for condonation\n"
+        b"on medical grounds, supported by a certificate from a registered practitioner.\n"
+        b"Condonation below 65 percent is not permitted under any circumstance.\n"
+    )
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(make_user("followup_e2e"))
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                "/api/documents/",
+                {
+                    "title": "Academic Regulations",
+                    "file": make_txt_file(content=self.REGULATIONS),
+                },
+                format="multipart",
+            )
+
+    def ask(self, question, conversation_id=None):
+        return self.client.post(
+            "/api/chat/",
+            {"question": question, "conversation_id": conversation_id},
+            format="json",
+        ).data
+
+    def test_the_follow_up_is_answered_not_the_previous_question(self):
+        first = self.ask(
+            "What is the minimum attendance required to sit the end-semester examination?"
+        )
+        self.assertIn("75 percent", first["answer"])
+
+        follow_up = self.ask("What about condonation?", first["conversation_id"])
+
+        self.assertTrue(follow_up["resolved_question"], "should be read as a follow-up")
+        self.assertFalse(follow_up["abstained"], follow_up)
+        self.assertIn("condonation", follow_up["answer"].lower())
+        self.assertIn("65", follow_up["answer"])
+        # Not the previous answer served again.
+        self.assertNotIn("in each course", follow_up["answer"])
+
+    def test_an_independent_question_is_unaffected(self):
+        """No focus is set when nothing was rewritten."""
+        first = self.ask(
+            "What is the minimum attendance required to sit the end-semester examination?"
+        )
+        again = self.ask(
+            "Can a student apply for condonation on medical grounds?",
+            first["conversation_id"],
+        )
+        self.assertEqual(again["resolved_question"], "")
+        self.assertIn("medical grounds", again["answer"])
