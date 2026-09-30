@@ -446,3 +446,35 @@ class DocumentScopedQuestionTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["results"], [])
+
+
+class InfrastructureEndpointsBehindTheProxyTests(TestCase):
+    """What an in-cluster caller actually sends: a container IP as Host, and
+    plain HTTP. Through the full middleware stack both were refused."""
+
+    PRODUCTION = {
+        "ALLOWED_HOSTS": ["docs.example.edu"],
+        "SECURE_SSL_REDIRECT": True,
+    }
+
+    def test_prometheus_can_scrape_a_replica_by_ip(self):
+        with override_settings(**self.PRODUCTION):
+            response = self.client.get("/metrics", HTTP_HOST="172.20.0.6:8000")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"adi_", response.content)
+
+    def test_a_container_probe_gets_the_health_answer_not_a_redirect(self):
+        with override_settings(**self.PRODUCTION):
+            response = self.client.get("/health/", HTTP_HOST="localhost:8000")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "healthy")
+
+    def test_every_other_path_is_still_host_validated(self):
+        with override_settings(**self.PRODUCTION):
+            response = self.client.get("/api/documents/", HTTP_HOST="evil.example")
+        self.assertEqual(response.status_code, 400)
+
+    def test_the_metrics_allowlist_still_applies(self):
+        with override_settings(METRICS_ALLOWED_IPS=["10.1.2.3"], **self.PRODUCTION):
+            response = self.client.get("/metrics", HTTP_HOST="172.20.0.6:8000")
+        self.assertEqual(response.status_code, 403)

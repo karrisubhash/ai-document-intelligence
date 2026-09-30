@@ -23,9 +23,10 @@ for** and **what is actually built today**, and never conflates the two.
 
 | Capability | Spec § | State |
 |---|---|---|
-| Authentication + roles | 5, 14 | ✅ Built (token auth, profile roles) |
-| Document upload, versioning, metadata | 5, 10 | ✅ Built |
-| Async processing (queue + worker) | 17 | ✅ Built (Celery + Redis) |
+| Authentication + roles | 5, 14 | ✅ Built — browser sessions (httpOnly, CSRF-protected login), expiring API tokens, audited login/logout/password change |
+| Administration | 5, 14 | ✅ Built — users, department registry, audit log, processing monitor with retry, system status; department admins scoped to their department |
+| Document upload, versioning, metadata | 5, 10 | ✅ Built — row-locked versioning, archival, per-version download, 404 (not 403) to non-readers |
+| Async processing (queue + worker) | 17 | ✅ Built (Celery + Redis) — time limits, stalled-run recovery, duplicate-run refusal |
 | Validation, ingestion, integrity checks | 5, 10 | ✅ Built |
 | PDF/DOCX/TXT parsing + OCR fallback | 11.3 | ✅ Built (pypdf, python-docx, pdf2image, Tesseract) |
 | Per-page normalized content store | 15 | ✅ Built (`DocumentContent` / `PageContent`) |
@@ -38,7 +39,7 @@ for** and **what is actually built today**, and never conflates the two.
 | Chunking, embeddings, pgvector index | 11.4, 15 | ✅ Built — page-bounded chunks, span-verified |
 | Hybrid search + reranking | 12.2 | ✅ Built — RRF fusion + pluggable reranker |
 | RAG, citations, abstention, guardrails | 12 | ✅ Built — extractive by default, generative via one setting, same guardrails |
-| Testing console (React + Vite) | 26 | ✅ Built — covers the document, search and chat paths, not every endpoint ([frontend/](frontend/)) |
+| Product frontend (React + Vite) | 26 | ✅ Built — dashboard, documents, document viewer, search, cited chat with source inspection, administration ([frontend/](frontend/)); browser e2e suite 6/6 against the live stack |
 | Metrics, structured logs, AI telemetry | 20 | ✅ Built — `/metrics`, redaction enforced at the formatter |
 | Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 8-job pipeline; every gate now passes locally, none has run in GitHub Actions |
 | Horizontal scale, queue routing, re-indexing | 22 | ✅ Built — measured, not assumed ([details](#scale-22-nfr-02)) |
@@ -48,10 +49,13 @@ for** and **what is actually built today**, and never conflates the two.
 | Object storage (S3-compatible) | 15 | ✅ Built — opt-in; the pipeline is storage-agnostic either way |
 | Prometheus + Grafana, multiprocess metrics | 20 | ✅ Built — `/metrics` now aggregates across gunicorn workers |
 | Governed evaluation dataset + regression gate | 19 | ✅ Built — 13 cases, a committed baseline, and it can fail |
-| Product frontend (Next.js), FastAPI AI services | 26 | ⬜ Not started |
+| Separate FastAPI AI services | 26 | ⬜ Deliberately not built — see [docs/architecture](docs/architecture/overview.md#why-one-service) |
 
-`infrastructure/` holds the nginx and deployment configuration; `docs/` and `tests/` are
-still placeholders. `frontend/` holds the testing console, not the product frontend §26 describes.
+**Start with [docs/](docs/README.md)** — the working reference for architecture, API,
+deployment, operations, security, AI and evaluation, with a single table of what is
+verified and what is not. This README is the long-form history and design rationale.
+`infrastructure/` holds the nginx edge image and deployment configuration; `frontend/` is
+the product web application.
 
 ---
 
@@ -89,7 +93,7 @@ operational cost.
 
 ```
 Client
-  │  Token auth (DRF)
+  │  Session (browser) or expiring token (scripts)
   ▼
 Django API  ──────────────────────────────►  PostgreSQL (metadata, jobs, events, audit)
   │  ProcessingJob queued on commit          Local media storage (original artifacts)
@@ -216,22 +220,20 @@ docker compose exec backend python manage.py createsuperuser
 curl http://localhost:8000/health/
 ```
 
-### The testing console
-
-A React + Vite frontend for exercising every endpoint below — upload a document, watch it
-move through the pipeline stage by stage, and read what each AI stage produced.
+### The web application
 
 ```bash
 cd frontend
 npm install
-npm run dev          # http://localhost:5173
+npm run dev          # http://localhost:5173, proxied same-origin to the API on :8000
 ```
 
-Or, on a machine without Node, `docker compose --profile frontend up` (off by default).
-See [frontend/README.md](frontend/README.md). It is a testing console, not the product
-frontend §26 calls for: it is built to show what the backend did, including the stages
-that recorded `SKIPPED`, the fields that came back `NOT_FOUND`, and the answers that
-abstained.
+Sign in with a Django user (the superuser above is a system administrator). See
+[frontend/README.md](frontend/README.md) for the screens and
+[docs/development](docs/development/setup.md) for the optional AI layers. It replaced the
+earlier testing console; the backend behaviours that console made visible — `SKIPPED`
+stages, `NOT_FOUND` fields, abstentions, lexical-vs-semantic retrieval — are all still
+shown, in plainer language.
 
 ### Locally without Docker
 
@@ -309,7 +311,10 @@ artifacts and training runs are all git-ignored.
 
 ## API
 
-Base URL: `http://localhost:8000`. All document endpoints require authentication.
+Base URL: `http://localhost:8000`. All document endpoints require authentication. The
+complete, current reference — including administration, archival, conversations and the
+citation source endpoint — is [docs/api/reference.md](docs/api/reference.md); the table
+below is the original core.
 (Spec §16 calls for a `/api/v1` prefix; the current routes are unversioned and will be moved
 when the public surface is frozen.)
 
@@ -1590,7 +1595,9 @@ word reach a far higher coverage than it deserves.
 
 Implemented today:
 
-- **Token authentication**, authenticated-by-default DRF permissions.
+- **Browser sessions and expiring API tokens**, authenticated-by-default DRF permissions.
+  The full, current model is [docs/security/model.md](docs/security/model.md); this
+  section is the history of how it got there.
 - **Department as the tenant boundary.** Read access: owner, same department, or system
   admin. Manage (update / delete / reprocess / new version): owner, department admin of that
   department, or system admin. A non-admin's upload is pinned to their own profile's
@@ -1748,26 +1755,22 @@ point for a 16-class problem whose interesting failures are the small, low-text 
 ## Testing
 
 ```bash
-# Backend: 744 tests across documents, discovery, ingestion,
-#          classification, field extraction, DOCX, search, RAG, tables,
-#          figures, agents, storage, object storage, upload admission,
-#          security, evaluation gate, observability, multiprocess
-#          metrics, scale, backup, regressions and accounts
-cd backend
-python manage.py test
+# Backend: ~890 tests on real PostgreSQL + pgvector (run inside the image)
+docker compose run --rm -T -e LOG_LEVEL=ERROR backend python manage.py test --noinput
 
 # AI workspace: datasets, metrics, preprocessing, thresholds, Kaggle path
 export PYTHONPATH=.
 python -m unittest discover -s ai/classification/tests -t .
 
-# Console: type checking and a production build
-cd frontend
-npm run build
+# Web application: typecheck, unit/component tests, production build
+cd frontend && npm run typecheck && npm test && npm run build
+
+# Browser end-to-end against a live stack (see docs/development/testing.md)
+cd frontend && E2E_PASSWORD=... npx playwright test
 ```
 
-Coverage today spans pipeline stages, extractor error mapping, retry classification,
-authorization rules, audit logging, API status codes and the classifier boundary. The
-end-to-end, load, security and AI-regression suites in §23 arrive with the phases they test.
+What each layer pins, how to prepare the disposable database the browser suite needs, and
+the last recorded results are in [docs/development/testing.md](docs/development/testing.md).
 
 ---
 
@@ -1781,9 +1784,11 @@ end-to-end, load, security and AI-regression suites in §23 arrive with the phas
 | Cache / broker | Redis 7 |
 | Async jobs | Celery |
 | Parsing / OCR | pypdf, pdf2image + poppler, pytesseract + Tesseract, Pillow |
-| ML | PyTorch (remote GPU), scikit-learn (text baseline) |
-| Testing console | React 19 + Vite 6 + TypeScript |
-| Containerization | Docker + Docker Compose |
+| Search | PostgreSQL full-text + pgvector (HNSW), reciprocal-rank fusion |
+| ML | scikit-learn (text classifier), sentence-transformers on CPU PyTorch (bge-small embeddings, bge-reranker-base cross-encoder), PyTorch on a remote GPU (vision training path) |
+| LLM providers (optional) | Anthropic API / Amazon Bedrock, any OpenAI-compatible endpoint |
+| Web application | React 19 + Vite 6 + TypeScript; Vitest + Testing Library; Playwright |
+| Containerization | Docker + Docker Compose; non-root application images |
 
 Also in use: **Nginx** (TLS termination and load balancing, `docker-compose.prod.yml`)
 and **GitHub Actions** (`.github/workflows/ci.yml`, written but never executed).
@@ -1791,9 +1796,11 @@ and **GitHub Actions** (`.github/workflows/ci.yml`, written but never executed).
 Also in use: **S3-compatible object storage** (opt-in, `AWS_STORAGE_BUCKET_NAME`) and
 **Prometheus + Grafana** in the production overlay.
 
-Still planned per specification: FastAPI for AI services, a Next.js product frontend, and
-OpenTelemetry tracing. (pgvector is in use; the React console above is a testing tool, not
-that product frontend.)
+Not built, by decision: separate FastAPI AI services and a Next.js frontend — the
+modular monolith and a Vite SPA served by nginx meet every requirement measured so far,
+and the reasons are in [docs/architecture](docs/architecture/overview.md#why-one-service).
+Not built yet: OpenTelemetry tracing (correlation ids and per-stage timings exist; spans
+do not).
 
 LLM and embedding providers remain model-agnostic by design — provider clients are to be
 isolated behind gateway interfaces so models stay replaceable (§26).

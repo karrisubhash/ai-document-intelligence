@@ -52,6 +52,13 @@ services:
         # separate from INSTALL_LLM, which is only API clients.
         INSTALL_LOCAL: ${INSTALL_LOCAL:-false}
 
+    # Development only. The image runs as an unprivileged user, but here
+    # the source tree is bind-mounted from the host, and commands that
+    # write into it (makemigrations, seed_evaluation) need the host's
+    # permissions rather than uid 10001's. docker-compose.prod.yml pins the
+    # unprivileged user back, and check_deployment_config.py asserts it.
+    user: root
+
     command: >
       sh -c "
       python manage.py migrate &&
@@ -107,6 +114,9 @@ services:
     # One worker for both queues in development - the separation is
     # about scaling them apart in production, not about needing two
     # processes on a laptop.
+    # See the backend service: bind-mounted source, development only.
+    user: root
+
     command: celery -A config worker --loglevel=INFO --queues=ingest,index
 
     volumes:

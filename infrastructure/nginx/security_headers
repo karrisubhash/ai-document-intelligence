@@ -1,0 +1,31 @@
+# Headers for every response that serves the frontend.
+#
+# Included per location, not set once at server level, because nginx drops
+# every inherited add_header in a location that declares one of its own -
+# and the frontend locations must declare Cache-Control. A server-level
+# policy would silently vanish from exactly the responses it exists for.
+
+# The Content-Security-Policy is the second line of defence behind React's
+# escaping. Answers, snippets and page text all derive from uploaded
+# documents, which are untrusted; if a rendering bug ever let markup
+# through, this is what stops it running:
+#
+#   script-src 'self'     no inline script, no eval, no third-party script
+#   style-src 'self'      the stylesheet is a file; React sets element
+#                         styles through the CSSOM, which CSP permits
+#   img-src data: blob:   the favicon is a data: URI; scanned-page
+#                         previews are blob: URLs made from an authenticated
+#                         fetch, never a URL to the file itself
+#   frame-src blob:       the PDF preview, likewise
+#   object-src blob:      Chrome renders a PDF in a frame through its
+#                         built-in viewer, which the frame's inherited
+#                         policy governs as a plugin; 'none' blanks the
+#                         preview. blob: admits only what this page made.
+#   connect-src 'self'    the API is same-origin; nothing else is fetched
+#   frame-ancestors none  the app may not be framed (clickjacking)
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self' blob:; object-src 'self' blob:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+add_header X-Content-Type-Options nosniff always;
+add_header X-Frame-Options DENY always;
+add_header Referrer-Policy same-origin always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+add_header Cross-Origin-Opener-Policy same-origin always;

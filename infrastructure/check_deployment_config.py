@@ -134,7 +134,9 @@ def check(config):
         failures.append(f"{EDGE_SERVICE} service is missing from the production stack.")
     else:
         published = {
-            str(port.get("published")) for port in (edge.get("ports") or []) if port.get("published")
+            str(port.get("published"))
+            for port in (edge.get("ports") or [])
+            if port.get("published")
         }
         missing = EDGE_PORTS - published
         if missing:
@@ -146,6 +148,44 @@ def check(config):
     backend = services.get("backend") or {}
     if backend.get("environment", {}).get("DJANGO_DEBUG") != "False":
         failures.append("backend: DJANGO_DEBUG is not pinned to False in production.")
+
+    # The development file runs these as root for its bind mounts. That is
+    # the one setting most likely to leak into production by omission, and
+    # nothing about a root container looks wrong until it matters.
+    for name in CODE_SERVICES:
+        service = services.get(name)
+        if service is None:
+            continue
+        user = str(service.get("user") or "").split(":")[0]
+        if user in ("", "root", "0"):
+            failures.append(
+                f"{name}: runs as {'root' if user else 'the image default'} in "
+                f"production. Pin `user: app` in docker-compose.prod.yml."
+            )
+
+    # The official nginx image renders /etc/nginx/templates only when the
+    # container command is `nginx` itself. A shell wrapper here once meant
+    # the project's configuration was never loaded at all: the stock default
+    # server answered on :80 and nothing listened on :443.
+    command = (edge or {}).get("command")
+    if command:
+        first = command[0] if isinstance(command, list) else str(command).split()[0]
+        if first not in ("nginx", "nginx-debug"):
+            failures.append(
+                f"{EDGE_SERVICE}: overrides the command with {first!r}; the image "
+                f"then skips its config templating. Put extra behaviour in "
+                f"/docker-entrypoint.d/ instead."
+            )
+
+    # The edge must be the image that carries the built frontend, not a
+    # stock nginx that would proxy every path - including the app shell -
+    # to Django.
+    edge_build = (edge or {}).get("build") or {}
+    if "infrastructure/nginx/Dockerfile" not in str(edge_build.get("dockerfile", "")):
+        failures.append(
+            f"{EDGE_SERVICE}: is not built from infrastructure/nginx/Dockerfile, so "
+            f"the frontend would not be served."
+        )
 
     return failures
 
@@ -163,6 +203,8 @@ def main():
     print("  - no source bind mount reaches the application containers")
     print("  - only nginx is published to the host, on 80 and 443")
     print("  - DJANGO_DEBUG is pinned to False")
+    print("  - application containers run as the unprivileged user")
+    print("  - the edge is built with the frontend")
 
 
 if __name__ == "__main__":

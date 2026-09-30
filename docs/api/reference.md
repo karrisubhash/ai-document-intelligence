@@ -1,0 +1,101 @@
+# API reference
+
+JSON over HTTPS, same origin as the web application. Unversioned paths (a `/api/v1/`
+prefix is planned when the public surface is frozen).
+
+## Authentication
+
+| Client | Mechanism |
+|---|---|
+| Browser | `GET /api/auth/csrf/` sets the CSRF cookie; `POST /api/auth/login/` with `X-CSRFToken` sets an **httpOnly session cookie** (8 h absolute). Every unsafe request carries `X-CSRFToken`. |
+| Script / service | `POST /api/auth/token/` returns a token; send `Authorization: Token <key>`. Tokens **expire** after `TOKEN_TTL_HOURS` (12 by default); an expired token is deleted and a fresh one issued on the next `/token/` call. |
+
+Unauthenticated requests get **401**. Bad credentials get **400** with one message whether
+or not the user exists. Login endpoints are throttled per IP and username (10/min) and
+rate-limited again at nginx.
+
+## Errors
+
+DRF shapes: `{"detail": "..."}` or field errors `{"field": ["..."]}`. **404** is returned
+both for ids that do not exist and for documents or conversations the caller may not read —
+the bodies are identical, so ids cannot be probed. **403** means the caller can see the
+object but may not perform the action. **409** means a conflict with current state (a run
+already in progress, an archived document). **429** is a rate limit.
+
+## Identity
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/auth/csrf/` | anyone | Sets the CSRF cookie |
+| POST | `/api/auth/login/` | anyone | `{username, password}`; CSRF enforced even though anonymous; audited |
+| POST | `/api/auth/logout/` | signed in | Ends the session; with a token, deletes it |
+| POST | `/api/auth/password/` | signed in | `{current_password, new_password}`; ends other sessions, revokes tokens |
+| POST | `/api/auth/token/` | anyone | Script login; expiring token |
+| GET | `/api/auth/me/` | signed in | Profile, role, department and `capabilities` |
+| GET | `/api/departments/` | signed in | Active departments `{id, name, code}` |
+| GET | `/api/dashboard/` | signed in | Counts and lists over the caller's visible documents |
+
+## Documents
+
+Read = owner, same department, or system admin. Manage = owner, department admin of that
+department, or system admin. Every read and write below is written to the audit log.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/documents/` | read | Paginated (50). `search`, `status`, `document_type`, `department`, `owner` (id or `me`), `created_after/before`, `updated_after/before`, `ordering` (≤3 of `id,title,status,document_type,created_at,updated_at`, `-` for descending), `archived` = `false` (default) / `true` / `all` |
+| POST | `/api/documents/` | any signed-in user | multipart `title`, `document_type`, `file`, and `department` (system admins only; must be a registered department). **202** — processing is asynchronous |
+| GET | `/api/documents/{id}/` | read | Includes `current_version`, `owner_username`, `is_archived`, `can_manage` |
+| PATCH | `/api/documents/{id}/` | manage | multipart `title`, `document_type` |
+| DELETE | `/api/documents/{id}/` | manage | Permanent: versions, content, index and files |
+| POST | `/api/documents/{id}/archive/` · `/restore/` | manage | Archived documents leave search, answers and the default listing |
+| GET · POST | `/api/documents/{id}/versions/` | read · manage | POST multipart `file` → new immutable version, **202**; **409** if archived |
+| GET | `/api/documents/{id}/download/[?version=N]` | read | Original bytes; the version is recorded on the audit row |
+| POST | `/api/documents/{id}/reprocess/` | manage | **202** with the job; **409** with the running job if one is queued or processing |
+| GET | `/api/documents/{id}/processing/` | read | Every job with its stage events |
+| GET | `/api/documents/{id}/content/` | read | Page texts of the live extraction pass |
+| GET | `/api/documents/{id}/classification/` | read | Every verdict, with model and version |
+| GET | `/api/documents/{id}/extraction/` | read | Every field-extraction pass; one row per declared field, including NOT_FOUND and CONFLICTED |
+| GET | `/api/documents/{id}/tables/` · `/figures/` | read | Detected tables (cells + span) and located figures |
+| GET | `/api/documents/{id}/chunks/` | read | Indexed chunks with page, span and embedding identity (paginated) |
+| GET | `/api/documents/{id}/source/?chunk=C` | read | The page text of the pass chunk C came from, its span, and `is_current` |
+
+## Search and chat
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/search/` | `{query, limit≤50, document_type?, department?, document_id?}`. POST so queries stay out of URLs and logs. Only authorized, current, non-archived content is searched |
+| POST | `/api/chat/` | `{question, conversation_id?, document_type?, department?, document_id?}` → answer, citations, abstention reason, grounding, retrieval counts, model, plan, `timings`, notes, `resolved_question` for follow-ups |
+| GET | `/api/chat/conversations/` | The caller's conversations, newest first |
+| GET · PATCH · DELETE | `/api/chat/conversations/{id}/` | Owner only; PATCH `{title}` |
+| POST | `/api/messages/{id}/feedback/` | `{rating: HELPFUL \| NOT_HELPFUL \| INCORRECT, comment?}`; owner of the conversation only |
+| GET | `/api/evaluations/…` | Evaluation runs and per-case results, scoped by dataset department |
+
+The question text is never written to the audit log; only that a search or question
+happened, and counts.
+
+## Administration
+
+System admins see everything. Department admins see and manage only their department's
+FACULTY, STAFF and STUDENT accounts, and may not create or edit administrators. Nobody can
+change their own role or deactivate themselves.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET · POST | `/api/admin/users/` | admins | Filters `search`, `role`, `department`, `is_active`. POST requires an initial password (validated) |
+| GET · PATCH | `/api/admin/users/{id}/` | admins, scoped | Username immutable. Deactivation revokes tokens and sessions |
+| POST | `/api/admin/users/{id}/set-password/` | admins, scoped | Ends the user's sessions and tokens |
+| GET | `/api/admin/users/roles/` | admins | Roles this admin may assign |
+| GET · POST · PATCH | `/api/admin/departments/[{id}/]` | read: admins · write: system admins | Case-insensitive unique names; rename rewrites every reference atomically; no DELETE (deactivate instead) |
+| GET | `/api/admin/audit/` | admins, scoped | `action`, `result`, `user`, `document`, `since`, `until`. Department admins see rows by their members or on their documents; other departments' titles are withheld |
+| GET | `/api/admin/jobs/` | admins, scoped | `status`, `error_code`, `stalled=true` |
+| POST | `/api/admin/jobs/{id}/retry/` | admins, scoped | **409** if a run is active; **400** for a superseded version |
+| GET | `/api/admin/system/` | system admins | Dependency health, queue depths, counts, AI configuration — names only, never secrets |
+
+## Operational
+
+| Path | Notes |
+|---|---|
+| `/health/` | Liveness: process up, database reachable. Deliberately not dependent on Redis |
+| `/ready/` | Readiness: database, cache, broker. 503 with per-component status, never hosts or error text |
+| `/metrics` | Prometheus; restricted to private ranges at nginx and optionally `METRICS_ALLOWED_IPS` |
+| `/admin/` | Django admin |

@@ -9,9 +9,10 @@
 # is what makes "deploy to production" a decision someone makes rather than a
 # consequence of merging.
 #
-# NOTE: this workflow has never executed. It is written against the same
-# commands the local stack runs and its YAML is validated, but GitHub Actions
-# cannot run in this environment, so treat the first real run as the test.
+# NOTE: this workflow has never executed on GitHub - the repository has no
+# remote. Every job's commands have been run locally against the same
+# images and services (see docs/operations/ci.md for what was run and what
+# was not), but treat the first real Actions run as the test of the YAML.
 
 name: CI
 
@@ -130,6 +131,101 @@ jobs:
         env:
           PYTHONPATH: .
 
+  frontend:
+    name: Frontend (typecheck, unit tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit and component tests
+        run: npm test
+      - name: Production build
+        run: npx vite build
+      - name: Dependency audit
+        # Advisory, like pip-audit below: a new advisory in a transitive
+        # build dependency should be seen, not block an unrelated fix.
+        run: npm audit --omit=dev || true
+
+  e2e:
+    name: End-to-end (browser against a live stack)
+    runs-on: ubuntu-latest
+    needs: [tests, frontend]
+    # The same browser suite that was run locally against the full stack
+    # (frontend/e2e/platform.spec.ts). Here it runs on the offline
+    # baselines - hashing embeddings, lexical reranking, extractive answers
+    # - so it needs no model download and no API key, and exercises every
+    # permission boundary, the pipeline and the UI exactly as configured.
+    env:
+      E2E_PASSWORD: ci-e2e-password-not-a-secret
+      E2E_CHANNEL: chromium
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Environment for a disposable stack
+        run: |
+          cp .env.example .env
+          cat >> .env <<'ENV'
+          DJANGO_DEBUG=True
+          DJANGO_SECRET_KEY=ci-e2e-only-not-a-production-secret-7Qm2Vx9Lp4Rt
+          POSTGRES_DB=adi_e2e
+          POSTGRES_USER=app_user
+          POSTGRES_PASSWORD=ci-password
+          DOCUMENT_EMBEDDING_PROVIDER=documents.processing.embedding.hashing.HashingEmbeddingProvider
+          DOCUMENT_SCANNER=documents.processing.scanning.heuristic.HeuristicScanner
+          DOCUMENT_FIELD_EXTRACTOR=documents.processing.field_extraction.rule_extractor.RuleFieldExtractor
+          ENV
+
+      - name: Start the stack
+        run: |
+          docker compose up -d --build db redis backend worker
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8000/ready/ && break
+            sleep 3
+          done
+          curl -fsS http://localhost:8000/ready/
+
+      - name: Seed test accounts
+        run: docker compose exec -T backend python manage.py seed_e2e --password "$E2E_PASSWORD"
+
+      - name: Frontend and browser
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          (npx vite --port 5173 --strictPort > vite.log 2>&1 &)
+          for i in $(seq 1 30); do curl -fsS http://localhost:5173/ >/dev/null && break; sleep 1; done
+
+      - name: Run the browser suite
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Keep evidence of a failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: frontend/e2e/.results
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose logs --no-color backend worker | tail -300
+
   security:
     name: Security checks
     runs-on: ubuntu-latest
@@ -145,6 +241,15 @@ jobs:
         run: |
           pip install -r backend/requirements.txt
           pip install bandit pip-audit
+
+      - name: No document or database file can enter an image
+        # backend/media holds uploaded documents. Before .dockerignore existed
+        # every image carried whatever was in it on the build machine.
+        run: |
+          for path in backend/media backend/db.sqlite3 backend/venv .env; do
+            grep -qxF "$path/" .dockerignore || grep -qxF "$path" .dockerignore || {
+              echo ".dockerignore does not exclude $path"; exit 1; }
+          done
 
       - name: Django deployment check
         # The gate phase 10 was built against: production settings must be
@@ -252,11 +357,21 @@ jobs:
   build:
     name: Build images
     runs-on: ubuntu-latest
-    needs: [tests, security]
+    needs: [tests, security, frontend]
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+
+      - name: Build the web edge (nginx + compiled frontend)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/nginx/Dockerfile
+          push: false
+          tags: ai-document-intelligence-web:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build (with the ML layer)
         uses: docker/build-push-action@v6

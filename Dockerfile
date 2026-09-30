@@ -5,14 +5,26 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# Runtime packages only. The image used to install build-essential and
+# libpq-dev as well - roughly 200 MB of compiler toolchain and headers that
+# nothing uses at runtime (every Python dependency ships a prebuilt wheel,
+# and psycopg[binary] bundles its own libpq), and a compiler sitting in a
+# production image is a gift to anyone who gets a shell in it.
+#
+#   postgresql-client  pg_dump / pg_restore for manage.py backup and restore
+#   poppler-utils      PDF page rendering for OCR
+#   tesseract-ocr      OCR
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential \
-        libpq-dev \
         postgresql-client \
         poppler-utils \
         tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
+
+# An unprivileged user for everything the container runs. Created before
+# the dependency layers so the uid is stable across rebuilds; the writable
+# paths are created and handed to it at the end of this file.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app
 
 COPY backend/requirements.txt /app/requirements.txt
 
@@ -90,6 +102,19 @@ COPY backend /app/backend
 # only, and part of the artifact on purpose: a regression gate that cannot
 # find its own dataset inside the image it is gating is a gate that skips.
 COPY evaluation /app/evaluation
+
+# The only paths the application writes to, owned by the unprivileged user.
+# The code itself stays root-owned and read-only to the process: a
+# compromised worker cannot rewrite the application it is running.
+#
+# A named volume mounted on one of these starts as a copy of the directory,
+# ownership included, so a fresh volume just works. A volume created by an
+# older, root-running image keeps root ownership - see
+# docs/deployment/production.md for the one-time chown.
+RUN mkdir -p /app/backend/media /app/backend/staticfiles /app/.cache/huggingface /backups \
+    && chown -R app:app /app/backend/media /app/backend/staticfiles /app/.cache /backups
+
+USER app
 
 WORKDIR /app/backend
 

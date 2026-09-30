@@ -1,0 +1,47 @@
+# What must never enter an image.
+#
+# Without this file `COPY backend /app/backend` copied the whole working
+# tree into every build: the developer's virtualenv, the local SQLite file,
+# and backend/media - which is where UPLOADED DOCUMENTS live. Every image
+# pushed to a registry would have carried whatever documents happened to be
+# on the machine that built it.
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.local
+
+# Uploaded documents, database files and dumps
+backend/media/
+**/media/
+backend/db.sqlite3
+**/*.sqlite3
+backups/
+
+# Local environments and caches
+backend/venv/
+**/venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+backend/staticfiles/
+
+# Frontend build inputs that the image rebuilds itself
+frontend/node_modules/
+frontend/dist/
+frontend/e2e/.results/
+
+# Model data: datasets and artifacts are mounted, never baked in
+ai/classification/data/
+ai/classification/runs/
+
+# Repository metadata
+.git/
+.github/
+**/.DS_Store
+*.log

@@ -43,13 +43,49 @@ def _route(request) -> str:
     return "/" + route.lstrip("/")
 
 
+def _infrastructure_views():
+    """The endpoints served ahead of the rest of the middleware stack.
+
+    /metrics, /health/ and /ready/ exist for callers INSIDE the deployment:
+    Prometheus scrapes each backend replica by its container IP, and
+    container probes call localhost. Neither sends the public hostname, and
+    both speak plain HTTP. Routed through the full stack, every such call
+    failed before reaching its view - CommonMiddleware rejects an unknown
+    Host with DisallowedHost (400), and SecurityMiddleware redirects plain
+    HTTP to https. Measured on the production stack: every Prometheus scrape
+    for the lifetime of the deployment returned 400, so the dashboards were
+    empty.
+
+    Served here, before either check, because none of the three builds a
+    URL, reads a session or returns user content - host validation protects
+    nothing on them. /metrics keeps its own address allowlist, and nginx
+    still refuses it from outside private ranges.
+    """
+    from config.health import health_check, readiness_check
+
+    from .views import metrics_view
+
+    return {
+        "/metrics": metrics_view,
+        "/health/": health_check,
+        "/ready/": readiness_check,
+    }
+
+
 class ObservabilityMiddleware:
     """Assigns a request id, logs the request, and records API metrics."""
 
     def __init__(self, get_response):
         self.get_response = get_response
+        self._infrastructure = None
 
     def __call__(self, request):
+        if self._infrastructure is None:
+            self._infrastructure = _infrastructure_views()
+        view = self._infrastructure.get(request.path)
+        if view is not None and request.method in ("GET", "HEAD"):
+            return view(request)
+
         request_id = set_request_id(request.META.get(HEADER, ""))
         started = time.monotonic()
 

@@ -43,6 +43,9 @@ services:
   # `column "name" of relation "django_content_type" does not exist`.
   # A schema change is a deploy step, not something every replica attempts.
   migrate:
+    # The image's unprivileged user. The development compose file runs as
+    # root for its bind mounts; production must not.
+    user: app
     build:
       context: .
       dockerfile: Dockerfile
@@ -61,6 +64,9 @@ services:
         condition: service_healthy
 
   backend:
+    # The image's unprivileged user. The development compose file runs as
+    # root for its bind mounts; production must not.
+    user: app
     build:
       context: .
       dockerfile: Dockerfile
@@ -92,6 +98,24 @@ services:
       --access-logfile -
       --error-logfile -"
 
+    # Healthy once gunicorn answers /health/ - which is only after each
+    # worker has warmed its models (post_worker_init), so nginx does not
+    # route to a replica that would make the first user wait for a load.
+    # The probe calls localhost over plain HTTP; /health/ is served ahead of
+    # host validation and the HTTPS redirect precisely so this can work.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 90s
+
     # !override, for the same reason `ports` needs it below. Compose MERGES
     # volume sequences across files, so listing the production volumes here
     # ADDED them to the base file's list rather than replacing it - and the
@@ -106,6 +130,11 @@ services:
       - static_data:/app/backend/staticfiles
       - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
       - ./backups:/backups
+      # Model weights. `volumes: !override` drops the base file's mount, and
+      # without this every container start re-downloads its models - a
+      # network dependency at boot, which is exactly what the cache-first
+      # loader exists to remove. Populate it with `manage.py warm_models`.
+      - hf_cache:/app/.cache/huggingface
 
     # Reachable ONLY through nginx. With a plain `ports: []` this stayed
     # published on 8000 and the API was directly reachable with no TLS, no
@@ -121,6 +150,9 @@ services:
       # every error count and latency. tmpfs because the samples are
       # process state, not data: they must not survive the container.
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      # nginx is the one proxy in front of gunicorn. Without this every
+      # client has nginx's address as far as DRF's throttles can tell.
+      DRF_NUM_PROXIES: "1"
 
     tmpfs:
       - /tmp/prometheus
@@ -134,6 +166,9 @@ services:
         condition: service_completed_successfully
 
   worker:
+    # The image's unprivileged user. The development compose file runs as
+    # root for its bind mounts; production must not.
+    user: app
     build:
       context: .
       dockerfile: Dockerfile
@@ -161,6 +196,7 @@ services:
       - media_data:/app/backend/media
       - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
       - ./backups:/backups
+      - hf_cache:/app/.cache/huggingface
 
     environment:
       DJANGO_DEBUG: "False"
@@ -175,6 +211,9 @@ services:
   # because the work is IO-bound against the embedding provider, and
   # separate so a bulk re-index never sits in front of live uploads.
   worker-index:
+    # The image's unprivileged user. The development compose file runs as
+    # root for its bind mounts; production must not.
+    user: app
     build:
       context: .
       dockerfile: Dockerfile
@@ -195,6 +234,7 @@ services:
     volumes: !override
       - media_data:/app/backend/media
       - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
+      - hf_cache:/app/.cache/huggingface
 
     environment:
       DJANGO_DEBUG: "False"
@@ -206,7 +246,12 @@ services:
         condition: service_healthy
 
   nginx:
-    image: nginx:1.27-alpine
+    # Built, not pulled: the image carries the compiled frontend
+    # (infrastructure/nginx/Dockerfile). Its typecheck and unit tests run
+    # inside the build, so a frontend that fails them cannot be deployed.
+    build:
+      context: .
+      dockerfile: infrastructure/nginx/Dockerfile
     restart: unless-stopped
     ports:
       - "80:80"
@@ -214,19 +259,18 @@ services:
     volumes:
       - ./infrastructure/nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro
       - ./infrastructure/nginx/proxy_params:/etc/nginx/conf.d/proxy_params:ro
+      - ./infrastructure/nginx/security_headers:/etc/nginx/conf.d/security_headers:ro
       - letsencrypt:/etc/letsencrypt:ro
       - static_data:/var/www/static:ro
       - certbot_www:/var/www/certbot
     environment:
       NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-localhost}
-    # A renewed certificate is only picked up on reload. Six-hourly is the
-    # conventional cadence: certbot renews at 30 days remaining, so there
-    # is no hurry, and a reload is free.
-    command: >
-      sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done &
-      nginx -g 'daemon off;'"
+    # No `command:` override. A shell wrapper here once stopped the image
+    # from rendering its config template at all; the certificate reload
+    # loop now lives in /docker-entrypoint.d/ (infrastructure/nginx/).
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   # Renewal only. First issuance needs nginx already running, which is
   # the chicken-and-egg that infrastructure/init-letsencrypt.sh resolves -
@@ -284,6 +328,7 @@ services:
       - prometheus
 
 volumes:
+  hf_cache:
   postgres_data:
   prometheus_data:
   grafana_data:

@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import { PASSWORD, corpusFile, makePdf } from "./fixtures";
@@ -92,6 +96,32 @@ test("a student uploads documents and they are processed end to end", async ({ p
   await page.getByRole("combobox").first().selectOption("2");
   await expect(page.locator(".page-text")).toContainText("common room");
   await page.screenshot({ path: `${SHOTS}/03-document-text.png`, fullPage: true });
+});
+
+test("a scanned image is read by OCR and becomes searchable", async ({ page }) => {
+  await signIn(page, "asha");
+  await page.getByRole("link", { name: "Documents" }).first().click();
+  // No text layer at all: the only route from pixels to the index is OCR.
+  await upload(
+    page,
+    {
+      name: "scanned-circular.png",
+      mimeType: "image/png",
+      buffer: readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "scanned-circular.png")),
+    },
+    "Workshop Closure Circular",
+  );
+
+  await page.getByRole("tab", { name: "Text" }).click();
+  await expect(page.locator(".content-toolbar .badge", { hasText: "Read by OCR" })).toBeVisible();
+  await expect(page.locator(".page-text")).toContainText("second Saturday");
+
+  await page.getByRole("link", { name: "Search" }).first().click();
+  await page.getByLabel("Search documents").fill("workshop closed for maintenance");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.locator(".result").first()).toContainText("Workshop Closure Circular", {
+    timeout: 90_000,
+  });
 });
 
 test("search finds a passage and opens it at its source", async ({ page }) => {
@@ -200,7 +230,12 @@ test("a system admin sees every dependency healthy and the AI configuration", as
   for (const component of ["Database", "Cache", "Broker", "Storage"]) {
     await expect(page.locator(".health", { hasText: component })).toContainText("Healthy");
   }
-  await expect(page.getByText("sentence-transformers")).toBeVisible();
+  // Whatever this deployment is configured with, the screen must report
+  // exactly what the API says is running - not a hard-coded expectation.
+  const status = await page.request.get("/api/admin/system/");
+  const embedding = (await status.json()).ai.embedding.provider as string;
+  const row = page.locator(".dl-row", { hasText: "Embeddings" });
+  await expect(row).toContainText(embedding || "None");
   await page.screenshot({ path: `${SHOTS}/10-system.png`, fullPage: true });
 
   await page.getByRole("link", { name: "Processing" }).click();

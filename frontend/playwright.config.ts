@@ -7,8 +7,8 @@ import { defineConfig } from "@playwright/test";
  *
  *   E2E_BASE_URL   the frontend origin (default http://localhost:5173)
  *   E2E_PASSWORD   password shared by the seeded e2e accounts
- *   E2E_CHANNEL    browser channel to drive: chrome (default) or msedge,
- *                  so no browser download is needed on a workstation
+ *   E2E_CHANNEL    chrome (default) or msedge to drive an installed browser,
+ *                  or chromium for Playwright's bundled one (CI)
  *
  * See docs/development/testing.md for how the stack and accounts are
  * prepared on a disposable database.
@@ -24,8 +24,14 @@ export default defineConfig({
   outputDir: "./e2e/.results",
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:5173",
-    channel: process.env.E2E_CHANNEL ?? "chrome",
+    // "chromium" means Playwright's own bundled browser (CI installs it);
+    // anything else names an installed one, so a workstation needs no download.
+    channel:
+      process.env.E2E_CHANNEL === "chromium" ? undefined : (process.env.E2E_CHANNEL ?? "chrome"),
     headless: true,
+    // For a local production-stack run behind a self-signed certificate.
+    // Never set against a real deployment: its certificate must verify.
+    ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === "1",
     viewport: { width: 1360, height: 900 },
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
