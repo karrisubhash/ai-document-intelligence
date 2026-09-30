@@ -16,4 +16,34 @@
 #   export RAG_ANSWERER_BACKEND=bedrock
 #   export AWS_BEDROCK_REGION=us-east-1     # a region you have model access in
 #   export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
+#
+# The same AWS credentials also serve the other two halves of retrieval,
+# which is why Bedrock is the recommended backend here rather than one of
+# two equal options - one account replaces all three bundled baselines:
+#
+#   export DOCUMENT_EMBEDDING_PROVIDER=documents.processing.embedding.bedrock.BedrockTitanEmbeddingProvider
+#   export RAG_RERANKER=documents.rag.bedrock_rerank.BedrockReranker
+#
+# Embeddings are Amazon Titan Text Embeddings V2 (semantic, 1024-d, replaces
+# the hashing baseline) and reranking is Cohere Rerank 3.5 (a real
+# cross-encoder, replaces lexical overlap). Both need model access granted
+# in the Bedrock console for the region in AWS_BEDROCK_REGION, and swapping
+# the embedder requires a migration plus `manage.py reindex`.
 anthropic[bedrock]>=1.0.0
+
+# Declared explicitly rather than relied on through anthropic[bedrock]:
+# the embedding provider and the reranker call boto3 directly, and a
+# dependency you import is one you should name.
+boto3>=1.35.0
+
+# The OpenAI client, used NOT for OpenAI but as the lingua franca of
+# /chat/completions. One base_url swap points it at Groq, Google Gemini's
+# compatibility endpoint, OpenRouter, DeepSeek, Together, Cerebras or a
+# local Ollama - so documents/rag/openai_compat.py is a single provider
+# that covers every free tier worth having, rather than one adapter per
+# vendor that all drift apart.
+#
+# This is the layer to install if you want a FREE generative answerer:
+# answering is one call per question, which sits comfortably inside a free
+# tier in a way that bulk embedding never does.
+openai>=1.40.0

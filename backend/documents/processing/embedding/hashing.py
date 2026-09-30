@@ -25,8 +25,12 @@ import math
 import re
 import unicodedata
 
-# Matches the dimensionality of the common small sentence-transformers, so
-# swapping one in later needs no migration. See DocumentChunkEmbedding.
+# Must equal EMBEDDING_DIMENSIONS in documents.models.chunk - the width the
+# pgvector column and its HNSW index are built for. Stated here as a plain
+# int rather than imported, so this module keeps working without the Django
+# app registry loaded (the trainers in ai/ import it). The two are not left
+# to drift: chunking.service.get_provider() compares them on every load and
+# refuses a provider whose width does not match the column.
 DIMENSIONS = 384
 
 WORD = re.compile(r"\w+", re.UNICODE)

@@ -4,11 +4,20 @@ from django.db import models
 from pgvector.django import HnswIndex, VectorField
 
 # Fixed at the column, because a pgvector index is built for one width.
-# Chosen to match the common small sentence-transformers so a real model can
-# replace the baseline without a schema change. A model of a different width
-# needs a migration AND a full re-index, which is the "controlled
-# re-indexing strategy" section 11.4 asks for rather than something to slip
-# in quietly.
+#
+# 384 is the width of the small sentence-transformer family - bge-small,
+# e5-small, all-MiniLM - which is what this platform embeds with by
+# default. That family is the right default for a corpus this size on CPU:
+# bge-small is 33M parameters and embeds a twelve-thousand-document corpus
+# in minutes, where a 1024-wide model takes hours and needs a GPU to be
+# reasonable.
+#
+# A model of a different width needs a migration AND a full re-index, which
+# is the "controlled re-indexing strategy" section 11.4 asks for rather
+# than something to slip in quietly. Amazon Titan Text Embeddings V2, for
+# instance, emits 256, 512 or 1024 and none of them is 384 - so switching
+# to it is a schema change, not a settings change. See
+# documents/processing/embedding/bedrock.py.
 EMBEDDING_DIMENSIONS = 384
 
 

@@ -1,0 +1,390 @@
+{
+  "name": "institutional-v2",
+  "version": "v2",
+  "description": "A benchmark built to DISTINGUISH retrieval configurations, which the v1 seed could not. v1 has 13 cases over 5 documents, and every question is phrased in the documents' own vocabulary - so lexical retrieval already wins and semantic embeddings and a cross-encoder have nothing to add. Measured: v1 scored recall@1 0.70 lexical-only, 0.70 with semantic embeddings and 0.60 with a cross-encoder, differences of exactly one question on a denominator of ten. v2 keeps the v1 cases and adds three things v1 lacks entirely: PARAPHRASE cases whose wording deliberately avoids the source clause's terms, NEAR-MISS cases where two documents use the same word for different rules, and enough of both that one case is not seven points. Nine documents, deliberately overlapping: '15 days' is a revaluation deadline AND a grievance appeal window; 'condonation' appears in three documents; an attendance threshold is 75 percent for exams and 85 percent for a scholarship. Governed and immutable at this version, like v1: a change is v3, or last month's score and this month's describe different exams. Still synthetic - a score here says the pipeline works, not that it works on your regulations.",
+  "cases": [
+    {
+      "question": "What is the minimum attendance required to sit the end-semester examination?",
+      "expected_answer": "75 percent",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "DIRECT. The baseline case: if this fails, retrieval is broken."
+    },
+    {
+      "question": "Can a student with 60 percent attendance apply for condonation?",
+      "expected_answer": "No. Condonation below 65 percent is not permitted.",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "BOUND. The answer is a negative stated in the document. A system that pattern-matches on 'condonation' without reading the bound gets this wrong."
+    },
+    {
+      "question": "What mark counts as a fail in the end-semester examination?",
+      "expected_answer": "less than 40 percent",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "DIRECT."
+    },
+    {
+      "question": "How long do I have to apply for revaluation?",
+      "expected_answer": "15 days from the publication of results",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS. '15 days' is also the grievance appeal window in a different document. Retrieving the wrong one produces a confident, wrong, correctly-cited answer."
+    },
+    {
+      "question": "How often do I have to turn up to class to be allowed to sit my finals?",
+      "expected_answer": "75 percent",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. Avoids 'attendance', 'minimum', 'eligible' and 'end-semester examination' - every content word the clause actually uses. Pure lexical retrieval has almost nothing to match on."
+    },
+    {
+      "question": "I was ill for weeks and missed a lot of teaching. Is there any way I can still take the exam?",
+      "expected_answer": "condonation on medical grounds, between 65 and 75 percent",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. Describes a situation rather than naming the mechanism; the word 'condonation' never appears in the question."
+    },
+    {
+      "question": "What is the penalty for cheating in an exam?",
+      "expected_answer": "debarred from all examinations of that semester",
+      "relevant_documents": ["@examination-policy"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. The document says 'using unauthorised material', never 'cheating'."
+    },
+    {
+      "question": "What happens if I forget my ID card on the day of a test?",
+      "expected_answer": "Entry is refused without it.",
+      "relevant_documents": ["@examination-policy"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE."
+    },
+    {
+      "question": "When is the supplementary examination held?",
+      "expected_answer": "once per academic year, in July",
+      "relevant_documents": ["@examination-policy"],
+      "relevant_pages": [1],
+      "notes": "DIRECT."
+    },
+    {
+      "question": "What is the tuition for B.Tech CSE?",
+      "expected_answer": "85000",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE. The figure is meaningless without its column header."
+    },
+    {
+      "question": "What is the hostel fee for B.Tech MECH?",
+      "expected_answer": "58000",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE. Different column, different row - catches an answer that returns the first row or the first number."
+    },
+    {
+      "question": "What is the examination fee for M.Tech CSE?",
+      "expected_answer": "3000",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE. The only row where the exam fee differs from every other, so an answer that generalises from the common value is wrong."
+    },
+    {
+      "question": "How much is tuition for B.Tech ECE?",
+      "expected_answer": "82000",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE."
+    },
+    {
+      "question": "What happens if I pay my fees late?",
+      "expected_answer": "500 rupees per week surcharge after the last working day of July",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "DIRECT, prose beneath a table. Catches a chunker that keeps only the table."
+    },
+    {
+      "question": "How late can I stay out on a Tuesday night?",
+      "expected_answer": "10 pm",
+      "relevant_documents": ["@hostel-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. The clause says 'curfew' and 'weekdays'; the question says neither, and requires knowing Tuesday is a weekday."
+    },
+    {
+      "question": "What is the hostel curfew on Saturdays?",
+      "expected_answer": "11 pm",
+      "relevant_documents": ["@hostel-regulations"],
+      "relevant_pages": [1],
+      "notes": "DIRECT, but adjacent to the weekday figure in the same sentence - catches an answer that grabs the first time it sees."
+    },
+    {
+      "question": "If I move out of my room halfway through term, do I get any money back?",
+      "expected_answer": "No. The hostel fee for the remainder of that semester is forfeited.",
+      "relevant_documents": ["@hostel-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE and BOUND. 'vacating mid-semester' and 'forfeits' appear nowhere in the question."
+    },
+    {
+      "question": "Where can my parents wait when they visit me?",
+      "expected_answer": "the common room, between 4 pm and 7 pm",
+      "relevant_documents": ["@hostel-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Visitors' is the document's word, 'parents' is the reader's."
+    },
+    {
+      "question": "How many books may an undergraduate borrow at one time?",
+      "expected_answer": "four",
+      "relevant_documents": ["@library-rules"],
+      "relevant_pages": [1],
+      "notes": "DIRECT. Two figures in one clause - undergraduate four, postgraduate six."
+    },
+    {
+      "question": "How many books may a postgraduate student borrow?",
+      "expected_answer": "six",
+      "relevant_documents": ["@library-rules"],
+      "relevant_pages": [1],
+      "notes": "DIRECT. The other half of the same clause, to catch an answer that always returns the first figure."
+    },
+    {
+      "question": "What does it cost me if I keep a book past its due date?",
+      "expected_answer": "5 rupees per day per book",
+      "relevant_documents": ["@library-rules"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. The clause says 'late return fine' and 'overdue'."
+    },
+    {
+      "question": "Can I take a bound journal back to my room overnight?",
+      "expected_answer": "No. Reference volumes and bound journals may not be removed from the library.",
+      "relevant_documents": ["@library-rules"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE and BOUND."
+    },
+    {
+      "question": "At what point do I lose borrowing privileges?",
+      "expected_answer": "once the accumulated fine exceeds 500 rupees",
+      "relevant_documents": ["@library-rules"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS. '500 rupees' is also the late fee surcharge in the fee structure, and 'suspended' privileges also appear in the IT policy."
+    },
+    {
+      "question": "What attendance must a scholarship holder maintain?",
+      "expected_answer": "85 percent",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS, the sharpest one here. 'Attendance' plus a percentage appears in two documents with two different figures - 75 for exams, 85 for a scholarship. Retrieving the wrong document gives a well-formed, well-cited, wrong answer."
+    },
+    {
+      "question": "What aggregate do I need for the merit scholarship?",
+      "expected_answer": "80 percent or above",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS. An aggregate threshold also appears in the placement policy, at 60 percent."
+    },
+    {
+      "question": "Does getting condonation for my attendance protect my scholarship?",
+      "expected_answer": "No. Condonation granted for examination purposes does not restore a scholarship.",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "CROSS-VOCABULARY BOUND. 'Condonation' is defined in the academic regulations but this answer is in the scholarship rules - the question must land on the second, not the first."
+    },
+    {
+      "question": "Can I receive a merit scholarship and means-tested aid together?",
+      "expected_answer": "No. A student may not hold both at the same time.",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "BOUND."
+    },
+    {
+      "question": "Is there any way to apply for financial aid after the deadline?",
+      "expected_answer": "No. Applications close on 30 September and late applications are not considered.",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "BOUND, and a deliberate trap: the clause uses the word 'condonation' in the sense of 'there is none', so a system keying on that word may retrieve the academic regulations and answer about attendance instead."
+    },
+    {
+      "question": "What income level qualifies for means-tested aid?",
+      "expected_answer": "below 300000 rupees annual family income",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "DIRECT."
+    },
+    {
+      "question": "How long do I have to appeal a grievance committee decision?",
+      "expected_answer": "15 days of the decision being communicated",
+      "relevant_documents": ["@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS. '15 days' is also the revaluation window in the academic regulations. Both are deadlines, both are 15 days, and only one is the answer."
+    },
+    {
+      "question": "How long do I have to raise a grievance after something happens?",
+      "expected_answer": "30 days of the incident",
+      "relevant_documents": ["@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS. This document contains 3, 10, 30 and 45 day periods; picking the right one is the test."
+    },
+    {
+      "question": "Can I bring a solicitor to my grievance hearing?",
+      "expected_answer": "No. A complainant may not be accompanied by an external legal representative.",
+      "relevant_documents": ["@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE and BOUND. 'Solicitor' appears nowhere in the corpus."
+    },
+    {
+      "question": "Can I use the grievance procedure to challenge my revaluation result?",
+      "expected_answer": "No. Grievances about the result of a revaluation are outside its scope.",
+      "relevant_documents": ["@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "LOOKS UNANSWERABLE, IS ANSWERABLE. The corpus explicitly excludes this, and a system that abstains here is wrong in the direction that is usually safe - which is why it is worth scoring."
+    },
+    {
+      "question": "How long does the committee have to reach a decision?",
+      "expected_answer": "45 days of appointment",
+      "relevant_documents": ["@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "DIRECT."
+    },
+    {
+      "question": "Can I let my roommate use my login?",
+      "expected_answer": "No. Sharing account credentials is prohibited and the account holder remains responsible.",
+      "relevant_documents": ["@it-acceptable-use"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE and BOUND. 'Roommate' and 'login' are the reader's words; the clause says 'another person' and 'account credentials'."
+    },
+    {
+      "question": "How long does my password need to be?",
+      "expected_answer": "at least 12 characters",
+      "relevant_documents": ["@it-acceptable-use"],
+      "relevant_pages": [1],
+      "notes": "DIRECT."
+    },
+    {
+      "question": "If I leave my project on a lab machine over the summer, will it still be there?",
+      "expected_answer": "No. Files on laboratory computers are deleted at the end of each semester and are not backed up.",
+      "relevant_documents": ["@it-acceptable-use"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. Describes a scenario; the clause describes a policy."
+    },
+    {
+      "question": "What happens when I go over my data allowance?",
+      "expected_answer": "access continues at a reduced speed rather than being cut off",
+      "relevant_documents": ["@it-acceptable-use"],
+      "relevant_pages": [1],
+      "notes": "DIRECT. The answer is the opposite of what a reader would assume, so a system answering from prior knowledge rather than the passage gets it wrong."
+    },
+    {
+      "question": "Will the computer centre ever email me asking for my password?",
+      "expected_answer": "No. The Computer Centre never asks for a password by electronic mail.",
+      "relevant_documents": ["@it-acceptable-use"],
+      "relevant_pages": [1],
+      "notes": "BOUND."
+    },
+    {
+      "question": "What is the printing allowance?",
+      "expected_answer": "200 pages per semester",
+      "relevant_documents": ["@it-acceptable-use"],
+      "relevant_pages": [1],
+      "notes": "DIRECT."
+    },
+    {
+      "question": "What aggregate do I need to be eligible for campus placement?",
+      "expected_answer": "60 percent",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS against the scholarship aggregate of 80 percent."
+    },
+    {
+      "question": "Once I accept an offer, can I keep interviewing with other companies?",
+      "expected_answer": "No. A student who accepts an offer is withdrawn from further placement activity.",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE and BOUND. The clause calls it the one-offer rule and never says 'interviewing'."
+    },
+    {
+      "question": "Does a pending backlog stop me being placed?",
+      "expected_answer": "Yes, unless cleared before the recruiter's cut-off date.",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "QUALIFIED ANSWER. A yes with an exception attached - an answer that stops at 'yes' is incomplete."
+    },
+    {
+      "question": "How long must an internship be to count towards my degree?",
+      "expected_answer": "at least 8 weeks",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "DIRECT."
+    },
+    {
+      "question": "By when must I register with the placement cell?",
+      "expected_answer": "15 August of the final year",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "NEAR-MISS. A third '15' deadline in a corpus that already has two."
+    },
+    {
+      "question": "Can I find out what salary another student was offered?",
+      "expected_answer": "No. Individual offer details, including compensation, are not disclosed to other students.",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "BOUND. A confidentiality rule, which a system that wants to be helpful is tempted to answer around."
+    },
+    {
+      "question": "I have 70 percent attendance and hold a merit scholarship. What happens to each?",
+      "expected_answer": "Condonation may be sought for the examination between 65 and 75 percent, but the scholarship requires 85 percent and is withdrawn.",
+      "relevant_documents": ["@academic-regulations", "@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "CROSS-DOCUMENT. Two documents, two different thresholds, one situation. The multi-part planner should split this; a single retrieval will find one half and miss the other."
+    },
+    {
+      "question": "What does a B.Tech CSE student pay in total for tuition, exam fee and hostel?",
+      "expected_answer": "85000 tuition, 2500 exam fee, 60000 hostel",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE, MULTI-CELL. Three cells from one row. A grounded system should report the components rather than invent a sum the document does not state - a stated total would be an unsupported figure and should fail the grounding check."
+    },
+    {
+      "question": "What are the deadlines for revaluation and for appealing a grievance decision?",
+      "expected_answer": "15 days from publication of results for revaluation; 15 days from communication of the decision for a grievance appeal",
+      "relevant_documents": ["@academic-regulations", "@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "CROSS-DOCUMENT and NEAR-MISS combined. The same number in two documents, and both are required. A system that retrieves one and answers confidently is wrong by omission."
+    },
+    {
+      "question": "What is the institute's policy on remote work for administrative staff?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE. Not in the corpus at all. A benchmark of only answerable questions cannot tell a well-calibrated system from one that never abstains."
+    },
+    {
+      "question": "How many parking spaces are reserved for students?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE. Plausible institutional subject, absent from the corpus."
+    },
+    {
+      "question": "What stipend does a teaching assistant receive?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE, and adjacent to the fee structure - a system that retrieves any table containing money may try to answer from it."
+    },
+    {
+      "question": "How many books may a faculty member borrow?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE BY OMISSION, the hardest kind. The library rules give limits for undergraduates and postgraduates and say nothing about faculty. The retrieved passage looks exactly like the answer, and generalising from it is the failure."
+    },
+    {
+      "question": "What is the maximum number of students per hostel room?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE BY OMISSION. The hostel regulations exist and cover other things, so retrieval will succeed and the answer still is not there."
+    },
+    {
+      "question": "What is the fee for a duplicate identity card?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE. Identity cards appear in the examination policy and fees appear in the fee structure, so both halves of the question retrieve well and neither answers it."
+    },
+    {
+      "question": "What percentage attendance is required for a PhD student?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE BY OMISSION. The corpus has two attendance thresholds for two other populations, which is exactly the shape that invites a confident wrong answer."
+    },
+    {
+      "question": "Which companies recruited on campus last year?",
+      "expect_abstention": true,
+      "notes": "UNANSWERABLE. The placement policy says statistics are published in aggregate only, so the corpus explains why it cannot be answered without containing the answer."
+    }
+  ]
+}

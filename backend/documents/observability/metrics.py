@@ -206,6 +206,47 @@ llm_characters = Counter(
     registry=REGISTRY,
 )
 
+# Per-stage time inside one RAG question. `stage` is a fixed vocabulary
+# (retrieval, rerank, generation, grounding), so the label is bounded. The
+# end-to-end histogram above says a question was slow; this says WHICH
+# part, which is the only thing an operator can act on.
+rag_stage_duration = Histogram(
+    "adi_rag_stage_duration_seconds",
+    "Time spent in one stage of a RAG question.",
+    ["stage"],
+    buckets=FAST_BUCKETS,
+    registry=REGISTRY,
+)
+
+# Labelled by the configured answerer's name, which is one value per
+# deployment - never by question, user or document.
+llm_duration = Histogram(
+    "adi_llm_duration_seconds",
+    "Wall time of one answerer call, including any provider retries.",
+    ["model"],
+    buckets=FAST_BUCKETS,
+    registry=REGISTRY,
+)
+
+# A generative answerer that quietly degrades to the extractive baseline
+# still returns a 200 and a plausible answer, so without a counter the
+# outage is invisible. `reason` is an exception CLASS name - a bounded set
+# (timeout, rate limit, auth, not configured), never a message.
+llm_fallbacks = Counter(
+    "adi_llm_fallbacks_total",
+    "Generative answers that fell back to the extractive baseline.",
+    ["answerer", "reason"],
+    registry=REGISTRY,
+)
+
+rerank_degraded = Counter(
+    "adi_rerank_degraded_total",
+    "Rerank calls whose configured cross-encoder failed and were scored"
+    " lexically instead.",
+    ["reranker"],
+    registry=REGISTRY,
+)
+
 
 # --- Quality (§20: faithfulness, citation accuracy, user feedback) ----------
 

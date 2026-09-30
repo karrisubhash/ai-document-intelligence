@@ -9,9 +9,13 @@ from documents import agents
 from documents.audit import record_event
 from documents.authorization import get_profile
 from documents.models import AuditLog, Conversation, Message
+from documents.rag import followup
 from documents.throttling import BurstUserThrottle
 
-from .serializers import ChatRequestSerializer, ConversationSerializer, MessageSerializer
+from .serializers import (
+    ChatRequestSerializer,
+    ConversationSerializer,
+)
 
 
 class ChatView(APIView):
@@ -32,12 +36,22 @@ class ChatView(APIView):
 
         conversation = self._conversation(request, data.get("conversation_id"))
 
+        # A follow-up is resolved against the caller's own earlier turns
+        # before retrieval sees it. "What about MECH?" carries one content
+        # term and retrieves nothing useful on its own; the conversation is
+        # where the rest of that question already lives. Independent
+        # questions are returned untouched - see documents.rag.followup.
+        resolved = followup.contextualize(
+            data["question"],
+            conversation.messages.order_by("created_at"),
+        )
+
         # Planned when the question asks for several things, and a plain
         # single retrieval otherwise - which is the overwhelmingly common
         # case and behaves exactly as it did before planning existed.
         answer = agents.answer(
             request.user,
-            data["question"],
+            resolved.question,
             document_type=data.get("document_type", ""),
             department=data.get("department", ""),
         )
@@ -71,6 +85,12 @@ class ChatView(APIView):
                     "planned": answer.planned,
                     "plan": [step.question for step in answer.steps],
                     "unanswered": answer.unanswered,
+                    # How a follow-up was resolved, so an answer to the
+                    # wrong reading of a question can be traced to the
+                    # rewrite that caused it rather than blamed on
+                    # retrieval.
+                    "followup": resolved.as_metadata,
+                    "timings": answer.timings,
                 },
             )
             # touch() so the conversation sorts by recency.
@@ -90,7 +110,12 @@ class ChatView(APIView):
         return Response(
             {
                 "conversation_id": conversation.id,
-                "question": answer.question,
+                # What the caller asked, not what retrieval searched on. A
+                # UI echoing this back must show the user their own words;
+                # the resolved form is reported beside it rather than in
+                # place of it.
+                "question": resolved.original,
+                "resolved_question": (resolved.question if resolved.rewritten else ""),
                 "answer": answer.answer,
                 "abstained": answer.abstained,
                 "abstention_reason": answer.abstention_reason,
@@ -128,6 +153,7 @@ class ChatView(APIView):
                     "unanswered": answer.unanswered,
                 },
                 "duration_ms": answer.duration_ms,
+                "timings": answer.timings,
                 "notes": answer.notes,
                 "message_id": assistant.id,
             },

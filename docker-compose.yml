@@ -42,6 +42,15 @@ services:
         # Off by default. Set INSTALL_ML=true to bake scikit-learn into the
         # image so a trained classifier can run in-process.
         INSTALL_ML: ${INSTALL_ML:-false}
+        # Set INSTALL_LLM=true for the Anthropic SDK and boto3, which the
+        # Bedrock embedding provider, reranker and answerer all need. The
+        # API process needs it as much as the worker: search embeds the
+        # QUERY, and reranking and answering both run in the request path.
+        INSTALL_LLM: ${INSTALL_LLM:-false}
+        # Local sentence-transformer models for semantic embeddings and
+        # cross-encoder reranking. The heavy layer - torch - so it is
+        # separate from INSTALL_LLM, which is only API clients.
+        INSTALL_LOCAL: ${INSTALL_LOCAL:-false}
 
     command: >
       sh -c "
@@ -60,6 +69,16 @@ services:
       # checkout mounts an empty directory, which is harmless because
       # DOCUMENT_CLASSIFIER is empty and the stage simply skips.
       - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
+      # The document corpus, read-only, for `manage.py ingest_corpus`.
+      # Bind-mounted rather than copied into the image: it is 12,000
+      # files that belong to evaluation, not to the deployed artifact,
+      # and baking them in would grow every image that never uses them.
+      # Git-ignored, so an untrained checkout mounts an empty directory
+      # and the command says so rather than half-ingesting.
+      - ./ai/classification/data:/app/ai/classification/data:ro
+      # Downloaded model weights. Without this, every rebuild
+      # re-downloads the same 130 MB model on first use.
+      - hf_cache:/app/.cache/huggingface
 
     ports:
       - "${APP_PORT}:8000"
@@ -79,6 +98,11 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_ML: ${INSTALL_ML:-false}
+        INSTALL_LLM: ${INSTALL_LLM:-false}
+        # Local sentence-transformer models for semantic embeddings and
+        # cross-encoder reranking. The heavy layer - torch - so it is
+        # separate from INSTALL_LLM, which is only API clients.
+        INSTALL_LOCAL: ${INSTALL_LOCAL:-false}
 
     # One worker for both queues in development - the separation is
     # about scaling them apart in production, not about needing two
@@ -92,6 +116,16 @@ services:
       # The worker is the process that actually runs the CLASSIFICATION
       # stage, so it needs the artifact at least as much as the API does.
       - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
+      # The document corpus, read-only, for `manage.py ingest_corpus`.
+      # Bind-mounted rather than copied into the image: it is 12,000
+      # files that belong to evaluation, not to the deployed artifact,
+      # and baking them in would grow every image that never uses them.
+      # Git-ignored, so an untrained checkout mounts an empty directory
+      # and the command says so rather than half-ingesting.
+      - ./ai/classification/data:/app/ai/classification/data:ro
+      # Downloaded model weights. Without this, every rebuild
+      # re-downloads the same 130 MB model on first use.
+      - hf_cache:/app/.cache/huggingface
 
     env_file:
       - .env
@@ -138,6 +172,7 @@ services:
       - backend
 
 volumes:
+  hf_cache:
   postgres_data:
   media_data:
   frontend_node_modules:

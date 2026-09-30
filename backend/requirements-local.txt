@@ -1,0 +1,30 @@
+# Local models: semantic embeddings and cross-encoder reranking, run
+# in-process on CPU with no API key, no network at inference time and no
+# per-call cost.
+#
+#   pip install -r backend/requirements-local.txt
+#   export DOCUMENT_EMBEDDING_PROVIDER=documents.processing.embedding.local.LocalEmbeddingProvider
+#   export RAG_RERANKER=documents.rag.local_rerank.LocalCrossEncoderReranker
+#
+# WHY LOCAL RATHER THAN A HOSTED EMBEDDING API, even a free one. Indexing
+# is not one call per question, it is one call per CHUNK: twelve thousand
+# documents is roughly fifty thousand chunks, and every free embedding tier
+# rate-limits well below that. A local model has no quota, no key, no
+# rate limit and no per-token cost, so a full re-index is bounded by CPU
+# rather than by somebody's free allowance. The generative answerer is the
+# opposite shape - one call per question - which is exactly why that one
+# stays a hosted API (see requirements-llm.txt).
+#
+# SIZE. This is the heavy optional layer: torch plus a model download of
+# roughly 130 MB for bge-small and 280 MB for a base reranker, cached under
+# HF_HOME on first use. The CPU-only torch wheels below avoid pulling the
+# ~2 GB CUDA build, which is pure waste on a machine with no GPU.
+#
+# The first embed() call downloads the model. In an air-gapped deployment,
+# pre-populate the cache and set HF_HUB_OFFLINE=1.
+
+# CPU-only torch. Without this index, pip resolves the default CUDA build.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch>=2.2.0
+sentence-transformers>=3.0.0

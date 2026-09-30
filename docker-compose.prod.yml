@@ -48,6 +48,8 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_ML: "true"
+        INSTALL_LLM: "true"
+        INSTALL_LOCAL: "true"
     command: python manage.py migrate --noinput
     env_file:
       - .env
@@ -64,6 +66,8 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_ML: "true"
+        INSTALL_LLM: "true"
+        INSTALL_LOCAL: "true"
     restart: unless-stopped
 
     # Every flag stays at the SAME indentation as `gunicorn`.
@@ -135,6 +139,8 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_ML: "true"
+        INSTALL_LLM: "true"
+        INSTALL_LOCAL: "true"
     restart: unless-stopped
 
     # --max-tasks-per-child recycles workers so a slow leak in a native
@@ -174,6 +180,8 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_ML: "true"
+        INSTALL_LLM: "true"
+        INSTALL_LOCAL: "true"
     restart: unless-stopped
 
     command: >

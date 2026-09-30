@@ -71,6 +71,10 @@ class PlannedAnswer:
     semantic_retrieval: bool = False
     reranker_name: str = ""
     grounding_failures: list = field(default_factory=list)
+    # Per-stage milliseconds. Summed across steps for a planned question,
+    # because each step is a full retrieval and the total is what the user
+    # waited for.
+    timings: dict = field(default_factory=dict)
 
 
 def _renumber(text: str, offset: int) -> str:
@@ -111,6 +115,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         "reranker": "",
         "grounding_failures": [],
     }
+    timings = {}
 
     for part in parts:
         result = ask(user, part, **kwargs)
@@ -139,6 +144,8 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         totals["semantic"] = totals["semantic"] or result.semantic_retrieval
         totals["reranker"] = totals["reranker"] or result.reranker_name
         totals["grounding_failures"] += list(result.grounding_failures)
+        for stage, milliseconds in result.timings.items():
+            timings[stage] = timings.get(stage, 0) + milliseconds
 
         if result.abstained:
             unanswered.append(part)
@@ -172,6 +179,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             semantic_retrieval=totals["semantic"],
             reranker_name=totals["reranker"],
             grounding_failures=totals["grounding_failures"],
+            timings=timings,
         )
 
     if unanswered:
@@ -207,6 +215,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         semantic_retrieval=totals["semantic"],
         reranker_name=totals["reranker"],
         grounding_failures=totals["grounding_failures"],
+        timings=timings,
     )
 
 
@@ -245,4 +254,5 @@ def _single(user, question: str, started: float, **kwargs) -> PlannedAnswer:
         semantic_retrieval=result.semantic_retrieval,
         reranker_name=result.reranker_name,
         grounding_failures=list(result.grounding_failures),
+        timings=dict(result.timings),
     )

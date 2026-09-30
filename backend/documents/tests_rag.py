@@ -123,7 +123,8 @@ class RerankingTests(TestCase):
         tangential = chunk(2, "The library closes at six on weekdays.")
 
         ranked = self.reranker.rerank(
-            "minimum attendance for examinations", hits((tangential, 0.9), (relevant, 0.1))
+            "minimum attendance for examinations",
+            hits((tangential, 0.9), (relevant, 0.1)),
         )
         self.assertEqual(ranked[0].chunk.id, relevant.id)
 
@@ -132,8 +133,10 @@ class RerankingTests(TestCase):
         to move a low-retrieval-score passage to the top."""
         ranked = self.reranker.rerank(
             "attendance",
-            hits((chunk(1, "unrelated text about weather"), 0.99),
-                 (chunk(2, "attendance rules apply"), 0.01)),
+            hits(
+                (chunk(1, "unrelated text about weather"), 0.99),
+                (chunk(2, "attendance rules apply"), 0.01),
+            ),
         )
         self.assertEqual(ranked[0].chunk.id, 2)
 
@@ -151,7 +154,9 @@ class RerankingTests(TestCase):
         self.assertEqual(ranked[0].score, 0.0)
 
     def test_ordering_is_deterministic_for_equal_scores(self):
-        candidates = hits((chunk(2, "same words here"), 0.5), (chunk(1, "same words here"), 0.5))
+        candidates = hits(
+            (chunk(2, "same words here"), 0.5), (chunk(1, "same words here"), 0.5)
+        )
         first = [r.chunk.id for r in self.reranker.rerank("same words", candidates)]
         second = [r.chunk.id for r in self.reranker.rerank("same words", candidates)]
         self.assertEqual(first, second)
@@ -165,8 +170,10 @@ class RerankingTests(TestCase):
 
 class ContextTests(TestCase):
     def test_passages_are_numbered_from_one(self):
-        built = build_context("First passage with enough text to survive the minimum.",
-                              "Second passage with enough text to survive the minimum.")
+        built = build_context(
+            "First passage with enough text to survive the minimum.",
+            "Second passage with enough text to survive the minimum.",
+        )
         self.assertEqual([p.marker for p in built.passages], [1, 2])
 
     def test_duplicate_passages_do_not_spend_two_markers(self):
@@ -209,8 +216,17 @@ class ContextTests(TestCase):
     def test_max_passages_is_respected(self):
         reranked = LexicalReranker().rerank(
             "unique",
-            hits(*[(chunk(i, f"unique passage number {i} with sufficient length here."), 1.0)
-                   for i in range(1, 12)]),
+            hits(
+                *[
+                    (
+                        chunk(
+                            i, f"unique passage number {i} with sufficient length here."
+                        ),
+                        1.0,
+                    )
+                    for i in range(1, 12)
+                ]
+            ),
         )
         for item in reranked:
             item.score = 1.0
@@ -380,13 +396,145 @@ class GroundingTests(TestCase):
             "Attendance minimum is 75 percent. [1]", self.built
         )
         self.assertEqual(len(citations), 1)
-        for key in ("document_id", "page_number", "chunk_id", "character_start", "marker"):
+        for key in (
+            "document_id",
+            "page_number",
+            "chunk_id",
+            "character_start",
+            "marker",
+        ):
             self.assertIn(key, citations[0])
 
     def test_markers_are_extracted_in_first_appearance_order(self):
         self.assertEqual(
             grounding.extract_markers("claim [2] another [1] repeat [2]"), (2, 1)
         )
+
+
+class FactGroundingTests(TestCase):
+    """Grounding must test truth, not prose style.
+
+    These pin the behaviour that replaced a bag-of-words support ratio as
+    the gate. Measured against the old 55% ratio, the four answers in
+    `test_a_well_written_answer_is_not_punished_for_being_well_written`
+    scored 1.00, 0.65, 0.46 and 0.30 - so the last two, both correct and
+    fully cited, were discarded and replaced with an abstention. Meanwhile
+    the answer in `test_a_single_fabricated_figure_fails_however_fluent`
+    scored 0.91 and passed.
+
+    The old gate was inverted on exactly the two cases that matter most.
+    """
+
+    def setUp(self):
+        self.built = build_context(
+            "A student must maintain a minimum of 75 percent attendance in "
+            "each course to be eligible for the end-semester examination.",
+            "Condonation may be granted by the Head of Department where "
+            "attendance is not less than 65 percent. Condonation below 65 "
+            "percent is not permitted.",
+        )
+
+    def test_a_well_written_answer_is_not_punished_for_being_well_written(self):
+        """The whole point. Each of these is correct, cited, and readable."""
+        structured = (
+            "**Short answer:** you need 75% attendance to sit the exam [1].\n"
+            "\n"
+            "- The baseline requirement is a minimum of 75 percent in each "
+            "individual course [1].\n"
+            "- If you fall short, the Head of Department can grant "
+            "condonation, but only at 65 percent or above [2].\n"
+            "- Below 65 percent there is no discretion available at all [2]."
+        )
+        conversational = (
+            "Great question! The key threshold is 75 percent - that is the "
+            "minimum required in every course before you are allowed to sit "
+            "the end-semester examination [1]. If you fall below it, there "
+            "is a condonation process run by your Head of Department, "
+            "though it only helps at 65 percent or above [2]."
+        )
+        answers = (
+            "A student must maintain a minimum of 75 percent attendance "
+            "in each course. [1]",
+            "You need at least 75 percent attendance in each course to sit "
+            "the end-semester examination [1]. Below that, condonation is "
+            "possible only down to 65 percent [2].",
+            structured,
+            conversational,
+        )
+
+        for answer in answers:
+            with self.subTest(answer=answer[:40]):
+                report = grounding.validate(answer, self.built)
+                self.assertTrue(
+                    report.ok,
+                    f"correct, cited answer rejected: {report.failures}",
+                )
+
+    def test_a_single_fabricated_figure_fails_however_fluent(self):
+        """Word overlap 0.91 - the old gate passed this. It is wrong."""
+        report = grounding.validate(
+            "A student must maintain a minimum of 80 percent attendance in "
+            "each course to be eligible for the end-semester examination. [1]",
+            self.built,
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("80", report.unsupported_facts)
+
+    def test_a_subtly_wrong_threshold_fails(self):
+        report = grounding.validate(
+            "You may apply for condonation provided your attendance is at "
+            "least 60 percent [2].",
+            self.built,
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("60", report.unsupported_facts)
+
+    def test_an_invented_figure_beside_a_correct_one_still_fails(self):
+        """The dangerous shape: mostly right, so it reads as trustworthy."""
+        report = grounding.validate(
+            "Attendance must be 75 percent [1], and a condonation fee of "
+            "500 rupees applies [2].",
+            self.built,
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("500", report.unsupported_facts)
+
+    def test_percent_and_percent_sign_are_the_same_fact(self):
+        """A correct answer must not fail on formatting."""
+        report = grounding.validate("Attendance must be 75%. [1]", self.built)
+        self.assertTrue(report.ok, report.failures)
+
+    def test_thousands_separators_do_not_invent_a_fact(self):
+        built = build_context("The annual tuition for this programme is 85000.")
+        report = grounding.validate("Tuition is 85,000 per year. [1]", built)
+        self.assertTrue(report.ok, report.failures)
+
+    def test_markdown_list_numbering_is_not_a_claim(self):
+        """A numbered list must not read as asserting the numbers 1 and 2."""
+        listed = (
+            "There are two rules:\n"
+            "1. Maintain 75 percent attendance per course [1].\n"
+            "2. Condonation is available down to 65 percent [2]."
+        )
+        report = grounding.validate(listed, self.built)
+        self.assertTrue(report.ok, report.failures)
+
+    def test_a_citation_marker_is_not_counted_as_a_fact(self):
+        """[1] must not be read as the answer asserting the number one."""
+        report = grounding.validate(
+            "Attendance of 75 percent is required. [1]", self.built
+        )
+        self.assertTrue(report.ok, report.failures)
+        self.assertEqual(report.unsupported_facts, ())
+
+    def test_an_off_topic_answer_still_fails_the_prose_backstop(self):
+        """Lowering the ratio must not mean abandoning it."""
+        report = grounding.validate(
+            "The library remains open until midnight during reading week and "
+            "laptops may be borrowed from the front desk. [1]",
+            self.built,
+        )
+        self.assertFalse(report.ok)
 
 
 # --- End to end through the engine ------------------------------------------
@@ -462,7 +610,7 @@ class RagEngineTests(TestCase):
         self.assertEqual(answer.abstention_reason, Abstention.NO_QUERY)
 
     def test_abstention_reasons_are_distinguishable(self):
-        """"no documents", "nothing relevant" and "could not ground" are
+        """ "no documents", "nothing relevant" and "could not ground" are
         three different facts about the system."""
         stranger = get_user_model().objects.create_user(
             username="rag_stranger", password="pass1234"
@@ -481,8 +629,12 @@ class RagEngineTests(TestCase):
 
     def test_answers_never_cite_a_document_the_user_cannot_read(self):
         outsider = make_user("rag_outsider2", department="Mechanical")
-        self.index("Mechanical Secret", b"The mechanical budget is forty lakh rupees.\n",
-                   outsider, "Mechanical")
+        self.index(
+            "Mechanical Secret",
+            b"The mechanical budget is forty lakh rupees.\n",
+            outsider,
+            "Mechanical",
+        )
 
         answer = rag.ask(self.user, "What is the mechanical budget?")
         titles = {c["document_title"] for c in answer.citations}
@@ -522,8 +674,10 @@ class ChatAPITests(TestCase):
         self.client.force_authenticate(self.user)
 
         document = Document.objects.create(
-            title="Library Policy", document_type="POLICY",
-            owner=self.user, department="Registry",
+            title="Library Policy",
+            document_type="POLICY",
+            owner=self.user,
+            department="Registry",
         )
         version = document.versions.create(
             version_number=1,
@@ -604,7 +758,9 @@ class ChatAPITests(TestCase):
 
     def test_chat_is_audited_without_recording_the_question(self):
         self.ask(question="confidential salary information for staff")
-        entry = AuditLog.objects.filter(action=AuditLog.Action.CHAT).latest("created_at")
+        entry = AuditLog.objects.filter(action=AuditLog.Action.CHAT).latest(
+            "created_at"
+        )
 
         self.assertEqual(entry.user, self.user)
         self.assertNotIn("confidential", str(entry.metadata).lower())
@@ -703,7 +859,6 @@ class HeaderRowAnsweringTests(TestCase):
         self.assertIn("too large", response.metadata["reason"])
 
     def test_a_non_table_passage_is_unaffected(self):
-        from documents.rag import context as ctx
 
         text = (
             "The attendance minimum is 75 percent for examination "
@@ -754,9 +909,7 @@ class LexicalCoincidenceTests(TestCase):
 
     def test_a_genuine_two_term_match_still_answers(self):
         """The fix must not cost real questions their answers."""
-        context = self.context_for(
-            "Clause 3.1 The hostel curfew is 10 pm on weekdays."
-        )
+        context = self.context_for("Clause 3.1 The hostel curfew is 10 pm on weekdays.")
 
         response = self.answerer.answer(
             question="What is the hostel curfew?", context=context, prompt=""
@@ -769,12 +922,8 @@ class LexicalCoincidenceTests(TestCase):
         """When the question has one content word, one match is all there
         is to find - the rule would otherwise make such questions
         unanswerable."""
-        context = self.context_for(
-            "Clause 3.1 The hostel curfew is 10 pm on weekdays."
-        )
+        context = self.context_for("Clause 3.1 The hostel curfew is 10 pm on weekdays.")
 
-        response = self.answerer.answer(
-            question="curfew?", context=context, prompt=""
-        )
+        response = self.answerer.answer(question="curfew?", context=context, prompt="")
 
         self.assertFalse(response.abstained, response.text)

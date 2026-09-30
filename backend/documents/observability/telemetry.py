@@ -156,6 +156,40 @@ def rag_answered(answer):
 
 
 @_safe
+def rag_stage_timings(timings: dict):
+    """Per-stage seconds for one question. Keys are the fixed stage names
+    the engine uses, so the label vocabulary cannot grow from here."""
+    for stage, milliseconds in (timings or {}).items():
+        metrics.rag_stage_duration.labels(stage=str(stage)).observe(
+            milliseconds / 1000.0
+        )
+
+
+@_safe
+def llm_called(response, duration_seconds: float):
+    """One answerer call: its latency, and whether it quietly degraded."""
+    model = response.model_name or "unknown"
+    metrics.llm_duration.labels(model=model).observe(duration_seconds)
+
+    fell_back_from = (response.metadata or {}).get("fell_back_from")
+    if fell_back_from:
+        reason = str(response.metadata.get("fallback_reason") or "unspecified")
+        metrics.llm_fallbacks.labels(answerer=str(fell_back_from), reason=reason).inc()
+        log_event(
+            logger,
+            logging.WARNING,
+            "llm.fell_back",
+            answerer=fell_back_from,
+            reason=reason,
+        )
+
+
+@_safe
+def rerank_degraded(reranker_name: str):
+    metrics.rerank_degraded.labels(reranker=str(reranker_name)).inc()
+
+
+@_safe
 def llm_usage(response):
     """Token and character usage from one answerer response (NFR-10)."""
     model = response.model_name or "unknown"

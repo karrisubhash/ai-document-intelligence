@@ -37,7 +37,47 @@ DEFAULT_RETRIEVAL_DEPTH = 20
 # A passage must beat this after reranking to enter the context. Below it,
 # the passage is a lexical coincidence, and building an answer from
 # coincidences is how a system produces confident nonsense.
+#
+# This number belongs to a SCORING SCHEME, not to the system. The lexical
+# reranker emits a weighted sum of three ratios; a cross-encoder emits a
+# calibrated relevance probability, and 0.15 does not mean the same thing
+# in both. A reranker may therefore declare `default_relevance_floor`, and
+# `resolve_relevance_floor` prefers, in order: an explicit per-call
+# override, an explicitly configured RAG_RELEVANCE_FLOOR, the reranker's
+# own default, then this. Swapping in a reranker whose scores are
+# distributed differently should not silently change how much evidence
+# reaches the answer.
 DEFAULT_RELEVANCE_FLOOR = 0.15
+
+
+def resolve_relevance_floor(reranker, override=None, *, degraded=False) -> float:
+    """The floor that belongs to the scoring scheme that produced the scores.
+
+    `degraded` is the case that made this a function of the RESULT and not
+    only of the configured reranker. Both cross-encoders fall back to the
+    lexical reranker when their model is unavailable, and the scores they
+    then return are lexical scores. Holding those to the cross-encoder's
+    floor (0.30 for the local model) instead of the lexical one (0.15)
+    turned a model outage into a wave of abstentions on questions the
+    lexical scores would have answered - a degraded mode worse than the
+    baseline it degrades to.
+    """
+    if override is not None:
+        return override
+
+    configured = getattr(settings, "RAG_RELEVANCE_FLOOR", None)
+    if configured is not None:
+        return configured
+
+    if degraded:
+        return DEFAULT_RELEVANCE_FLOOR
+
+    return getattr(reranker, "default_relevance_floor", DEFAULT_RELEVANCE_FLOOR)
+
+
+def _was_degraded(reranked) -> bool:
+    """Whether a cross-encoder handed back lexical scores instead of its own."""
+    return any(item.signals.get("reranker_degraded") for item in reranked)
 
 
 class Abstention:
@@ -45,7 +85,9 @@ class Abstention:
     NO_DOCUMENTS = "no authorized documents matched the question"
     NO_RELEVANT_PASSAGES = "retrieved passages were not relevant enough"
     EMPTY_CONTEXT = "no passage survived context construction"
-    MODEL_ABSTAINED = "the answerer found nothing in the passages that answered the question"
+    MODEL_ABSTAINED = (
+        "the answerer found nothing in the passages that answered the question"
+    )
     UNGROUNDED = "the answer could not be grounded in the cited passages"
     # Distinguishable from the rest on purpose. "I could not find that" and
     # "I could not find that, and there is a figure on the page you are
@@ -83,6 +125,9 @@ class RagAnswer:
     semantic_retrieval: bool = False
     reranker_name: str = ""
     duration_ms: int = 0
+    # Milliseconds per stage - retrieval, rerank, generation, grounding.
+    # duration_ms says a question was slow; this says which part was.
+    timings: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
 
 
@@ -215,7 +260,12 @@ def _abstain(question, reason, started, **extra) -> RagAnswer:
     # be added later that silently emits nothing - an abstention nobody
     # counts is exactly the signal worth alerting on.
     telemetry.rag_answered(answer)
+    telemetry.rag_stage_timings(answer.timings)
     return answer
+
+
+def _elapsed_ms(since: float) -> int:
+    return int((time.monotonic() - since) * 1000)
 
 
 def ask(
@@ -236,13 +286,10 @@ def ask(
     depth = retrieval_depth or getattr(
         settings, "RAG_RETRIEVAL_DEPTH", DEFAULT_RETRIEVAL_DEPTH
     )
-    floor = (
-        relevance_floor
-        if relevance_floor is not None
-        else getattr(settings, "RAG_RELEVANCE_FLOOR", DEFAULT_RELEVANCE_FLOOR)
-    )
+    timings = {}
 
     # --- Retrieve (permission filter runs inside, before similarity) ------
+    stage_started = time.monotonic()
     retrieval = search_service.search(
         user,
         question,
@@ -250,6 +297,7 @@ def ask(
         document_type=document_type,
         department=department,
     )
+    timings["retrieval"] = _elapsed_ms(stage_started)
 
     if not retrieval.hits:
         return _abstain(
@@ -258,11 +306,30 @@ def ask(
             started,
             semantic_retrieval=retrieval.semantic,
             notes=list(retrieval.notes),
+            timings=timings,
         )
 
     # --- Rerank -----------------------------------------------------------
     reranker = get_reranker()
+    stage_started = time.monotonic()
     reranked = reranker.rerank(question, retrieval.hits)
+    timings["rerank"] = _elapsed_ms(stage_started)
+
+    # Notes that describe how THIS answer was produced, as opposed to what
+    # retrieval found. Both a degraded reranker and a fallen-back answerer
+    # still produce a normal-looking response, so unless they are named here
+    # a reader has no way to know the answer came from the baseline.
+    notes = list(retrieval.notes)
+
+    degraded = _was_degraded(reranked)
+    if degraded:
+        telemetry.rerank_degraded(reranker.name)
+        notes.append(
+            f"reranker {reranker.name} was unavailable; passages were scored "
+            f"lexically instead"
+        )
+
+    floor = resolve_relevance_floor(reranker, relevance_floor, degraded=degraded)
     relevant = [item for item in reranked if item.score >= floor]
 
     if not relevant:
@@ -276,7 +343,8 @@ def ask(
             reranked=len(reranked),
             reranker_name=reranker.name,
             semantic_retrieval=retrieval.semantic,
-            notes=[f"best relevance {best:.3f} below floor {floor:.3f}"],
+            notes=[*notes, f"best relevance {best:.3f} below floor {floor:.3f}"],
+            timings=timings,
         )
 
     # --- Build context ----------------------------------------------------
@@ -298,13 +366,32 @@ def ask(
             reranked=len(reranked),
             reranker_name=reranker.name,
             semantic_retrieval=retrieval.semantic,
+            notes=notes,
+            timings=timings,
         )
 
     prompt = context_builder.render(built, question)
 
     # --- Answer -----------------------------------------------------------
     answerer = get_answerer()
+    stage_started = time.monotonic()
     response = answerer.answer(question=question, context=built, prompt=prompt)
+    timings["generation"] = _elapsed_ms(stage_started)
+
+    # Usage is recorded for EVERY response, not only returned answers. An
+    # answer that fails grounding still consumed its tokens, and counting
+    # cost only on success under-reports it by exactly the answers that
+    # were most wasteful.
+    telemetry.llm_called(response, timings["generation"] / 1000.0)
+    telemetry.llm_usage(response)
+
+    fell_back_from = (response.metadata or {}).get("fell_back_from")
+    if fell_back_from:
+        notes.append(
+            f"generative answerer {fell_back_from} was unavailable "
+            f"({response.metadata.get('fallback_reason') or 'unspecified'}); "
+            f"answered by quoting passages instead"
+        )
 
     common = {
         "retrieved": len(retrieval.hits),
@@ -317,13 +404,18 @@ def ask(
         "generative": response.generative,
         "semantic_retrieval": retrieval.semantic,
         "reranker_name": reranker.name,
+        "timings": timings,
     }
 
     if response.abstained:
-        return _abstain(question, Abstention.MODEL_ABSTAINED, started, **common)
+        return _abstain(
+            question, Abstention.MODEL_ABSTAINED, started, notes=notes, **common
+        )
 
     # --- Verify before returning -----------------------------------------
+    stage_started = time.monotonic()
     report = grounding.validate(response.text, built, abstained=False)
+    timings["grounding"] = _elapsed_ms(stage_started)
 
     if not report.ok:
         # The model said something; it could not be substantiated. Section
@@ -335,6 +427,7 @@ def ask(
             started,
             support_ratio=report.support_ratio,
             grounding_failures=list(report.failures),
+            notes=notes,
             **common,
         )
 
@@ -345,9 +438,9 @@ def ask(
         citations=grounding.citations_for(response.text, built),
         support_ratio=report.support_ratio,
         duration_ms=int((time.monotonic() - started) * 1000),
-        notes=list(retrieval.notes),
+        notes=notes,
         **common,
     )
     telemetry.rag_answered(answer)
-    telemetry.llm_usage(response)
+    telemetry.rag_stage_timings(timings)
     return answer

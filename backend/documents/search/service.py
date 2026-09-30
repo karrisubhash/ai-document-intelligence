@@ -14,12 +14,13 @@ literally contain "REG/2024/117". Fusing them is what makes a search robust
 to both paraphrase and exact identifiers (section 12.2).
 """
 
+import logging
 import re
 from dataclasses import dataclass, field
 
 from django.conf import settings
 from django.contrib.postgres.search import SearchQuery, SearchRank
-from django.db.models import F, Q
+from django.db.models import F
 from pgvector.django import CosineDistance
 
 from documents import authorization
@@ -29,6 +30,8 @@ from documents.processing.chunking.exceptions import (
     EmbeddingProviderNotConfigured,
     EmbeddingProviderUnavailable,
 )
+
+logger = logging.getLogger("adi.search")
 
 # Reciprocal-rank fusion constant. 60 is the value from the original RRF
 # paper and is deliberately large relative to the result depth: it flattens
@@ -233,9 +236,7 @@ def search(
             document_version__document__document_type=document_type
         )
     if department:
-        queryset = queryset.filter(
-            document_version__document__department=department
-        )
+        queryset = queryset.filter(document_version__document__department=department)
 
     response = SearchResponse(query=query, authorized_documents=documents.count())
 
@@ -252,9 +253,7 @@ def search(
     try:
         provider = chunking_service.get_provider()
     except EmbeddingProviderNotConfigured:
-        response.notes.append(
-            "no embedding provider configured - lexical results only"
-        )
+        response.notes.append("no embedding provider configured - lexical results only")
         provider = None
     except EmbeddingProviderUnavailable as exc:
         response.notes.append(f"embedding provider unavailable: {exc}")
@@ -269,11 +268,43 @@ def search(
                 "vector results reflect vocabulary overlap, not meaning"
             )
 
-        batch = provider.embed([query])
-        vector_hits = _vector(
-            queryset, batch.vectors[0], provider.name, provider.version, candidates
-        )
-        response.vector_candidates = len(vector_hits)
+        # Embedding the QUERY is a second, separate failure point from
+        # loading the provider, and it was unguarded. That cost nothing
+        # while the only embedder was the hashing baseline, which is pure
+        # arithmetic and cannot fail. It is not exotic for a real one: a
+        # local model downloads its weights on first use, so a cold cache,
+        # a read-only cache directory or a half-installed torch turns the
+        # FIRST SEARCH AFTER A DEPLOY into a 500 - while the lexical half
+        # sitting right above this line is perfectly healthy and would have
+        # answered the question.
+        #
+        # Degrading here is the same judgement `chunk_content` already
+        # makes when it indexes chunks without vectors: half a search is
+        # more useful than none. What is NOT acceptable is substituting a
+        # vector from somewhere else - a vector from another model is not
+        # comparable, and fusing one in would silently corrupt the ranking
+        # rather than narrow it.
+        try:
+            batch = provider.embed([query])
+        except Exception as exc:
+            response.notes.append(
+                f"query could not be embedded ({type(exc).__name__}) - "
+                f"lexical results only"
+            )
+            response.semantic = False
+            logger.warning(
+                "search.query_embedding_failed",
+                extra={
+                    "provider": provider.name,
+                    "version": provider.version,
+                    "error": type(exc).__name__,
+                },
+            )
+        else:
+            vector_hits = _vector(
+                queryset, batch.vectors[0], provider.name, provider.version, candidates
+            )
+            response.vector_candidates = len(vector_hits)
 
     # --- Fusion -----------------------------------------------------------
     response.hits = _fuse(lexical, vector_hits, limit)
@@ -309,9 +340,7 @@ def _fuse(lexical, vector_hits, limit: int) -> list:
         entry["vector_score"] = 1.0 - distance
         entry["matched"].append("vector")
 
-    ordered = sorted(
-        scores.items(), key=lambda item: (-item[1]["score"], item[0])
-    )
+    ordered = sorted(scores.items(), key=lambda item: (-item[1]["score"], item[0]))
 
     return [
         SearchHit(
