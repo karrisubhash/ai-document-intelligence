@@ -5,7 +5,7 @@ import json
 from datetime import timedelta
 from unittest import mock
 
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -478,3 +478,38 @@ class InfrastructureEndpointsBehindTheProxyTests(TestCase):
         with override_settings(METRICS_ALLOWED_IPS=["10.1.2.3"], **self.PRODUCTION):
             response = self.client.get("/metrics", HTTP_HOST="172.20.0.6:8000")
         self.assertEqual(response.status_code, 403)
+
+
+class WorkerWarmupTests(SimpleTestCase):
+    """The Celery warm-up hook must never delay a child's start-up.
+
+    Celery kills a child that has not reported up within
+    worker_proc_alive_timeout (4 s). An inline warm-up (~10 s of torch
+    import and model load) had every recycled child SIGKILLed in a loop, and
+    ingestion stopped after 200 documents on the production stack.
+    """
+
+    def test_the_hook_returns_immediately_and_warms_in_the_background(self):
+        import threading
+        import time
+
+        from config import celery as celery_config
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_warm(**kwargs):
+            started.set()
+            release.wait(5)
+
+        with (
+            mock.patch("documents.processing.warmup.enabled", return_value=True),
+            mock.patch("documents.processing.warmup.warm", side_effect=slow_warm),
+        ):
+            began = time.monotonic()
+            celery_config.warm_models()
+            elapsed = time.monotonic() - began
+            self.assertTrue(started.wait(2), "the warm-up never started")
+            release.set()
+
+        self.assertLess(elapsed, 0.5, "the hook blocked the child's start-up")

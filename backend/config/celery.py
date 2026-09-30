@@ -39,13 +39,34 @@ app.autodiscover_tasks(related_name="tasks_reindex")
 
 @worker_process_init.connect
 def warm_models(**kwargs):
-    """Load the embedding model in each worker child before its first task.
+    """Start loading the embedding model in each worker child - in a thread.
 
     Indexing embeds every chunk, so an unwarmed child loads the model inside
     the first document's INDEXING stage. Embedding only: workers never
     rerank. See documents/processing/warmup.py.
+
+    NEVER INLINE. This hook runs inside the child before it reports itself
+    up, and Celery's master waits only `worker_proc_alive_timeout` (4 s by
+    default) before killing a child that has not. Importing torch and
+    loading the model takes about 10 s, so the first version of this hook -
+    which loaded inline - had every recycled child SIGKILLed during start-up
+    and replaced by another that met the same fate. Measured on the
+    production stack: with --max-tasks-per-child=100 and two children,
+    ingestion stopped dead after exactly 200 documents, with the worker
+    looping "Timed out waiting for UP message" forever.
+
+    In a thread, the child reports up at once. A task that needs the model
+    meanwhile waits on the provider's own load lock, so nothing ever runs
+    against a half-loaded model.
     """
+    import threading
+
     from documents.processing import warmup
 
     if warmup.enabled():
-        warmup.warm(reason="celery", components=("embedding",))
+        threading.Thread(
+            target=warmup.warm,
+            kwargs={"reason": "celery", "components": ("embedding",)},
+            name="model-warmup",
+            daemon=True,
+        ).start()
