@@ -22,6 +22,7 @@ from accounts.models import Department, UserProfile
 from accounts.services import rename_department, revoke_api_tokens
 from documents.audit import record_event
 from documents.models import AuditLog
+from documents.observability import telemetry
 from documents.throttling import LoginRateThrottle
 
 from .serializers import (
@@ -83,6 +84,7 @@ def _authenticate(request, data, *, method):
                 ),
             },
         )
+        telemetry.login_failed(method)
         # One message for "no such user" and "wrong password", so the
         # endpoint cannot be used to discover which usernames exist. A 400,
         # as DRF's own token view returns, so existing clients see no change.
@@ -110,6 +112,13 @@ class CsrfView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    # Unthrottled on purpose. It is anonymous, so the default anonymous
+    # throttle (30/hour per IP) applied - and behind nginx, or a campus NAT,
+    # every browser shares one IP. The site would have stopped letting
+    # anyone sign in after thirty page loads an hour. Issuing a CSRF token
+    # costs nothing and authenticates nobody; the login it enables has its
+    # own per-username throttle.
+    throttle_classes = []
 
     def get(self, request):
         return Response({"csrf_token": get_token(request)})

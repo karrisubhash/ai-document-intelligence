@@ -91,6 +91,15 @@ class SessionLoginTests(TestCase):
         self.assertEqual(unknown.metadata["attempted_username"], "mallory")
         self.assertNotIn("password", str(unknown.metadata).lower())
 
+    def test_failed_logins_are_counted_where_monitoring_looks(self):
+        """A 400 is not a 401, so the middleware alone never counted these."""
+        from documents.observability import metrics
+
+        before = metrics.auth_failures._value.get()
+        self.login(password="nope")
+        self.login(username="mallory")
+        self.assertEqual(metrics.auth_failures._value.get() - before, 2)
+
     def test_an_inactive_account_cannot_sign_in(self):
         self.user.is_active = False
         self.user.save()
@@ -228,3 +237,73 @@ class CapabilityTests(TestCase):
     def test_a_system_admin_has_everything(self):
         caps = self.capabilities(make_user("sadmin", UserProfile.Role.SYSTEM_ADMIN))
         self.assertTrue(all(caps.values()))
+
+
+class ThrottlingBehindAProxyTests(TestCase):
+    """Throttles that looked right in isolation and failed behind nginx."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_the_csrf_endpoint_is_not_rate_limited(self):
+        """Anonymous, so the anonymous throttle applied - and behind nginx
+        every browser shares one address. Sign-in would have stopped working
+        site-wide after thirty page loads an hour."""
+        client = APIClient()
+        for _ in range(60):
+            self.assertEqual(client.get(reverse("auth-csrf")).status_code, 200)
+
+    def test_a_polling_dashboard_is_not_throttled_within_the_hour(self):
+        """The dashboard polls every 5 s while documents process: 720 an
+        hour, against the old 300/hour catch-all."""
+        client = APIClient()
+        client.force_authenticate(make_user("poller"))
+        for _ in range(750):
+            response = client.get(reverse("dashboard"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_client_addresses_are_read_through_one_proxy_when_configured(self):
+        from django.test import RequestFactory, override_settings
+        from rest_framework.request import Request
+
+        from documents.throttling import LoginRateThrottle
+
+        raw = RequestFactory().post(
+            "/api/auth/login/",
+            REMOTE_ADDR="172.18.0.5",  # nginx
+            HTTP_X_FORWARDED_FOR="203.0.113.7",  # the browser
+        )
+        with override_settings(REST_FRAMEWORK={"NUM_PROXIES": 1}):
+            self.assertEqual(LoginRateThrottle().get_ident(Request(raw)), "203.0.113.7")
+        # With no proxy configured, the socket address is used.
+        self.assertEqual(LoginRateThrottle().get_ident(Request(raw)), "172.18.0.5")
+
+    def test_a_forged_forwarded_for_header_does_not_change_who_you_are(self):
+        """The bypass: DRF's unset default reads the WHOLE header, which the
+        client writes. Varying it gave every login attempt a fresh throttle
+        key. nginx appends the real address; only that entry may count."""
+        from django.test import RequestFactory, override_settings
+        from rest_framework.request import Request
+
+        from documents.throttling import LoginRateThrottle
+
+        def ident(forged, *, proxies):
+            raw = RequestFactory().post(
+                "/api/auth/login/",
+                REMOTE_ADDR="172.18.0.5",
+                # What nginx forwards: the client's forged value, then the
+                # address it actually saw.
+                HTTP_X_FORWARDED_FOR=f"{forged}, 203.0.113.7",
+            )
+            with override_settings(REST_FRAMEWORK={"NUM_PROXIES": proxies}):
+                return LoginRateThrottle().get_ident(Request(raw))
+
+        self.assertEqual(ident("10.0.0.1", proxies=1), ident("10.9.9.9", proxies=1))
+        self.assertEqual(ident("10.0.0.1", proxies=1), "203.0.113.7")
+        # And with no proxy, the header is ignored entirely.
+        self.assertEqual(ident("10.0.0.1", proxies=0), "172.18.0.5")
+
+    def test_the_setting_is_never_left_to_drfs_trusting_default(self):
+        from rest_framework.settings import api_settings
+
+        self.assertIsNotNone(api_settings.NUM_PROXIES)

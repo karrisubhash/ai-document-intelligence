@@ -66,6 +66,16 @@ class BackupTests(TestCase):
         # Restoring into a codebase at a different migration is the failure
         # this records; without it the mismatch surfaces only at runtime.
         self.assertIn("migration", manifest)
+        # Per app: the single "latest applied" migration was whichever app
+        # ran last (sessions.0001_initial on a documents-0016 database).
+        from django.db.migrations.recorder import MigrationRecorder
+
+        applied = set(
+            MigrationRecorder.Migration.objects.filter(app="documents").values_list(
+                "name", flat=True
+            )
+        )
+        self.assertEqual(manifest["migrations"]["documents"], max(applied))
 
     @skip_without_pg_dump
     def test_the_dump_is_verified_before_success_is_reported(self):

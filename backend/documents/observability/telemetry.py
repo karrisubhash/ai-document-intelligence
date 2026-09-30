@@ -213,6 +213,20 @@ def llm_usage(response):
 
 
 @_safe
+def login_failed(method: str):
+    """A wrong username or password at a login endpoint.
+
+    Counted here, not by the middleware's 401 rule: login endpoints answer
+    bad credentials with a 400 (DRF's token-view contract), so a guessing
+    run never produced a 401 and never showed up on the one metric built to
+    reveal it. No username is logged or labelled - it is attacker-chosen
+    input, and the audit log already records the targeted account.
+    """
+    metrics.auth_failures.inc()
+    log_event(logger, logging.WARNING, "security.login.failed", method=str(method))
+
+
+@_safe
 def upload_rejected(reason, *, user_id=None):
     """An upload refused before it was stored (documents.uploads).
 

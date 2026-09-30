@@ -78,6 +78,12 @@ class Command(BaseCommand):
             # at a different migration is the failure this records, and
             # without it the mismatch is only discovered at runtime.
             "migration": self._latest_migration(),
+            # Per app, because "the most recently APPLIED migration" is not
+            # the state of the schema: on a database migrated in one run it
+            # is whichever app happened to be applied last - observed as
+            # `sessions.0001_initial` on a database whose documents app was
+            # at 0016. Restore compares these against the code.
+            "migrations": self._migrations_by_app(),
             "duration_seconds": round(time.monotonic() - started, 2),
         }
 
@@ -174,6 +180,21 @@ class Command(BaseCommand):
             return f"{latest.app}.{latest.name}" if latest else ""
         except Exception:  # pragma: no cover - defensive
             return ""
+
+    @staticmethod
+    def _migrations_by_app() -> dict:
+        try:
+            latest = {}
+            for app, name in MigrationRecorder(connection).migration_qs.values_list(
+                "app", "name"
+            ):
+                # Names carry a zero-padded ordinal prefix, so the largest
+                # name is the latest migration within an app.
+                if name > latest.get(app, ""):
+                    latest[app] = name
+            return dict(sorted(latest.items()))
+        except Exception:  # pragma: no cover - defensive
+            return {}
 
     @staticmethod
     def _sha256(path: Path) -> str:

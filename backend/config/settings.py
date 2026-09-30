@@ -105,8 +105,27 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
         "rest_framework.throttling.AnonRateThrottle",
     ],
+    # How many proxies sit in front of Django: 0 locally, 1 behind nginx
+    # (the production compose file sets it).
+    #
+    # It must never be left UNSET. With NUM_PROXIES None - DRF's default,
+    # and this project's until now - DRF identifies a client by the WHOLE
+    # X-Forwarded-For header, which the client writes. nginx appends the
+    # real address to whatever the client sent, so an attacker who varied
+    # the header got a fresh throttle key per request: the login throttle's
+    # per-username limit could be walked around with one extra header. A
+    # number tells DRF how many trailing entries were added by proxies it
+    # trusts, and it reads exactly that one.
+    "NUM_PROXIES": int(os.getenv("DRF_NUM_PROXIES", "0")),
     "DEFAULT_THROTTLE_RATES": {
-        "user": os.getenv("THROTTLE_USER", "300/hour"),
+        # The catch-all for endpoints without a scope of their own. 300/hour
+        # was set when the only client was a script; the web application
+        # polls a document's progress every few seconds, and a dashboard
+        # left open while a batch processed passed 300 in under half an
+        # hour. One request a second, sustained, is still a bound. The
+        # expensive endpoints (upload, search, chat, login) keep their own,
+        # much tighter scopes below.
+        "user": os.getenv("THROTTLE_USER", "3600/hour"),
         "anon": os.getenv("THROTTLE_ANON", "30/hour"),
         # Credential guessing. Deliberately tight; a human who has
         # genuinely forgotten their password does not need 20 tries a minute.

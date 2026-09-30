@@ -67,11 +67,43 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(f"Restored {database['NAME']} from {dump_path.name}")
         )
-        if manifest and manifest.get("migration"):
-            self.stdout.write(
-                "Run `manage.py migrate` if this codebase is ahead of "
-                f"{manifest['migration']}."
-            )
+        if manifest:
+            self._report_schema_gap(manifest)
+
+    def _report_schema_gap(self, manifest: dict):
+        """Say which apps the code is ahead of the restored schema in.
+
+        Compared against the migration graph on disk, not assumed: a restore
+        into a newer codebase is routine (the backup predates a deploy), and
+        the operator needs to know whether `migrate` has work to do.
+        """
+        recorded = manifest.get("migrations") or {}
+        if not recorded:
+            if manifest.get("migration"):
+                self.stdout.write(
+                    "Older manifest without per-app migrations; run "
+                    "`manage.py migrate` to bring the schema up to this code."
+                )
+            return
+
+        from django.db.migrations.loader import MigrationLoader
+
+        leaves = dict(
+            MigrationLoader(None, ignore_no_migrations=True).graph.leaf_nodes()
+        )
+        behind = {
+            app: (recorded.get(app, "(none)"), code)
+            for app, code in sorted(leaves.items())
+            if recorded.get(app, "") < code
+        }
+        if not behind:
+            self.stdout.write("  schema matches this codebase's migrations")
+            return
+        self.stdout.write(
+            self.style.WARNING("The code is ahead of the restored schema. Run migrate:")
+        )
+        for app, (dump, code) in behind.items():
+            self.stdout.write(f"    {app}: restored at {dump}, code at {code}")
 
     @staticmethod
     def _manifest(dump_path: Path):

@@ -546,3 +546,34 @@ class StructureEndpointTests(APITestCase):
         client.force_authenticate(colleague)
         theirs = client.get(reverse("document-detail", args=[self.document_id]))
         self.assertFalse(theirs.data["can_manage"])
+
+
+class SeedE2ETests(TestCase):
+    """Test accounts with a known password must never reach a real database."""
+
+    def test_it_refuses_a_database_that_is_not_marked_disposable(self):
+        from django.core.management.base import CommandError
+
+        with mock.patch.dict(
+            connection.settings_dict, {"NAME": "ai_document_intelligence"}
+        ):
+            with self.assertRaises(CommandError):
+                call_command(
+                    "seed_e2e", "--password", "long-enough-password", stdout=StringIO()
+                )
+
+        from django.contrib.auth import get_user_model
+
+        self.assertFalse(get_user_model().objects.filter(username="admin").exists())
+
+    def test_it_seeds_a_disposable_one(self):
+        """The test database's own name ("test_...") marks it disposable."""
+        call_command(
+            "seed_e2e", "--password", "long-enough-password", stdout=StringIO()
+        )
+
+        from django.contrib.auth import get_user_model
+
+        admin = get_user_model().objects.get(username="admin")
+        self.assertEqual(admin.profile.role, UserProfile.Role.SYSTEM_ADMIN)
+        self.assertTrue(admin.check_password("long-enough-password"))
