@@ -31,6 +31,7 @@ reimplementation of its rules here.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -86,7 +87,21 @@ def load_config():
     # The real environment wins where it is already set, so an operator
     # checking their own stack checks their own values.
     environment = {**PLACEHOLDERS, **os.environ}
-    result = subprocess.run(COMPOSE, capture_output=True, text=True, env=environment)
+
+    # `env_file: .env` is required by Compose, and .env is git-ignored, so on
+    # a fresh checkout `config` exited before reading a service - the
+    # placeholders above only cover interpolation. Check against the example
+    # file a deployment starts from, and leave no file behind.
+    created = not os.path.exists(".env")
+    if created:
+        shutil.copyfile(".env.example", ".env")
+    try:
+        result = subprocess.run(
+            COMPOSE, capture_output=True, text=True, env=environment
+        )
+    finally:
+        if created:
+            os.remove(".env")
     if result.returncode != 0:
         print("docker compose config failed:\n" + result.stderr, file=sys.stderr)
         sys.exit(2)
@@ -107,8 +122,13 @@ def check(config):
                 continue
             # Mounting the source tree over the image means the deploy runs
             # whatever happens to be on the host, not what was built and
-            # tested. Read-only config and artifact mounts are fine.
-            if target.rstrip("/") in ("/app", "/app/backend", "/app/ai"):
+            # tested. Read-only config and artifact mounts are fine; any
+            # WRITABLE bind under /app is not - matching only /app,
+            # /app/backend and /app/ai exactly let a sub-path such as
+            # ./backend/documents:/app/backend/documents through.
+            if target.rstrip("/") == "/app" or (
+                target.startswith("/app/") and not volume.get("read_only")
+            ):
                 failures.append(
                     f"{name}: source bind mount {volume.get('source')} -> {target} "
                     f"survives into production; the image is meant to be the artifact. "
@@ -145,9 +165,29 @@ def check(config):
                 f"serve traffic."
             )
 
-    backend = services.get("backend") or {}
-    if backend.get("environment", {}).get("DJANGO_DEBUG") != "False":
-        failures.append("backend: DJANGO_DEBUG is not pinned to False in production.")
+    for name in CODE_SERVICES:
+        service = services.get(name)
+        if service is None:
+            continue
+        environment = service.get("environment") or {}
+        if environment.get("DJANGO_DEBUG") != "False":
+            failures.append(
+                f"{name}: DJANGO_DEBUG is not pinned to False in production."
+            )
+        # Every application service needs the deployment's settings. One
+        # defined only in the overlay, without `env_file`, started with no
+        # secret key or database settings and restarted forever - the index
+        # worker did exactly that.
+        missing = [
+            key
+            for key in ("DJANGO_SECRET_KEY", "POSTGRES_HOST")
+            if key not in environment
+        ]
+        if missing:
+            failures.append(
+                f"{name}: has no {', '.join(missing)} in its environment; it cannot "
+                f"start. Give it `env_file: [.env]` like the other application services."
+            )
 
     # The development file runs these as root for its bind mounts. That is
     # the one setting most likely to leak into production by omission, and
@@ -162,6 +202,25 @@ def check(config):
                 f"{name}: runs as {'root' if user else 'the image default'} in "
                 f"production. Pin `user: app` in docker-compose.prod.yml."
             )
+
+    # A tmpfs with Docker's default options is world-writable only on the
+    # container's FIRST start. Every restart remounts it with the mode of the
+    # mount point left in the container layer - root-owned 0755 - so an
+    # unprivileged service writing there passes `up` and every smoke test,
+    # then crash-loops after the first reboot. That happened to the backend's
+    # Prometheus directory.
+    for name in CODE_SERVICES:
+        service = services.get(name)
+        if service is None:
+            continue
+        for entry in service.get("tmpfs") or []:
+            target, _, options = str(entry).partition(":")
+            if "uid=" not in options and "mode=" not in options:
+                failures.append(
+                    f"{name}: tmpfs {target} has no uid=/mode= option; it becomes "
+                    f"root-owned 0755 after a restart and the unprivileged user "
+                    f"can no longer write to it. Use {target}:uid=10001,gid=10001,mode=0700."
+                )
 
     # The official nginx image renders /etc/nginx/templates only when the
     # container command is `nginx` itself. A shell wrapper here once meant
@@ -202,8 +261,9 @@ def main():
     print("Production configuration check passed:")
     print("  - no source bind mount reaches the application containers")
     print("  - only nginx is published to the host, on 80 and 443")
-    print("  - DJANGO_DEBUG is pinned to False")
+    print("  - every application service has the deployment's settings, DEBUG off")
     print("  - application containers run as the unprivileged user")
+    print("  - their tmpfs mounts stay writable after a restart")
     print("  - the edge is built with the frontend")
 
 

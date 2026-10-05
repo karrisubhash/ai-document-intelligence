@@ -122,8 +122,12 @@ jobs:
         run: python backend/manage.py makemigrations --check --dry-run
 
       - name: Backend suite
-        run: python backend/manage.py test --noinput
-        working-directory: .
+        # From backend/, which is the top of the Django project. Run from the
+        # repository root, discovery starts at '.', and backend/ has no
+        # __init__.py - so not one backend test was collected and the step
+        # reported only the ai/ tests, OK.
+        run: python manage.py test --noinput
+        working-directory: backend
 
       - name: AI suite
         # Stdlib-only by design, so it needs no ML install and no database.
@@ -169,6 +173,11 @@ jobs:
     env:
       E2E_PASSWORD: ci-e2e-password-not-a-secret
       E2E_CHANNEL: chromium
+      # The db service takes its name from INTERPOLATION, where this shell
+      # environment beats .env; the backend reads .env. With the workflow's
+      # POSTGRES_DB inherited here, Postgres created one database and the
+      # backend asked for another, and the stack never came up.
+      POSTGRES_DB: adi_e2e
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -357,7 +366,11 @@ jobs:
   build:
     name: Build images
     runs-on: ubuntu-latest
-    needs: [tests, security, frontend]
+    # Every gate, including the browser suite and the AI regression gate.
+    # Without the last two here, a failing regression gate ran beside a
+    # deploy instead of stopping it. Both run on every push (pushes only
+    # trigger on the default branch), so neither is ever skipped here.
+    needs: [tests, security, frontend, e2e, ai-regression]
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4

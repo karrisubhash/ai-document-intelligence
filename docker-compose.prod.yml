@@ -145,6 +145,11 @@ services:
 
     environment:
       DJANGO_DEBUG: "False"
+      # The bind-mounted directory below. Unset, BACKUP_ROOT resolved to
+      # /app/backups - root-owned in the image, so `manage.py backup` died
+      # with PermissionError as the unprivileged user, and the documented
+      # pre-upgrade backup was never taken.
+      BACKUP_ROOT: /backups
       # Without this, /metrics reports whichever of the N gunicorn workers
       # answered the scrape - roughly 1/N of the traffic, understating
       # every error count and latency. tmpfs because the samples are
@@ -154,8 +159,17 @@ services:
       # client has nginx's address as far as DRF's throttles can tell.
       DRF_NUM_PROXIES: "1"
 
+    # Owner and mode are explicit because Docker's defaults only hold on a
+    # container's FIRST start. Then the tmpfs is world-writable (1777); on
+    # every restart after that - a crash under `restart: unless-stopped`, a
+    # Docker daemon restart, a host reboot - Docker remounts it with the mode
+    # of the mount point it left in the container layer: root-owned 0755.
+    # The unprivileged user could no longer create its metric files, every
+    # Django process died at import, and the API never came back. Measured:
+    # the stack survived `up` and failed after the first reboot. 10001 is the
+    # image's `app` user (Dockerfile).
     tmpfs:
-      - /tmp/prometheus
+      - /tmp/prometheus:uid=10001,gid=10001,mode=0700
 
     depends_on:
       db:
@@ -200,16 +214,33 @@ services:
 
     environment:
       DJANGO_DEBUG: "False"
+      BACKUP_ROOT: /backups
+      # Pipeline metrics live in this container's processes; served on
+      # :9100 for Prometheus (config/celery.py). Not published to the host.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      CELERY_METRICS_PORT: "9100"
 
+    # Explicit owner and mode for the reason given on the backend's tmpfs.
+    tmpfs:
+      - /tmp/prometheus:uid=10001,gid=10001,mode=0700
+
+    # After `migrate`, like the backend. Recreated alongside it on an
+    # upgrade, the workers otherwise started consuming the queue - new task
+    # code - while the schema was still the old one.
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
-  # Embedding and re-indexing. Higher concurrency than the ingest worker
-  # because the work is IO-bound against the embedding provider, and
-  # separate so a bulk re-index never sits in front of live uploads.
+  # Bulk RE-indexing (`manage.py reindex`); new uploads are chunked and
+  # embedded by the ingest worker as part of their pipeline. Separate so a
+  # re-index never sits in front of live uploads. The higher concurrency
+  # suits a HOSTED embedding provider (the work is network-bound); with the
+  # local model it is CPU-bound - set CELERY_INDEX_CONCURRENCY to the cores
+  # you can spare, since each process also loads the model.
   worker-index:
     # The image's unprivileged user. The development compose file runs as
     # root for its bind mounts; production must not.
@@ -236,14 +267,28 @@ services:
       - ./ai/classification/artifacts:/app/ai/classification/artifacts:ro
       - hf_cache:/app/.cache/huggingface
 
+    # Every setting comes from .env, like the other application services.
+    # Without it this service had DJANGO_DEBUG alone: settings refused to
+    # load with no secret key, the container restarted forever, and nothing
+    # consumed the index queue - `manage.py reindex` queued work that never
+    # ran.
+    env_file:
+      - .env
     environment:
       DJANGO_DEBUG: "False"
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      CELERY_METRICS_PORT: "9100"
+
+    tmpfs:
+      - /tmp/prometheus:uid=10001,gid=10001,mode=0700
 
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   nginx:
     # Built, not pulled: the image carries the compiled frontend

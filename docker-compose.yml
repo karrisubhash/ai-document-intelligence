@@ -168,14 +168,15 @@ services:
       - frontend_node_modules:/app/node_modules
 
     environment:
-      # Resolved by the browser, not by this container, so it names the
-      # API's published host port rather than the compose service.
-      VITE_API_BASE_URL: http://localhost:${APP_PORT:-8000}
+      # Same origin, through Vite's proxy (vite.config.ts) - exactly as nginx
+      # does in production. Pointing the browser at the API's own port
+      # instead made every call cross-origin, and session cookies with
+      # credentials "same-origin" and CORS credentials off are neither sent
+      # nor stored cross-origin: nobody could sign in. Resolved by THIS
+      # container, so it names the compose service.
+      VITE_PROXY_TARGET: http://backend:8000
 
     ports:
-      # Changing the host port means the browser's origin changes with it,
-      # so set CORS_ALLOWED_ORIGINS to match or the API will refuse the
-      # calls - only :5173 is allowed by default.
       - "${FRONTEND_PORT:-5173}:5173"
 
     depends_on:

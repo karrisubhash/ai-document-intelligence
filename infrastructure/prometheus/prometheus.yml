@@ -9,9 +9,9 @@
 # and silently monitor a third of the fleet - the same failure mode the
 # multiprocess metrics fix exists to prevent, one level up.
 #
-# *The backend is scraped directly, not through nginx.* nginx restricts
-# /metrics to private ranges, and going through it would also mean scraping
-# whichever replica the load balancer chose rather than all of them.
+# *The backend is scraped directly, not through nginx.* nginx answers 404
+# for /metrics, and going through it would also mean scraping whichever
+# replica the load balancer chose rather than all of them.
 
 global:
   scrape_interval: 15s
@@ -33,6 +33,22 @@ scrape_configs:
     relabel_configs:
       # Without this every replica reports instance="<random ip>:8000" and
       # a restarted container looks like a brand new series.
+      - source_labels: [__meta_dns_name]
+        target_label: service
+
+  # The Celery workers: the pipeline's stage, job, failure, page and
+  # indexing metrics are recorded where the pipeline runs, so without these
+  # targets every one of them read zero and no pipeline alert could fire.
+  # Each container serves its own child processes' samples on :9100
+  # (config/celery.py), one target per container like the backend.
+  - job_name: adi-workers
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [worker, worker-index]
+        type: A
+        port: 9100
+        refresh_interval: 30s
+    relabel_configs:
       - source_labels: [__meta_dns_name]
         target_label: service
 

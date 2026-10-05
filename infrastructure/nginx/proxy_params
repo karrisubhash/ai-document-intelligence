@@ -12,4 +12,9 @@ proxy_set_header X-Forwarded-Proto $scheme;
 proxy_set_header X-Request-ID      $request_id;
 
 proxy_redirect off;
-proxy_buffering off;
+# Buffering ON (nginx's default). With it off, nginx read from gunicorn only
+# as fast as the CLIENT accepted bytes, so a 50 MB download to a slow phone
+# held one of the backend's six request threads for the whole transfer -
+# gunicorn's own deployment guide requires a buffering proxy for exactly
+# this. Nothing here streams; an endpoint that ever does can opt out per
+# response with X-Accel-Buffering: no.

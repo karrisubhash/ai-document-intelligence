@@ -18,8 +18,12 @@
 #   1. write a throwaway SELF-SIGNED certificate at the exact path nginx
 #      expects, purely so nginx can start;
 #   2. start nginx, which can now serve /.well-known/acme-challenge/;
-#   3. ask certbot for the real certificate, which overwrites the
-#      self-signed one in place, and reload nginx.
+#   3. remove the self-signed pair and ask certbot for the real
+#      certificate, then reload nginx. Certbot does NOT overwrite files it
+#      did not create: with plain files in live/<domain> and no renewal
+#      config it fails with "live directory exists" - after the CA has
+#      already issued, which spends the duplicate-certificate rate limit.
+#      nginx keeps serving the placeholder from memory until the reload.
 #
 # After this, the `certbot` service in docker-compose.prod.yml renews on a
 # timer and nginx reloads itself every 6 hours to pick up a renewal. This
@@ -77,15 +81,33 @@ if [ "$STAGING" = "1" ]; then
   STAGING_FLAG="--staging"
 fi
 
-# --force-renewal because step 1 left a self-signed cert at this path and
-# certbot would otherwise see a valid-looking certificate and decline.
-$COMPOSE run --rm certbot certonly \
+# Only OUR placeholder is removed: a domain that already has a renewal
+# config has a real certificate, and certbot manages that one itself (a
+# re-run then simply reports it is not yet due for renewal).
+$COMPOSE run --rm --entrypoint sh certbot -c "
+  if [ ! -f '/etc/letsencrypt/renewal/$DOMAIN.conf' ]; then
+    rm -rf '$LIVE' '/etc/letsencrypt/archive/$DOMAIN'
+  fi
+"
+
+if ! $COMPOSE run --rm certbot certonly \
   --webroot --webroot-path=/var/www/certbot \
   --email "$EMAIL" \
   --agree-tos --no-eff-email \
-  --force-renewal \
   $STAGING_FLAG \
-  -d "$DOMAIN"
+  -d "$DOMAIN"; then
+  # Put a placeholder back, or the next nginx restart would find no
+  # certificate at all and refuse to start.
+  $COMPOSE run --rm --entrypoint sh certbot -c "
+    if [ ! -f '$LIVE/fullchain.pem' ]; then
+      mkdir -p '$LIVE'
+      openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+        -keyout '$LIVE/privkey.pem' -out '$LIVE/fullchain.pem' -subj '/CN=$DOMAIN'
+    fi
+  "
+  echo "certbot failed - a temporary self-signed certificate is in place." >&2
+  exit 1
+fi
 
 echo "==> Reloading nginx with the issued certificate"
 $COMPOSE exec nginx nginx -s reload
