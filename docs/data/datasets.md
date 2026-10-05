@@ -11,7 +11,7 @@ purpose, version, schema, split and role.
 | Location | `evaluation/corpus/*.txt` (9 documents) |
 | Provenance | **Synthetic.** Written for this repository to resemble institutional regulations — academic regulations, examination policy, fee structure, hostel, library, grievance procedure, IT acceptable use, placement policy, scholarship rules. Not copied from any real institution. |
 | Purpose | Regression-testing retrieval and answering end to end, through the real ingestion pipeline |
-| Deliberate properties | Overlapping vocabulary across documents (`15 days` is both a revaluation deadline and a grievance window; `condonation` appears in three documents; attendance thresholds of 75 % and 85 % mean different things), a table (fee structure), numbered clauses |
+| Deliberate properties | Overlapping vocabulary across documents (`15 days` is both a revaluation deadline and a grievance window; `condonation` appears in two documents with different meanings (the v2 template's own description says three - it is governed and immutable, so the correction lives here); attendance thresholds of 75 % and 85 % mean different things), a table (fee structure), numbered clauses |
 | Versioning | Governed through the benchmark templates below; editing a corpus file changes what a benchmark version measures, so it requires a new benchmark version |
 | Use | Evaluation and end-to-end tests only. **A score on it says the pipeline works, not that it works on a real institution's documents.** |
 

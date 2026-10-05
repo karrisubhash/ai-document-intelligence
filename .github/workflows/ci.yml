@@ -130,7 +130,9 @@ jobs:
         working-directory: backend
 
       - name: AI suite
-        # Stdlib-only by design, so it needs no ML install and no database.
+        # No Django and no database, but it does need scikit-learn, joblib and
+        # PyYAML (test_text_baseline imports the training code), which the
+        # requirements-ml install above provides.
         run: python -m unittest discover -s ai/classification/tests -t .
         env:
           PYTHONPATH: .

@@ -61,8 +61,9 @@ workloads (an image build) shared the CPU — treat them as relative, not absolu
 ### v1 (`institutional-seed`, 13 cases, 5 documents)
 
 Every configuration scores Recall@1 = 1.000: with five documents whose vocabulary matches
-the questions, v1 **cannot distinguish configurations**. It remains the CI gate because it
-is fast and deterministic, not because it is discriminating.
+the questions, v1 **cannot distinguish configurations**. It is still gated in CI because it
+is fast and deterministic; v2 is gated beside it because only v2 can see a retrieval that got
+worse.
 
 ### v2 (`institutional-v2`, 57 cases, 9 documents — adds paraphrase and near-miss cases)
 

@@ -38,7 +38,10 @@ already in progress, an archived document). **429** is a rate limit.
 ## Documents
 
 Read = owner, same department, or system admin. Manage = owner, department admin of that
-department, or system admin. Every read and write below is written to the audit log.
+department, or system admin. Every read and write below is written to the audit log, with
+two exceptions: the listing (`GET /api/documents/`) is not audited, and the processing timeline
+(`GET /api/documents/{id}/processing/`, which the document screen polls) is audited only when
+the caller is refused.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
@@ -75,8 +78,9 @@ happened, and counts.
 
 ## Administration
 
-System admins see everything. Department admins see and manage only their department's
-FACULTY, STAFF and STUDENT accounts, and may not create or edit administrators. Nobody can
+System admins see everything. Department admins see every account in their own department,
+but may manage only its FACULTY, STAFF and STUDENT accounts; they may not create or edit
+administrators, and other admins and superusers appear in their list with `can_manage: false`. Nobody can
 change their own role or deactivate themselves.
 
 | Method | Path | Who | Notes |

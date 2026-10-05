@@ -75,7 +75,9 @@ column labels; passages with instruction-like text are marked as data.
 | OpenAI-compatible | `…rag.openai_compat.OpenAICompatibleAnswerer` | yes | Presets for Gemini, Groq, OpenRouter, Cerebras, Ollama; any `/chat/completions` server |
 
 Generative answerers share one system prompt with the grounding checker (so the two cannot
-drift), send near-zero temperature, and **fall back to extractive** on any failure —
+drift) and **fall back to extractive** on any failure (the OpenAI-compatible answerer sends a
+near-zero temperature, `RAG_ANSWERER_TEMPERATURE`; the Claude answerer sends none and is tuned
+with `RAG_ANSWERER_EFFORT` instead) —
 missing key, rate limit, timeout, malformed response — with a note on the answer and
 `adi_llm_fallbacks_total{answerer,reason}`. Keys are read from the environment only, never
 from Django settings, and never logged or stored.

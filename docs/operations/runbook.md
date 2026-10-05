@@ -88,7 +88,7 @@ Run after a deploy that changes a model, then set `HF_HUB_OFFLINE=1`.
 
 ```bash
 python manage.py backup --prune                    # pg_dump, verified, manifest + sha256
-python manage.py backup --include-media --label pre-upgrade
+python manage.py backup --include-media --label pre-upgrade   # via `run --rm --no-deps backend`, or migrate runs first
 python manage.py restore /backups/db-<stamp>.dump          # reports; changes nothing
 python manage.py restore /backups/db-<stamp>.dump --yes    # replaces the tables
 ```
@@ -179,8 +179,9 @@ good. It was fixed, with a test that fails without the fix. The host reboot betw
 two runs exposed the tmpfs restart defect described in
 [deployment](../deployment/production.md).
 
-The same checks, against a real host, are what the CI `smoke` job does once
-`STAGING_URL` is set.
+Once `STAGING_URL` is set, the CI `smoke` job runs a subset of these against the real host:
+`/health/` reports healthy, and an anonymous `GET /api/documents/` is refused with 401 or
+403. The rest are manual.
 
 ```bash
 curl -fsS https://<host>/health/

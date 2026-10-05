@@ -90,7 +90,11 @@ $COMPOSE run --rm --entrypoint sh certbot -c "
   fi
 "
 
-if ! $COMPOSE run --rm certbot certonly \
+# --entrypoint certbot: the service's own entrypoint is the renew-and-sleep
+# loop, and `compose run` arguments replace the COMMAND, not the entrypoint.
+# Without it, "certonly ..." became arguments to that loop's shell, which
+# renewed nothing, slept, and never requested a certificate.
+if ! $COMPOSE run --rm --entrypoint certbot certbot certonly \
   --webroot --webroot-path=/var/www/certbot \
   --email "$EMAIL" \
   --agree-tos --no-eff-email \

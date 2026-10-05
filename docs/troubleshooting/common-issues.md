@@ -29,8 +29,8 @@ hand-made test fixtures.
 ## A follow-up question gets the previous answer again
 
 Fixed: follow-ups now carry the user's own words as the answer's focus. If it recurs, the
-answer's *How this answer was produced* panel shows the resolved query; check which terms
-were borrowed. `RAG_FOLLOWUP_HISTORY_TURNS=0` disables resolution entirely.
+line above the answer ("Read as a follow-up: searched for ...") shows the resolved query, which
+is also stored in the message's `metadata.followup`; check which terms were borrowed. `RAG_FOLLOWUP_HISTORY_TURNS=0` disables resolution entirely.
 
 ## An answer abstains with "could not be grounded"
 

@@ -10,7 +10,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 | Service | Image | Role |
 |---|---|---|
-| `nginx` | built from `infrastructure/nginx/Dockerfile` | TLS, the compiled frontend, API proxy, edge rate limits, security headers. The **only** service published to the host (80, 443) |
+| `nginx` | built from `infrastructure/nginx/Dockerfile` | TLS, the compiled frontend, API proxy, edge rate limits, security headers. The only service published on the host's network interfaces (80, 443); Grafana listens on host loopback only |
 | `backend` | built from `Dockerfile` | gunicorn + Django; warms models before taking traffic |
 | `worker` | same | Celery, queue `ingest` (the pipeline) |
 | `worker-index` | same | Celery, queue `index` (bulk re-embedding) |
@@ -25,8 +25,12 @@ no compiler, no source bind mounts, and — through `.dockerignore` — no uploa
 database files, `.env` or virtualenvs.
 
 `python infrastructure/check_deployment_config.py` asserts the **merged** configuration:
-no source mount reaches production, only nginx publishes ports, `DJANGO_DEBUG=False`, the
-application containers are not root, and the edge is the image with the frontend. CI runs
+no writable source mount reaches the application containers; the backend, the workers, the
+database and Redis publish no ports and nginx publishes 80 and 443 (Prometheus, Grafana and
+certbot are not checked - Grafana is published on host loopback, 127.0.0.1:3000);
+`DJANGO_DEBUG=False` and the deployment's settings reach every application service; the
+application containers are not root and their tmpfs mounts survive a restart; and the edge
+is the image with the frontend. CI runs
 it; run it after editing either compose file.
 
 ## Before the first boot
@@ -75,7 +79,9 @@ it; run it after editing either compose file.
 git pull
 python infrastructure/check_deployment_config.py
 docker compose -f docker-compose.yml -f docker-compose.prod.yml build
-docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm backend python manage.py backup --label pre-upgrade
+# --no-deps: without it, `run` starts `migrate` first (backend depends on it), and the
+# "pre-upgrade" backup would be taken AFTER the new migrations had run.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-deps backend python manage.py backup --label pre-upgrade
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
@@ -87,7 +93,8 @@ against the old schema. A change of embedding model needs `manage.py reindex` af
 daemon restart or a host reboot. Every tmpfs an unprivileged service writes declares its
 owner and mode, because Docker remounts a default tmpfs root-owned on every restart after
 the first start. That once left the backend crash-looping after a reboot.
-`check_deployment_config.py` rejects a tmpfs without them.
+`check_deployment_config.py` rejects an application-service tmpfs that declares neither a
+`uid=` nor a `mode=` (either one is enough to keep it writable).
 
 ## Scaling
 

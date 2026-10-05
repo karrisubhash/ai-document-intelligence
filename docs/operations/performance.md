@@ -20,7 +20,7 @@ evidence for this code on modest hardware, not as capacity guarantees.
 
 ## Ingestion
 
-**Accepting documents.** `ingest_dataset` stored 3,000 files, created their rows and
+**Accepting documents.** `manage.py ingest_corpus --source qs-ocr` stored 3,000 files, created their rows and
 queued a job for each in 200 s: **15.0 documents/s**.
 
 **Processing.** With two worker processes, **1.73 documents/s** in steady state:

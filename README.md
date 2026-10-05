@@ -41,7 +41,7 @@ for** and **what is actually built today**, and never conflates the two.
 | RAG, citations, abstention, guardrails | 12 | ✅ Built — extractive by default, generative via one setting, same guardrails |
 | Product frontend (React + Vite) | 26 | ✅ Built — dashboard, documents, document viewer, search, cited chat with source inspection, administration ([frontend/](frontend/)); browser e2e suite 7/7 against the live production stack over TLS |
 | Metrics, structured logs, AI telemetry | 20 | ✅ Built — `/metrics`, redaction enforced at the formatter |
-| Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 8-job pipeline; every gate now passes locally, none has run in GitHub Actions |
+| Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 10-job pipeline; every gate now passes locally, none has run in GitHub Actions |
 | Horizontal scale, queue routing, re-indexing | 22 | ✅ Built — measured, not assumed ([details](#scale-22-nfr-02)) |
 | Table detection + table-aware retrieval | 11.3 | ✅ Built — span-verified cells, columns travel with the rows |
 | Figures located (not described) | 11.3 | ✅ Built — an abstention that says which page to look at |
@@ -183,18 +183,21 @@ ai-document-intelligence/
 │       ├── evaluation/             pure-Python classification metrics
 │       ├── configs/                text_baseline.yaml, vision_baseline.yaml
 │       └── artifacts/              model artifacts (git-ignored)
-├── frontend/                       React + Vite console for testing the API
+├── frontend/                       React + Vite product web application
 │   └── src/
 │       ├── api/                    typed client, response shapes, load/poll hooks
-│       ├── auth/                   token acquisition and verification
-│       ├── components/tabs/        pipeline, content, classification, fields, chunks
-│       └── pages/                  documents, document detail, search, chat
+│       ├── auth/                   session state (httpOnly cookie + CSRF)
+│       ├── components/             layout, upload dialog, chat/ and document/ panels
+│       └── pages/                  dashboard, documents, document detail, search, ask,
+│                                   account, login, admin/ (users, departments, audit,
+│                                   processing, system)
 ├── infrastructure/
 │   ├── nginx/                      reverse proxy, TLS termination, rate limits
 │   ├── init-letsencrypt.sh         first-issuance TLS bootstrap
 │   └── check_deployment_config.py  asserts the prod overlay really overrides
-├── .github/workflows/ci.yml        eight-job pipeline (never executed)
-├── docs/  tests/                   (placeholders)
+├── .github/workflows/ci.yml        ten-job pipeline (never executed on GitHub)
+├── docs/                           the working reference: architecture, API, deployment,
+│                                   operations, security, AI, evaluation
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -244,7 +247,9 @@ python -m venv backend/venv
 source backend/venv/Scripts/activate      # Windows Git Bash
 pip install -r backend/requirements-lock.txt
 
-cp .env.example .env                      # set POSTGRES_HOST=localhost, REDIS_HOST=localhost
+cp .env.example .env                      # set POSTGRES_HOST=localhost, REDIS_HOST=localhost,
+                                          # CELERY_BROKER_URL=redis://localhost:6379/0,
+                                          # CELERY_RESULT_BACKEND=redis://localhost:6379/1
 cd backend
 python manage.py migrate
 python manage.py runserver
@@ -254,7 +259,7 @@ In a second shell:
 
 ```bash
 cd backend
-celery -A config worker --loglevel=INFO
+celery -A config worker --loglevel=INFO --queues=ingest,index   # both queues: re-indexing runs on `index`
 ```
 
 ---
@@ -419,9 +424,10 @@ infer another department's size without ever seeing a row. `tests_discovery.py`'
 
 ### Response shape
 
-The `list` action returns a narrower `current_version` than the detail endpoint does — no
-storage key (`file`) and no `checksum`, neither of which a browsing list needs. Every other
-field is unchanged from before:
+The `list` action returns a narrower shape than the detail endpoint does — `current_version`
+has no storage key (`file`) and no `checksum`, neither of which a browsing list needs, and
+the per-document `can_manage` hint is detail-only. Each result also carries `owner_username`,
+`is_archived` and `archived_at`, which the abbreviated example below leaves out:
 
 ```json
 {
@@ -638,8 +644,9 @@ The bundled `HashingEmbeddingProvider` is **deterministic, offline, and NOT sema
 hashes word and character n-grams, so two texts are close when they share *vocabulary*, not
 *meaning* — "car" and "automobile" are orthogonal to it.
 
-It exists because no LLM provider is wired up and no API keys exist, and downloading a
-sentence-transformer at runtime is not something a worker should do on its first document.
+It is the offline, zero-cost baseline - the default in tests and CI. Real providers (a local
+sentence-transformer, or Bedrock Titan) are one `DOCUMENT_EMBEDDING_PROVIDER` setting and a
+re-index away; this one needs no keys, no download and no network, and never varies.
 What it buys is the entire mechanism — chunking, vector storage, the pgvector HNSW index,
 fusion with the lexical half, the permission filter — built and measurable against a
 baseline that costs nothing and never varies.
@@ -801,7 +808,7 @@ and present the result as one sentence from the document.
 
 ### Abstention is a first-class outcome (§12.4)
 
-Five distinct reasons, each recorded rather than collapsed into one silence — because "no
+Seven distinct reasons, each recorded rather than collapsed into one silence — because "no
 documents matched", "nothing was relevant enough" and "the answer could not be grounded"
 are three different facts about the system:
 
@@ -810,22 +817,27 @@ are three different facts about the system:
 | `NO_QUERY` | empty question |
 | `NO_DOCUMENTS` | no authorized document matched |
 | `NO_RELEVANT_PASSAGES` | retrieval found candidates, none beat the relevance floor |
+| `EMPTY_CONTEXT` | no passage survived context construction |
 | `MODEL_ABSTAINED` | passages were relevant but none answered the question |
 | `UNGROUNDED` | the answerer produced text that failed validation |
+| `MAYBE_IN_A_FIGURE` | nothing answered, and a retrieved document has figures the system cannot read |
 
 The wording is exactly what §12.4 specifies: *"I couldn't find enough information in the
 provided documents."*
 
 ### Answers are verified, not trusted
 
-Before anything is returned, `grounding.py` asks three questions of the answer:
+Before anything is returned, `grounding.py` asks four questions of the answer:
 
 1. **Does every marker it cites exist?** Citing `[7]` when six passages were supplied is a
    fabricated reference — the cheapest hallucination to detect, and the most damning.
 2. **Did it cite anything at all?** An uncited claim cannot be checked by its reader.
-3. **Is it supported by the passages it cited?** Measured as a support ratio against *only
-   the cited* passages — an answer must not borrow credibility from evidence it never
-   referenced.
+3. **Is every figure it states in a passage it cited?** Numbers, percentages, amounts,
+   dates and identifiers, compared formatting-insensitively. This is the hard gate.
+4. **Is its prose drawn from the cited passages at all?** A loose backstop
+   (`RAG_MIN_SUPPORT_RATIO`, 0.25) against answering a different subject, measured against
+   *only the cited* passages - an answer must not borrow credibility from evidence it never
+   referenced. See [docs/ai/pipeline.md](docs/ai/pipeline.md#grounding).
 
 A failure downgrades the answer to an abstention. An answer that cannot be grounded is
 indistinguishable from an invention.
@@ -945,7 +957,8 @@ machinery that makes the rule enforceable.
 
 ```bash
 python manage.py evaluate --load dataset.json --dataset institutional-qa     --as-user alice --label baseline
-python manage.py evaluate --dataset institutional-qa --as-user alice     --compare-to 1 --fail-on-regression      # for CI
+python manage.py evaluate --dataset institutional-qa --as-user alice     --compare-to 1      # against an earlier run, locally
+python manage.py evaluate --dataset institutional-qa --as-user alice     --baseline baseline.json --fail-on-regression   # for CI
 ```
 
 ### What is measured
@@ -1026,7 +1039,7 @@ Current baseline, lexical retrieval and the extractive answerer:
 | | |
 |---|---|
 | recall@1, MRR, MAP | 1.0 |
-| groundedness | 0.9704 |
+| groundedness | 0.9709 |
 | citation accuracy | 0.9444 |
 | abstention accuracy | 0.9231 |
 | coverage | 0.6923 |
@@ -1286,7 +1299,9 @@ contents back. An unverified backup is a belief, not a backup. The manifest reco
 sha256, the table count and the migration it was taken at; restore checks the checksum
 before dropping anything, and refuses without an explicit `--yes`.
 
-Restore judges success by **querying the restored database**, not by parsing stderr. The
+Restore judges success by **both** the exit status and the database: a non-zero exit with a
+`pg_restore` message that is not on a known-benign list fails it, and so does an empty
+database afterwards. Benign notices alone never fail it. The
 first version reported a completely successful restore as a failure because of a
 `SET transaction_timeout` notice — emitted whenever the `pg_dump` client is newer than the
 server. Telling an operator their restore failed, during the incident that made them
@@ -1314,9 +1329,9 @@ checks for a 200 cannot tell a working deploy from one with authentication switc
 verify first. What has changed is that every gate in it has now been run locally, with the
 workflow's own commands and environment — and five of them failed.
 
-A pipeline whose first job cannot pass is not a pipeline. Every job here declares
-`needs: lint` or `needs: tests`, so each failure below silently disabled everything
-downstream of it:
+A pipeline whose first job cannot pass is not a pipeline. `tests` and `security` need
+`lint`, `e2e` and `ai-regression` need `tests`, and every deploy hangs off `build`, so each
+failure below silently disabled everything downstream of it:
 
 | Gate | What it did | Fix |
 |---|---|---|
@@ -1462,7 +1477,7 @@ Tables are detected **in the stored page text**, not by re-parsing the original 
 that one decision drives the rest. A table found in page text has real offsets into it, so
 `page_text[start:end]` returns the table verbatim and every cell is a substring of the page.
 **A cell the document does not contain cannot be stored** — the stage verifies every table
-on every run and drops any row that fails, so a detector that fabricates is refused at the
+on every run and rejects any table with a cell the page does not contain, so a detector that fabricates is refused at the
 boundary rather than trusted not to. A separate PDF table parser would emit cells with no
 checkable relationship to the text that every chunk, citation and extracted field is already
 grounded in.
@@ -1710,8 +1725,10 @@ python -m ai.classification.training.submit_kaggle --epochs 5          # real ru
 
 ### Reporting rules
 
-**No accuracy is claimed.** The only artifact present is `v0.1.0-smoke` — 1 epoch over 20
-images per class, 12.5% accuracy. That is proof the submit → train → download path works end
+**No vision accuracy is claimed.** The only vision artifact is `v0.1.0-smoke` — 1 epoch over 20
+images per class, 12.5% accuracy. (The *text* baseline does have a trained artifact,
+`document-classifier` v0.1.0, test accuracy 0.7185 on public RVL-CDIP pages - see
+[docs/data/datasets.md](docs/data/datasets.md).) That is proof the submit → train → download path works end
 to end, not a result.
 
 Any number produced here is **benchmark performance on the public dataset used**, never a
@@ -1840,7 +1857,7 @@ discovered.
 | 6 | RAG — reranking, context builder, LLM gateway, citations, abstention | ✅ (answerer is extractive, not generative — see below) |
 | 7 | AI security — prompt/document injection, permission-aware retrieval | ✅ (heuristic scanner, not an antivirus — see below) |
 | 8 | Evaluation — datasets, retrieval + generation metrics, regression | ✅ |
-| 9 | Observability — metrics, logs, traces, AI telemetry | ✅ (metrics are per-process — see below) |
+| 9 | Observability — metrics, logs, traces, AI telemetry | ✅ (metrics aggregated across gunicorn workers, and served by each Celery worker; no distributed tracing) |
 | 10 | Production — deployment, HTTPS, backups, CI/CD | ✅ (CI workflow written but never executed — see below) |
 | 11 | Scale — load balancing, worker scaling, service extraction | ✅ (horizontal scale is proven; service extraction deliberately not done — see below) |
 | 12 | Advanced AI — multimodal RAG, tables, charts, agents | ✅ tables, figures and query planning; figures are located, not read — see below |

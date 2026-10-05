@@ -5,7 +5,7 @@ Four layers, each catching what the others cannot.
 | Layer | Where | Runs against | Command |
 |---|---|---|---|
 | Backend unit + integration | `backend/**/tests*.py` | real PostgreSQL + pgvector, Celery eager | `docker compose run --rm -T -e LOG_LEVEL=ERROR backend python manage.py test --noinput` |
-| AI workspace | `ai/classification/tests/` | stdlib only | `PYTHONPATH=. python -m unittest discover -s ai/classification/tests -t .` |
+| AI workspace | `ai/classification/tests/` | no Django or database, but scikit-learn, joblib and PyYAML (the workspace's dependencies, `ai/classification/pyproject.toml`) | `PYTHONPATH=. python -m unittest discover -s ai/classification/tests -t .` |
 | Frontend unit + component | `frontend/src/**/*.test.ts(x)` | jsdom, mocked API | `cd frontend && npm test` |
 | Browser end-to-end | `frontend/e2e/*.spec.ts` | a **live** stack: Django, Celery, PostgreSQL, Redis, models | see below |
 
