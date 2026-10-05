@@ -38,7 +38,9 @@ answers the exam it says it answers.
 
 CI's `ai-regression` job seeds `institutional-seed` v1 with the offline baselines (hashing
 embeddings, lexical reranking, extractive answers) and runs `evaluate --baseline
-evaluation/baseline.json --fail-on-regression`. Any quality metric below the committed
+evaluation/baseline.json --fail-on-regression`; then it seeds v2 on top (its corpus is a
+superset) and gates on `evaluation/baseline-v2.json` the same way. v1 alone cannot catch a
+retrieval that got *worse* - every configuration scores recall@1 1.0 on it - and v2 can. Any quality metric below the committed
 baseline (beyond `--tolerance`) fails the build; latency is reported but only gated with
 `--gate-latency`.
 

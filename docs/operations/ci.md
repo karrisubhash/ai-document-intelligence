@@ -20,7 +20,7 @@ deploy instead of stopping it.
 | `frontend` | `npm ci`, typecheck, Vitest, production build; `npm audit` (advisory) | any failure |
 | `e2e` | the dev stack via Docker Compose on the offline baselines, `seed_e2e`, Playwright (bundled Chromium) running `frontend/e2e/platform.spec.ts` | any failure; results and stack logs uploaded on failure |
 | `security` | `.dockerignore` must exclude media, database files, venvs and `.env`; `check --deploy --fail-level WARNING`; bandit; pip-audit (advisory) | any finding except the advisory audit |
-| `ai-regression` | seeds the governed v1 corpus through the real pipeline, evaluates against `evaluation/baseline.json` with `--fail-on-regression` | a metric below baseline minus tolerance |
+| `ai-regression` | seeds the governed v1 corpus through the real pipeline and evaluates against `evaluation/baseline.json`, then seeds v2 on top and evaluates against `evaluation/baseline-v2.json`, both with `--fail-on-regression` (v1 is saturated; v2 is what moves) | a metric below baseline minus tolerance |
 | `build` | the backend image and the web edge image (whose build runs the frontend checks again); `check_deployment_config.py` on the merged production compose (it supplies `.env.example` when no `.env` exists, so it runs on a fresh checkout) | build failure or a config violation |
 | `deploy-staging`, `smoke`, `deploy-production` | placeholders wired to GitHub environments; smoke probes `STAGING_URL` for health and for a 401 on an anonymous API call | environment approvals |
 

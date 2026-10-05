@@ -363,6 +363,33 @@ jobs:
         env:
           DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
 
+      # v1 cannot tell configurations apart - every one scores recall@1 1.0 -
+      # so it catches a broken pipeline, not a worse one. v2's paraphrase and
+      # near-miss cases do move (0.796 recall@1 on these offline baselines).
+      # Its corpus is a superset of v1's, so seeding it adds four documents
+      # and prunes nothing. Deterministic like v1: two local runs agreed
+      # exactly (2026-10-05).
+      - name: Seed the v2 corpus
+        run: >
+          python backend/manage.py seed_evaluation
+          --template evaluation/benchmark-v2.template.json
+          --output evaluation/benchmark-v2.json --prune
+        env:
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
+
+      - name: Evaluate v2 against its baseline
+        run: |
+          python backend/manage.py evaluate \
+            --load evaluation/benchmark-v2.json \
+            --dataset institutional-v2 \
+            --dataset-version v2 \
+            --as-user ci-evaluator \
+            --label "${GITHUB_SHA::7}-v2" \
+            --baseline evaluation/baseline-v2.json \
+            --fail-on-regression
+        env:
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
+
   build:
     name: Build images
     runs-on: ubuntu-latest
