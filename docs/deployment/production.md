@@ -39,16 +39,16 @@ it; run it after editing either compose file.
 
    | Variable | Required | Notes |
    |---|---|---|
-   | `DJANGO_SECRET_KEY` | yes | ≥ 50 random characters. The app refuses to start without one when DEBUG is off |
+   | `DJANGO_SECRET_KEY` | yes | ≥ 50 random characters. With DEBUG off the app refuses to start without one, or with `change-me` from `.env.example`. It does not check length or randomness |
    | `DJANGO_ALLOWED_HOSTS` | yes | the public hostname |
    | `CSRF_TRUSTED_ORIGINS` | yes | `https://<hostname>` |
    | `POSTGRES_PASSWORD` | yes | |
    | `NGINX_SERVER_NAME` | yes | the public hostname; also selects the certificate path |
    | `GRAFANA_PASSWORD` | yes | compose refuses to start without it |
-   | `EMAIL_HOST` … | recommended | password resets and alerts; the deploy check flags a console mail backend |
+   | `EMAIL_HOST` … | recommended | nothing in the application sends mail yet (passwords are reset by an administrator in the app, and alerts are not mailed). Django's `check --deploy` flags the console backend used without it |
    | `SECURE_HSTS_SECONDS` | decide | off by default because it is near-irreversible; `31536000` once TLS is stable |
    | `DOCUMENT_EMBEDDING_PROVIDER`, `RAG_RERANKER`, `RAG_ANSWERER`, `DOCUMENT_SCANNER`, … | optional | see [ai/pipeline.md](../ai/pipeline.md) |
-   | `AWS_STORAGE_BUCKET_NAME` … | optional | S3-compatible object storage instead of the `media_data` volume |
+   | `AWS_STORAGE_BUCKET_NAME` … | optional | S3-compatible object storage instead of the `media_data` volume. Build with `INSTALL_S3=true`, or the first file operation fails. Unverified against a real bucket: see [release/multi-host-validation.md](../release/multi-host-validation.md) |
 
 2. **Ownership of bind-mounted directories.** The containers write `./backups` (mounted
    at `/backups`, which is `BACKUP_ROOT` in production) as uid 10001:
@@ -101,8 +101,23 @@ the first start. That once left the backend crash-looping after a reboot.
 `docker compose … up -d --scale backend=3` — nginx balances by least connections across
 replicas, re-resolving the `backend` name every 10 s (`resolve` on the upstream; nginx
 1.27.3 or later), so added or recreated replicas are picked up without a reload. Scale `worker` for upload throughput and `worker-index` for re-indexing
-independently. More than one host requires object storage (`AWS_STORAGE_BUCKET_NAME`),
-because the `media_data` volume is local to one machine.
+independently. All of this is **one host**: `--scale` never places a container on another
+machine.
+
+More than one host needs object storage (the `media_data` volume is local to one
+machine), a shared Postgres and Redis that other hosts can reach (with a Redis password),
+a load balancer in front of the nginx instances, and Prometheus targets for the remote
+workers. This overlay provides none of them, and the deployment check rejects publishing
+the database or Redis. See [release/multi-host-validation.md](../release/multi-host-validation.md).
+
+## Dependencies
+
+Every Python install, in the image and in CI, runs against `backend/constraints.txt`:
+the exact versions the tested image contained. A rebuild months later installs the same
+packages. To upgrade one, change its pin, rebuild, run the full suite and both evaluation
+gates, then commit the pin with the result. The base image (`python:3.12-slim`), the
+Debian packages and the `certbot/certbot:latest` and `nginx:1.27-alpine` tags are not
+pinned. Record their digests at staging and pin production to them.
 
 ## Verification status
 
@@ -111,6 +126,7 @@ because the `media_data` volume is local to one machine.
 | Merged configuration passes the deployment check | Verified locally |
 | Web image builds, with frontend typecheck and unit tests inside the build | Verified locally |
 | Full production stack boots, serves the SPA over TLS, and the API works behind it | **Verified locally**: browser suite 7/7 through nginx over TLS, no CSP violations, metrics scraped — see [operations/runbook.md](../operations/runbook.md#production-stack-smoke-test) |
-| Let's Encrypt issuance and renewal | **Unverified** — needs a public hostname |
+| Image built from `constraints.txt` with every optional layer (ML, LLM, local models, S3) | **Verified locally**: installed packages identical to the constraints file (90 of 90); the S3 backend, boto3, torch and both provider SDKs import; runs as uid 10001 |
+| Let's Encrypt issuance and renewal | **Unverified** — needs a public hostname. Test plan: [release/staging-runbook.md](../release/staging-runbook.md#tls-test-plan) |
 | S3 / MinIO storage | Contract-tested with a stub; **unverified against a real bucket** |
 | Multi-host operation | **Unverified** |

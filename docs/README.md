@@ -20,15 +20,20 @@ design rationale; these pages are the working reference.
 | Evaluation | [evaluation/README.md](evaluation/README.md) | Datasets, metrics, the regression gate, measured results |
 | Data | [data/datasets.md](data/datasets.md) | Provenance and intended use of every dataset in the repository |
 | Troubleshooting | [troubleshooting/common-issues.md](troubleshooting/common-issues.md) | Symptoms, causes and fixes seen in practice |
+| Release | [release/RELEASE_READINESS.md](release/RELEASE_READINESS.md) | What is done, what is verified, what blocks staging and production, and the go-live checklist |
+| | [release/staging-runbook.md](release/staging-runbook.md) | Deploying to a real server step by step, the TLS test plan, rollback and smoke tests |
+| | [release/ai-release.md](release/ai-release.md) | What may be claimed about the AI, the reranker decision, hosted-answerer activation, the real-data plan |
+| | [release/institutional-decisions.md](release/institutional-decisions.md) | The decisions only the institution can make, with what the code does meanwhile |
+| | [release/multi-host-validation.md](release/multi-host-validation.md) | Validating S3/MinIO and a second host before relying on either |
 
 ## Verification status, in one place
 
 | Claim | Status |
 |---|---|
-| Backend test suite (960 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly |
+| Backend test suite (971 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly; last on 2026-10-06 in the pinned release-candidate image |
 | Frontend typecheck, 44 unit/component tests, production build | **Verified** locally, and inside the web image build |
-| Browser end-to-end suite against the live stack (real worker, real models) | **Verified** locally: 7/7 on the dev stack; on the production stack over TLS, 7/7 plus a CSP-violation probe (2026-10-05, after the second review round) |
-| Backup, restore into an empty database, and a working search on the restored copy | **Verified** locally on a disposable database |
+| Browser end-to-end suite against the live stack (real worker, real models) | **Verified** locally: on the release-candidate production stack over TLS, 7/7 plus the CSP-violation probe (2026-10-06, twice, with the recommended pilot configuration); earlier 7/7 on the dev stack |
+| Backup, restore into an empty database, and a working search on the restored copy | **Verified** locally on a disposable database; the staging runbook's backup, restore and rollback steps rehearsed verbatim on 2026-10-06. Off-host backups and production disaster recovery: **unverified** |
 | Production compose stack boots behind nginx with TLS | **Verified locally** with a self-signed certificate: browser suite 7/7 over TLS, no CSP violations. **Real domain and Let's Encrypt: unverified** |
 | GitHub Actions pipeline | **Never executed** — the repository has no remote. Job commands were run locally; see [operations/ci.md](operations/ci.md) |
 | Hosted AI providers (Anthropic, Bedrock, OpenAI-compatible) | **Contract-tested with stubs; never called for real** — no credentials |

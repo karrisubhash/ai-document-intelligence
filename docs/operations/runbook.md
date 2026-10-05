@@ -31,6 +31,27 @@ its own processes' samples on :9100 (`CELERY_METRICS_PORT`) and Prometheus disco
 by DNS (job `adi-workers`). Before this, those series read zero and no pipeline alert
 could fire.
 
+## When something breaks
+
+`$DC` is `docker compose -f docker-compose.yml -f docker-compose.prod.yml`.
+
+| Symptom | First check | Action |
+|---|---|---|
+| Site unreachable | `$DC ps`; `curl -k https://localhost/health/` on the host | nginx down: `$DC logs nginx` (often a missing certificate: see the [TLS test plan](../release/staging-runbook.md#tls-test-plan)). Backend unhealthy: `$DC logs backend`, then `$DC up -d backend` |
+| `/health/` fails | `$DC logs db`, `df -h` | Postgres down or the disk is full. Free space (old images: `docker image prune`; old backups beyond retention), then `$DC up -d db backend` |
+| `/ready/` returns 503 | its JSON names the failing component | `cache` or `broker` means Redis: `$DC logs redis`, `$DC up -d redis`. Uploads made while the broker was down are recorded `FAILED` with `INFRASTRUCTURE_ERROR`: retry them under Administration → Processing |
+| Uploads stay *Queued* | `adi_queue_depth{queue="ingest"}`; `$DC exec worker celery -A config inspect ping` | Worker down: `$DC up -d worker`. Worker up but the queue grows: OCR-heavy batch. Wait, or add workers on this host (`--scale worker=2`, if CPU and memory allow) |
+| Documents stuck *Processing* | Administration → Processing → Stalled | `recover_stalled_jobs --apply --requeue`; it should already run from cron every 15 minutes |
+| Every answer carries "reranking degraded" | `adi_rerank_degraded_total`; backend log `rerank.fallback` | The cross-encoder failed to load. With `HF_HUB_OFFLINE=1`, check the model is in the cache: run `warm_models` with `HF_HUB_OFFLINE` unset, then set it again |
+| Answers say the generative answerer fell back | `adi_llm_fallbacks_total{reason}` | Only with a hosted answerer: the provider is failing (key, quota, outage). Answers are extractive meanwhile. Fix the key or quota, or unset `RAG_ANSWERER` |
+| Every chat request returns 500 | backend log | A misconfigured hosted answerer refuses at construction. Unset `RAG_ANSWERER` and restart, then fix it on staging ([ai-release.md](../release/ai-release.md#hosted-answerer-activation)) |
+| Chat is slow | `adi_rag_stage_duration_seconds` by stage | Rerank dominates on CPU. Switch to the MiniLM cross-encoder if bge-reranker-base is configured |
+| A worker keeps restarting, or jobs fail `TIMEOUT` | `docker stats`; `dmesg` for OOM kills | Lower `CELERY_CONCURRENCY`, set `EMBEDDING_LOCAL_THREADS` to cores ÷ concurrency, split very large documents |
+| A file is quarantined | the document's timeline shows the scan findings | It is not processed again and only a system administrator can download it. If the scanner was wrong, upload a clean copy as a new version |
+| A user account may be compromised | Administration → Audit, filtered by that user | Deactivate the account: this ends its sessions and revokes its API tokens. Reset the password before reactivating |
+| The certificate is expiring | `$DC logs --since 13h certbot` | Follow the failure table in the [TLS test plan](../release/staging-runbook.md#tls-test-plan) |
+| Data loss or a bad upgrade | the latest `backups/db-*.dump` and its manifest | Rollback and restore: [staging runbook, step 18](../release/staging-runbook.md#18-rollback) |
+
 ## Processing
 
 Failed and stalled runs are listed under **Administration → Processing**, with the stage,
@@ -178,6 +199,21 @@ the baseline. A document that finished before the first check stayed on "Process
 good. It was fixed, with a test that fails without the fix. The host reboot between the
 two runs exposed the tmpfs restart defect described in
 [deployment](../deployment/production.md).
+
+**Release-candidate run (local, 2026-10-06)** on images built from `constraints.txt`, fresh
+volumes, the recommended pilot configuration (local embeddings, MiniLM cross-encoder,
+heuristic scanner, models offline):
+
+| Check | Result |
+|---|---|
+| Edge: `/health/`, `/ready/`, HTTP→HTTPS, anonymous API, `/metrics`, headers | healthy; ready; 301; 401; 404; CSP, `DENY`, `nosniff` |
+| Browser suite + CSP probe over TLS | **8/8**, twice: before and after the image's pip upgrade |
+| Both workers, both queues; Prometheus targets | both reply; **4 targets up** |
+| Backup → restore into a new database → compare | verified, 34 tables; documents, versions, chunks, embeddings, audit rows and users identical; 10.4 s including container start |
+| Rollback across a migration (staging runbook step 18, verbatim) | previous release (schema 0016) → candidate (0017) → rollback with the pre-upgrade dump → 0016, `/ready/` 200, sign-in 200 |
+| `restart` of backend and worker | healthy; no permission errors |
+| Both AI regression gates, run as CI runs them | pass |
+| Dependency audit of the image (`pip-audit`) | no known vulnerabilities; torch's CPU build cannot be audited against PyPI |
 
 Once `STAGING_URL` is set, the CI `smoke` job runs a subset of these against the real host:
 `/health/` reports healthy, and an anonymous `GET /api/documents/` is refused with 401 or

@@ -63,7 +63,7 @@ By default Playwright drives the installed Chrome (`E2E_CHANNEL=msedge` for Edge
 `chromium` for Playwright's bundled browser, which CI installs). Screenshots of each step
 are written to `frontend/e2e/.results/screens/`.
 
-**Last local runs:** 7/7 against the dev stack and 7/7 against the production stack over TLS, with the full configuration — local bge-small
+**Last local runs:** 8/8 (the suite plus the CSP probe) against the release-candidate production stack over TLS on 2026-10-06, with the recommended pilot configuration: local embeddings, the MiniLM cross-encoder, the heuristic scanner and rule-based extraction, models offline. Before that, 7/7 against the dev stack and 7/7 against the production stack over TLS, with the full configuration — local bge-small
 embeddings, bge-reranker-base cross-encoder, the trained text classifier, rule-based field
 extraction and the heuristic scanner. Two defects were found by it and fixed with
 regression tests: a follow-up answered with the previous question's clause, and a

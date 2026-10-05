@@ -32,11 +32,11 @@ job's commands have been executed locally, which proves the commands, not the YA
 | Job | Executed locally | Notes |
 |---|---|---|
 | lint | yes | clean |
-| tests | yes, in the backend image against pgvector/pg16 and Redis 7 | 960 tests, 0 failures |
+| tests | yes, in the backend image against pgvector/pg16 and Redis 7 | 971 tests, 0 failures (2026-10-06, in an image built from `constraints.txt`, source mounted read-only) |
 | frontend | yes | 44 tests; build and typecheck clean |
 | e2e | yes, in an equivalent form | **CI's own configuration** (2026-10-05): hashing embeddings, lexical reranking, heuristic scanner, rule-based extraction, no classifier, Playwright's bundled Chromium, the Vite dev server proxied to the backend: 7/7, with the CSP probe skipped as designed (Vite sends no policy). Also 7/7 plus the CSP probe against the production stack over TLS with the full local-model configuration. The stack was started with `docker compose run` and environment overrides rather than by the job's `.env` step, so the job's compose wiring itself is what a first real run proves |
 | security | partially | the `.dockerignore` check runs; `check --deploy` and bandit are as before. (`check_deployment_config.py` belongs to the `build` job, and runs - including on a checkout with no `.env`) |
-| ai-regression | yes, as the job runs it (2026-10-05) | fresh database, corpus seeded through the pipeline, `--fail-on-regression` against `evaluation/baseline.json`: passes; see [evaluation/README.md](../evaluation/README.md#the-regression-gate) |
+| ai-regression | yes, as the job runs it (2026-10-05; again 2026-10-06 on the release candidate) | fresh database, corpus seeded through the pipeline, `--fail-on-regression` against `evaluation/baseline.json` and `evaluation/baseline-v2.json`: both pass; see [evaluation/README.md](../evaluation/README.md#the-regression-gate) |
 | build | yes | backend and web images built with Docker BuildKit |
 | deploy / smoke | no | need a staging host and credentials |
 
