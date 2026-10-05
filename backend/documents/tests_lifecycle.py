@@ -230,6 +230,7 @@ class EnqueueFailureTests(TestCase):
             services.reprocess_document(document)
 
 
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
 class PendingRetryTests(TestCase):
     """A transient failure waiting on its Celery retry is still an active run.
 
