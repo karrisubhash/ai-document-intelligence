@@ -8,14 +8,27 @@
   even though the caller is anonymous** — DRF would otherwise exempt it, enabling forged
   logins into an attacker's account. No credential is readable by JavaScript.
 - **API tokens** (scripts, services) expire after `TOKEN_TTL_HOURS` and are deleted on
-  first use after expiry. Logout with a token deletes it.
-- **Passwords** use Django's validators (length, similarity, common, numeric). Changing a
-  password — by the user or an admin — invalidates every other session (the session hash
-  changes) and deletes every API token.
-- **Deactivation** stops sign-in, rejects existing sessions and deletes tokens. Accounts are
-  never deleted through the API, so their audit history keeps its subject.
-- **Brute force** is limited per IP *and* username at the application (10/min on token,
-  login and password endpoints) and at nginx (1 r/s burst 5 on the same paths).
+  first use after expiry. Signing in again replaces a token with less than half its life
+  left, so a re-issued token is never seconds from expiry. Logout with a token deletes it.
+- **Passwords** use Django's validators (length, similarity, common, numeric). A new
+  password however it is set - the API, Django's admin, `manage.py changepassword` -
+  invalidates every other session (the session hash changes) and deletes every API token
+  (a model signal; Django's own hash upgrades on login are not treated as changes).
+- **Deactivation** stops sign-in, **deletes the account's sessions** (an inactive account's
+  session is otherwise only refused, and came back on reactivation) and deletes its
+  tokens, whichever way it is deactivated. Accounts are never deleted through the API, so
+  their audit history keeps its subject.
+- **Brute force** is limited three ways: per address *and* account (10/min on the token,
+  login and password endpoints; the username normalised as authentication sees it, so
+  padding it with spaces does not reset the count), per **account across all addresses**
+  (100/hour, the NIST SP 800-63B ceiling, against a guessing run spread over a botnet),
+  and at nginx per address. Password changes are throttled per signed-in user. Django's
+  admin login (`/django-admin/login/`) is limited at nginx and its failures are audited
+  like the API's.
+- **Nobody can take over a more powerful account**: a role-only system administrator
+  cannot reset or edit a superuser, and a department administrator cannot touch a Django
+  staff account. The API returns `can_manage` per account so the screens offer only what
+  will succeed.
 
 **Not implemented:** SSO/SAML/OIDC, MFA, account lockout beyond throttling, password
 expiry. These are institutional decisions with integration work attached.
@@ -59,7 +72,9 @@ user cannot do but decides nothing.
   quarantines disguised executables, Office macros, PDF active content (`/JavaScript`,
   `/OpenAction`, `/Launch`, embedded files) and the EICAR string. **It is not an
   antivirus** — there is no signature database. Point `DOCUMENT_SCANNER` at ClamAV or a
-  cloud scanner for real coverage. Quarantined files are never previewed.
+  cloud scanner for real coverage. Quarantined files are never previewed, and the
+  download endpoint refuses them (403) to everyone but a system administrator - judged per
+  version, so an earlier infected upload stays refused after a clean one replaces it.
 - Media is **never served statically**. Bytes are reachable only through the
   authenticated, audited download endpoint; S3 storage uses private ACLs and never hands
   out bucket URLs.
@@ -103,10 +118,16 @@ same-origin.
 
 Recorded with actor, action, result (allowed or denied), document and metadata: every
 document read, download (with version), write, archive, restore, reprocess and version
-upload; search and chat (never the query or question text); login, failed login (against
-the targeted account, or the attempted username if none exists), logout, password changes;
+upload; search and chat (never the query or question text); login, failed login through
+the API or Django's admin (against the targeted account; for a name that matches no account
+only a keyed fingerprint, because the username box is where people type their password by
+mistake), logout, password changes;
 account and department changes (with before/after of role, department and activity); job
-retries. Denials are recorded as well as approvals.
+retries. Denials are recorded as well as approvals, including on reads that are not
+audited when allowed (the processing timeline, which the screen polls). A department
+administrator sees their members' denied attempts on other departments' documents without
+the document's id or title - a denied row exists only for an id that exists, so the id
+alone would reveal which ids are real.
 
 ## Logging
 

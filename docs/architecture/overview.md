@@ -9,7 +9,7 @@ cost of doing so (see [Why one service](#why-one-service)).
 ```
 Browser ── HTTPS ──► nginx ──┬── /            React SPA (static, built into the image)
                              ├── /assets/     hashed bundles, immutable cache
-                             └── /api /admin /health /ready ──► gunicorn (Django + DRF)
+                             └── /api /django-admin /health /ready ──► gunicorn (Django + DRF)
                                                                    │
                      ┌─────────────────────────────────────────────┤
                      │                                             │

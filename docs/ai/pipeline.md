@@ -50,11 +50,13 @@ and says so in `notes` rather than returning a 500.
 | Reranker | Floor | Degrades to |
 |---|---|---|
 | Lexical (default) | 0.15 | — |
-| Local cross-encoder (bge-reranker-base) | 0.30 (calibrated probability) | lexical, with every passage marked degraded |
+| Local cross-encoder | per model, calibrated: **0.02** bge-reranker-base (default model), **0.30** MiniLM-L6, 0.30 for any other | lexical, with every passage marked degraded |
 | Bedrock (Cohere Rerank 3.5) | 0.10 | lexical |
 
 The floor belongs to the scoring scheme that produced the scores: a degraded cross-encoder
-returns lexical scores, and they are held to the **lexical** floor. `RAG_RELEVANCE_FLOOR`
+returns lexical scores, and they are held to the **lexical** floor. The cross-encoder floors
+were chosen on a separate development set by a rule fixed in advance, then confirmed once on
+the v2 test set ([evaluation](../evaluation/README.md#calibration)). `RAG_RELEVANCE_FLOOR`
 overrides all of them. Degradation adds a note to the answer and increments
 `adi_rerank_degraded_total`.
 
@@ -86,13 +88,20 @@ the full engine to prove a fabricated figure is still rejected.
 
 An answer is returned only if:
 
-1. every `[n]` marker resolves to a supplied passage,
+1. every `[n]` marker resolves to a supplied passage (a bracketed number printed in the
+   document itself is not a marker: the extractive answerer quotes it as `(12)`, and an
+   out-of-range `[n]` that appears verbatim in a retrieved passage is ignored),
 2. it cites at least one passage,
 3. **every figure it states** (numbers, percentages, amounts, dates, identifiers) appears
    in a passage it cites — formatting-insensitive (`75%` = `75 percent`,
-   `85,000` = `85000`, list ordinals and markers ignored), and
+   `85,000` = `85000`, `Rs 1200` = `Rs1200`, `10 PM` = `10:00 p.m.`, list ordinals and
+   markers ignored; structured identifiers such as `REG/2024/117` must match exactly), and
 4. at least 25 % of its content words appear in the cited passages (a backstop against
    answering a different subject).
+
+An abstention is recognised however a model writes the sentence - with the quotes the
+prompt shows it in, a typographic apostrophe or no full stop - so an honest refusal is
+never reported as an ungrounded answer.
 
 Check 3 is the gate. The earlier design gated on a 55 % word-overlap ratio, which rejected
 correct, well-written answers and passed a fluent answer that changed 75 to 80; the reasons
@@ -100,8 +109,11 @@ are recorded in `grounding.py`.
 
 ## Follow-ups
 
-"What about MECH?" carries one content term. When a question looks dependent (a referring
-word, or two or fewer content terms), terms from the user's **own** earlier questions
+"What about MECH?" carries one content term. When a question looks dependent - an opener
+that refers back ("what about", "and for", "is that…"), a pronoun with nothing in the
+question it could refer to ("When is *it* due?", but not "How do students renew *their*
+cards?", and never "the IT department"), or a single content term - terms from the user's
+**own** earlier questions
 (never the assistant's answers) are appended for retrieval. Independent questions are
 never rewritten. The user's own words travel with it as the **focus**: the extractive
 answerer only quotes sentences that address what was actually asked, and generative
@@ -114,7 +126,10 @@ the attendance question — and is pinned by a regression test that fails withou
 
 Questions that ask several things are split (up to `RAG_MAX_PLAN_STEPS`, 4) and each part
 is answered and grounded independently; markers are renumbered into one answer, and parts
-that could not be answered are listed.
+that could not be answered are listed. A widened follow-up is planned on the user's own
+words, and each part is answered against its own words with the borrowed terms widening its
+retrieval - planned on the widened string, the borrowed terms used to split off into a part
+that re-asked the previous turn.
 
 ## Operational notes
 

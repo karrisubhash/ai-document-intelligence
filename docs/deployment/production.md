@@ -46,14 +46,17 @@ it; run it after editing either compose file.
    | `DOCUMENT_EMBEDDING_PROVIDER`, `RAG_RERANKER`, `RAG_ANSWERER`, `DOCUMENT_SCANNER`, … | optional | see [ai/pipeline.md](../ai/pipeline.md) |
    | `AWS_STORAGE_BUCKET_NAME` … | optional | S3-compatible object storage instead of the `media_data` volume |
 
-2. **Ownership of bind-mounted directories.** The containers write `./backups` as uid
-   10001: `sudo mkdir -p backups && sudo chown 10001:10001 backups`. Volumes created by an
+2. **Ownership of bind-mounted directories.** The containers write `./backups` (mounted
+   at `/backups`, which is `BACKUP_ROOT` in production) as uid 10001:
+   `sudo mkdir -p backups && sudo chown 10001:10001 backups`. Volumes created by an
    image older than the unprivileged user are root-owned; fix once with
    `docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm -u root backend
    chown -R app:app /app/backend/media /app/backend/staticfiles /app/.cache`.
 
 3. **TLS.** For a public hostname, `infrastructure/init-letsencrypt.sh` writes a temporary
-   self-signed pair, starts nginx, obtains the real certificate over HTTP-01 and reloads.
+   self-signed pair, starts nginx, removes the placeholder, obtains the real certificate
+   over HTTP-01 and reloads (if issuance fails, a placeholder is put back so nginx can
+   still restart). Run it with `STAGING=1` first.
    It needs `NGINX_SERVER_NAME` and `CERTBOT_EMAIL`, and ports 80/443 reachable from the
    internet. Behind an institutional load balancer that terminates TLS instead, place its
    certificate at `/etc/letsencrypt/live/<hostname>/` in the `letsencrypt` volume.
@@ -76,13 +79,21 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm backend
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-`migrate` runs before `backend` starts. A change of embedding model needs
-`manage.py reindex` afterwards (it runs on the `index` queue, beside live traffic).
+`migrate` runs before `backend` and both workers start, so new task code never runs
+against the old schema. A change of embedding model needs `manage.py reindex` afterwards
+(it runs on the `index` queue, beside live traffic).
+
+**The stack survives restarts.** Containers restart in place after a crash, a Docker
+daemon restart or a host reboot. Every tmpfs an unprivileged service writes declares its
+owner and mode, because Docker remounts a default tmpfs root-owned on every restart after
+the first start. That once left the backend crash-looping after a reboot.
+`check_deployment_config.py` rejects a tmpfs without them.
 
 ## Scaling
 
 `docker compose … up -d --scale backend=3` — nginx balances by least connections across
-replicas. Scale `worker` for upload throughput and `worker-index` for re-indexing
+replicas, re-resolving the `backend` name every 10 s (`resolve` on the upstream; nginx
+1.27.3 or later), so added or recreated replicas are picked up without a reload. Scale `worker` for upload throughput and `worker-index` for re-indexing
 independently. More than one host requires object storage (`AWS_STORAGE_BUCKET_NAME`),
 because the `media_data` volume is local to one machine.
 

@@ -49,7 +49,7 @@ department, or system admin. Every read and write below is written to the audit 
 | DELETE | `/api/documents/{id}/` | manage | Permanent: versions, content, index and files |
 | POST | `/api/documents/{id}/archive/` · `/restore/` | manage | Archived documents leave search, answers and the default listing |
 | GET · POST | `/api/documents/{id}/versions/` | read · manage | POST multipart `file` → new immutable version, **202**; **409** if archived |
-| GET | `/api/documents/{id}/download/[?version=N]` | read | Original bytes; the version is recorded on the audit row |
+| GET | `/api/documents/{id}/download/[?version=N]` | read | Original bytes; the version is recorded on the audit row. **403** for a version the scanner quarantined, except to a system admin |
 | POST | `/api/documents/{id}/reprocess/` | manage | **202** with the job; **409** with the running job if one is queued or processing |
 | GET | `/api/documents/{id}/processing/` | read | Every job with its stage events |
 | GET | `/api/documents/{id}/content/` | read | Page texts of the live extraction pass |
@@ -81,12 +81,12 @@ change their own role or deactivate themselves.
 
 | Method | Path | Who | Notes |
 |---|---|---|---|
-| GET · POST | `/api/admin/users/` | admins | Filters `search`, `role`, `department`, `is_active`. POST requires an initial password (validated) |
-| GET · PATCH | `/api/admin/users/{id}/` | admins, scoped | Username immutable. Deactivation revokes tokens and sessions |
+| GET · POST | `/api/admin/users/` | admins | Filters `search`, `role`, `department`, `is_active`. Each row carries `can_manage` - whether the caller may edit it. POST requires an initial password (validated); a department admin's new account goes into their department, which must be active |
+| GET · PATCH | `/api/admin/users/{id}/` | admins, scoped | Username immutable. Deactivation deletes the account's sessions and tokens. Superusers can be edited only by superusers; staff accounts not by department admins |
 | POST | `/api/admin/users/{id}/set-password/` | admins, scoped | Ends the user's sessions and tokens |
 | GET | `/api/admin/users/roles/` | admins | Roles this admin may assign |
-| GET · POST · PATCH | `/api/admin/departments/[{id}/]` | read: admins · write: system admins | Case-insensitive unique names; rename rewrites every reference atomically; no DELETE (deactivate instead) |
-| GET | `/api/admin/audit/` | admins, scoped | `action`, `result`, `user`, `document`, `since`, `until`. Department admins see rows by their members or on their documents; other departments' titles are withheld |
+| GET · POST · PATCH | `/api/admin/departments/[{id}/]` | read: admins · write: system admins | Paginated. Case-insensitive unique names; rename rewrites every reference atomically, and is refused (400) when records already use the new spelling - that would merge two tenants; no DELETE (deactivate instead). `member_count` and `document_count` are null for departments other than a department admin's own |
+| GET | `/api/admin/audit/` | admins, scoped | `action`, `result`, `user`, `document`, `since`, `until` (dates or full ISO datetimes). Department admins see rows by their members or on their documents; for another department's document both the id and the title are withheld (`document_withheld: true`), and filtering by such an id returns nothing |
 | GET | `/api/admin/jobs/` | admins, scoped | `status`, `error_code`, `stalled=true` |
 | POST | `/api/admin/jobs/{id}/retry/` | admins, scoped | **409** if a run is active; **400** for a superseded version |
 | GET | `/api/admin/system/` | system admins | Dependency health, queue depths, counts, AI configuration — names only, never secrets |
@@ -97,5 +97,5 @@ change their own role or deactivate themselves.
 |---|---|
 | `/health/` | Liveness: process up, database reachable. Deliberately not dependent on Redis |
 | `/ready/` | Readiness: database, cache, broker. 503 with per-component status, never hosts or error text |
-| `/metrics` | Prometheus; restricted to private ranges at nginx and optionally `METRICS_ALLOWED_IPS` |
-| `/admin/` | Django admin |
+| `/metrics` | Prometheus, scraped inside the compose network. nginx answers 404 for it, so it is never reachable through the edge; `METRICS_ALLOWED_IPS` optionally restricts it further |
+| `/django-admin/` | Django admin (superusers). `/admin/*` is the application's own administration screens |

@@ -83,3 +83,28 @@ Git Bash rewrites arguments that look like POSIX paths (`/out/x.sh` becomes
 ## The Django test runner crashes with "cannot pickle 'traceback' object"
 
 That is `--parallel` hiding a real failure. Run the suite serially.
+
+## The backend restarts forever after a reboot: `PermissionError: '/tmp/prometheus/...'`
+
+**Cause.** The backend writes its Prometheus samples to a tmpfs. With Docker's default
+options a tmpfs is world-writable only on a container's *first* start; on every restart
+after that (a crash under `restart: unless-stopped`, a Docker daemon restart, a host
+reboot) Docker remounts it root-owned 0755, and the unprivileged process cannot create its
+files. Every Django process then dies at import. Seen on this project's production test
+stack after the host rebooted.
+
+**Now.** The compose file declares `uid=10001,gid=10001,mode=0700` on every such tmpfs, and
+`infrastructure/check_deployment_config.py` refuses a tmpfs without them. A stack started
+from an older compose file needs `docker compose … up -d` (which recreates the container)
+once with the current one.
+
+## A chat answer takes 10–20 seconds on a CPU-only server
+
+**Cause.** The local cross-encoder. bge-reranker-base scores `RAG_RETRIEVAL_DEPTH` (20)
+passages of up to 512 tokens per question; on a 4-core laptop CPU that measured 13.4 s of
+a 13.8 s answer ([performance](../operations/performance.md)).
+
+**Options.** `RAG_RERANKER_LOCAL_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2` reranks several
+times faster and retrieved better on the evaluation benchmark, at the cost of answering
+slightly fewer questions ([evaluation](../evaluation/README.md#calibration)); a GPU
+(`RAG_RERANKER_LOCAL_DEVICE`); or a smaller `RAG_RETRIEVAL_DEPTH` (not measured).

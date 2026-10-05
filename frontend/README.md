@@ -22,7 +22,7 @@ npm run dev          # http://localhost:5173, proxied to http://localhost:8000
 ```
 
 Point the proxy elsewhere with `VITE_PROXY_TARGET` (for example the e2e backend on
-`http://localhost:8001`). Accounts come from the Django admin or the Users screen;
+`http://localhost:8001`). Accounts come from the Django admin (`/django-admin/`; `/admin/*` is this app's own administration) or the Users screen;
 `python manage.py createsuperuser` makes the first one.
 
 ## Checks

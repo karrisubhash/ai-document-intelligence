@@ -11,7 +11,7 @@ Commands assume the production stack; prefix with
 | `GET /health/` | process up, database reachable | liveness — restart on failure |
 | `GET /ready/` | database, cache and broker all answer | readiness — take out of rotation on 503; never restart on it |
 | **System status** screen (`/admin/system` in the app) | all of the above plus storage write/read, queue depths, stalled runs, failures in the last 24 h, the AI configuration | a human's first look |
-| `/metrics` | Prometheus, private networks only | dashboards and alerts |
+| `/metrics` | Prometheus scrapes each backend replica (:8000) and each worker container (:9100) inside the compose network; nginx answers 404 for it | dashboards and alerts |
 
 Signals worth alerting on (all bounded-label metrics):
 
@@ -22,7 +22,14 @@ Signals worth alerting on (all bounded-label metrics):
 - `adi_rerank_degraded_total` > 0 — the cross-encoder is failing; ranking is lexical.
 - `adi_queue_depth{queue="ingest"}` growing for more than a few minutes — add `worker`s.
 - `adi_pipeline_failures_total{error_code="TIMEOUT"}` — documents exceeding
-  `CELERY_TASK_SOFT_TIME_LIMIT` (15 min).
+  `CELERY_TASK_SOFT_TIME_LIMIT` (15 min). A timeout is recorded as TIMEOUT and not retried
+  even when the code it interrupted wrapped it (the embedder, the OCR extractors).
+
+The pipeline metrics (`adi_pipeline_*`, `adi_pages_processed_total`,
+`adi_documents_indexed_total`) are recorded in the worker containers. Each worker serves
+its own processes' samples on :9100 (`CELERY_METRICS_PORT`) and Prometheus discovers them
+by DNS (job `adi-workers`). Before this, those series read zero and no pipeline alert
+could fire.
 
 ## Processing
 
@@ -31,7 +38,11 @@ error code and a Retry button (current versions only; quarantined files are neve
 
 A run is **stalled** when it is `PROCESSING` and its row has not changed for
 `STALLED_JOB_MINUTES` (120): its worker was killed — OOM, a hard time limit, a node loss —
-and nothing marked it finished. From cron, every 15 minutes:
+and nothing marked it finished. A whole worker that dies (a stopped container, a host
+reboot) leaves its task in Redis, which redelivers it after the visibility timeout (one
+hour); a pool child killed by the hard time limit or the OOM killer does **not** - Celery
+acknowledges it as failed - so this command is what reclaims it. From cron, every 15
+minutes:
 
 ```bash
 python manage.py recover_stalled_jobs --apply --requeue
@@ -39,6 +50,10 @@ python manage.py recover_stalled_jobs --apply --requeue
 
 Without `--apply` it only reports. `QUEUED` jobs are never treated as stalled: a long
 backlog is not a failure. A stalled job's message, if it is ever redelivered, is skipped.
+A transient failure waiting for its automatic retry stays `QUEUED` (with the error shown)
+rather than `FAILED`, so neither Reprocess nor Retry can start a second run beside it. A
+job the broker could not accept at all (Redis down at upload) is recorded `FAILED` with
+`INFRASTRUCTURE_ERROR` and can be retried.
 
 | Error code | Meaning | Action |
 |---|---|---|
@@ -80,14 +95,20 @@ python manage.py restore /backups/db-<stamp>.dump --yes    # replaces the tables
 
 Every dump is read back with `pg_restore --list` before success is reported, and its
 SHA-256 and per-app migration state are recorded in a manifest. Restore refuses a dump
-whose checksum does not match its manifest, verifies afterwards that every table is
-present, and reports any app whose code is ahead of the restored schema (run `migrate`).
+whose checksum does not match its manifest (and refuses an unreadable manifest rather than
+skipping the check), fails if `pg_restore` exits with an error nobody has explained - over
+a live database, "tables exist afterwards" proves nothing - and reports any app whose code
+is ahead of the restored schema (run `migrate`) or behind it (a dump from a newer release).
+
+In production the dumps go to `BACKUP_ROOT=/backups`, the bind-mounted `./backups`. The
+containers run as uid 10001, so on a Linux host that directory must be writable by it:
+`install -d -o 10001 -g 10001 backups` before the first backup.
 
 Media (uploaded files) lives in the `media_data` volume or the bucket. `--include-media`
 archives the volume; with S3, use the bucket's own versioning and replication instead.
 
 **Schedule**: cron `python manage.py backup --prune` daily (retention `BACKUP_RETENTION`,
-default 7), and copy `./backups` off the host — a backup on the same disk as the database
+default 7, applied to media archives as well as dumps), and copy `./backups` off the host — a backup on the same disk as the database
 protects against mistakes, not against losing the disk.
 
 ### Restore drill (performed)

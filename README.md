@@ -39,7 +39,7 @@ for** and **what is actually built today**, and never conflates the two.
 | Chunking, embeddings, pgvector index | 11.4, 15 | ✅ Built — page-bounded chunks, span-verified |
 | Hybrid search + reranking | 12.2 | ✅ Built — RRF fusion + pluggable reranker |
 | RAG, citations, abstention, guardrails | 12 | ✅ Built — extractive by default, generative via one setting, same guardrails |
-| Product frontend (React + Vite) | 26 | ✅ Built — dashboard, documents, document viewer, search, cited chat with source inspection, administration ([frontend/](frontend/)); browser e2e suite 6/6 against the live stack |
+| Product frontend (React + Vite) | 26 | ✅ Built — dashboard, documents, document viewer, search, cited chat with source inspection, administration ([frontend/](frontend/)); browser e2e suite 7/7 against the live production stack over TLS |
 | Metrics, structured logs, AI telemetry | 20 | ✅ Built — `/metrics`, redaction enforced at the formatter |
 | Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 8-job pipeline; every gate now passes locally, none has run in GitHub Actions |
 | Horizontal scale, queue routing, re-indexing | 22 | ✅ Built — measured, not assumed ([details](#scale-22-nfr-02)) |
@@ -343,8 +343,8 @@ when the public surface is frozen.)
 | `POST` | `/api/messages/{id}/feedback/` | Rate one answer (online quality signal) |
 | `GET` | `/api/chat/conversations/{id}/` | Retrieve a conversation (owner only) |
 | `GET` | `/health/` | Liveness + database check |
-| `GET` | `/metrics` | Prometheus scrape endpoint. **Ungated by default** — `METRICS_ALLOWED_IPS` is empty unless set, and the allowlist only applies when it is non-empty. In production nginx restricts it to private ranges, which is the gate that actually holds |
-| — | `/admin/` | Django admin |
+| `GET` | `/metrics` | Prometheus scrape endpoint. **Ungated by default** — `METRICS_ALLOWED_IPS` is empty unless set, and the allowlist only applies when it is non-empty. In production nginx answers 404 for it, so it is never reachable through the edge; Prometheus scrapes the backend directly inside the compose network |
+| — | `/django-admin/` | Django admin (superusers). `/admin/*` belongs to the application's administration screens |
 
 
 
@@ -1360,8 +1360,10 @@ accept a slope that starts above it.
 ### Ingestion and indexing are separate queues
 
 ```
-ingest  →  OCR, parsing, classification      (CPU-bound, low concurrency)
-index   →  chunking, embedding, re-indexing   (IO-bound, high concurrency)
+ingest  →  the whole pipeline for new uploads: OCR, parsing, classification,
+           extraction, and chunking + embedding   (CPU-bound, low concurrency)
+index   →  bulk re-indexing of existing content   (network-bound with a hosted
+           embedder, CPU-bound with the local one)
 ```
 
 NFR-02 calls for independently scalable components, and on one shared queue they are not:
@@ -1369,9 +1371,12 @@ the only way to make a bulk re-index finish sooner would be to add workers that 
 up ingestion. Proven live — with the worker stopped, depth read `ingest=5, index=0`; an
 index-only worker then drained `index` 8→0 while `ingest` stayed at 5, untouched.
 
-`acks_late` with `prefetch_multiplier=1`: a killed worker loses nothing, no worker sits on
-a minute-long OCR job another could have started, and queue depth reflects what is actually
-waiting rather than what has been quietly reserved.
+`acks_late` with `prefetch_multiplier=1`: a worker that dies with a task in hand (a stopped
+container, a host reboot) leaves the message in Redis to be redelivered after the visibility
+timeout, no worker sits on a minute-long OCR job another could have started, and queue depth
+reflects what is actually waiting rather than what has been quietly reserved. A pool *child*
+killed by the hard time limit or the OOM killer is acknowledged as failed by Celery, not
+redelivered; `recover_stalled_jobs` reclaims that job (see the runbook).
 
 ### Queue depth is read from the broker
 
