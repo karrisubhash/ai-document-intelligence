@@ -100,6 +100,9 @@ class DocumentAccessPolicy(permissions.BasePermission):
             requested = request.query_params.get("version", "")
             if view.action == "download" and requested.isdigit():
                 metadata["version_number"] = int(requested[:9])
+            # After a delete nothing else records what the document was.
+            if view.action == "destroy" and allowed:
+                metadata["document_title"] = document.title
             record_event(
                 user=request.user,
                 action=action,

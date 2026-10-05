@@ -40,6 +40,36 @@ class ProcessingInProgress(Exception):
         self.job = job
 
 
+class DocumentQuarantined(Exception):
+    """The security scan quarantined this version; it is not run again."""
+
+
+def is_quarantined(version: DocumentVersion) -> bool:
+    """Whether the scanner's last word on this version was "infected".
+
+    Judged from the newest MALWARE_DETECTED job, not from the newest job.
+    A fresh job starts with an empty error code, so reading the newest job
+    meant a Reprocess click lifted the quarantine - every department member
+    could download the file until the rescan caught up with it. Only a
+    later run that COMPLETED (it passed the scan) clears the verdict.
+    """
+    flagged_at = (
+        ProcessingJob.objects.filter(
+            document_version=version, error_code=ErrorCode.MALWARE_DETECTED
+        )
+        .order_by("-created_at")
+        .values_list("created_at", flat=True)
+        .first()
+    )
+    if flagged_at is None:
+        return False
+    return not ProcessingJob.objects.filter(
+        document_version=version,
+        status=ProcessingJob.Status.COMPLETED,
+        created_at__gt=flagged_at,
+    ).exists()
+
+
 def stalled_cutoff():
     minutes = getattr(settings, "STALLED_JOB_MINUTES", DEFAULT_STALLED_JOB_MINUTES)
     return timezone.now() - timedelta(minutes=minutes)
@@ -170,6 +200,14 @@ def reprocess_document(document: Document) -> ProcessingJob:
             raise ValueError("Document has no current version to reprocess.")
         if locked.is_archived:
             raise DocumentArchived("Restore the document before reprocessing it.")
+        # Never run again: the scan runs before any parser, so a rerun only
+        # re-quarantines it, and meanwhile the document reads as QUEUED.
+        # A file the scanner was wrong about is uploaded as a new version.
+        if is_quarantined(version):
+            raise DocumentQuarantined(
+                "This file was quarantined by the security scan and is not "
+                "processed again. Upload a new version instead."
+            )
 
         active = (
             ProcessingJob.objects.select_for_update()
@@ -278,7 +316,7 @@ def recover_stalled_jobs(*, requeue: bool = False) -> list:
         ):
             try:
                 replacement = reprocess_document(document)
-            except ProcessingInProgress:
+            except (ProcessingInProgress, DocumentQuarantined):
                 replacement = None
         recovered.append((job, replacement))
 

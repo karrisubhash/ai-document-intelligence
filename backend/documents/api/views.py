@@ -10,12 +10,13 @@ from documents.api import discovery
 from documents.audit import record_event
 from documents.models import AuditLog, Document, DocumentChunk, ProcessingJob
 from documents.permissions import DocumentAccessPolicy
-from documents.processing.errors import ErrorCode
 from documents.services import (
     DocumentArchived,
+    DocumentQuarantined,
     ProcessingInProgress,
     archive_document,
     create_document_version,
+    is_quarantined,
     reprocess_document,
     restore_document,
 )
@@ -210,7 +211,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {"detail": str(exc), "job": ProcessingJobSerializer(exc.job).data},
                 status=status.HTTP_409_CONFLICT,
             )
-        except DocumentArchived as exc:
+        except (DocumentArchived, DocumentQuarantined) as exc:
             return _conflict(str(exc))
         except ValueError as exc:
             return Response(
@@ -434,13 +435,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         # per VERSION - an earlier infected upload stays infected after a
         # clean one replaces it. A system administrator may still retrieve
         # it, for review.
-        infected = (
-            ProcessingJob.objects.filter(document_version=version)
-            .order_by("-created_at")
-            .values_list("error_code", flat=True)
-            .first()
-        ) == ErrorCode.MALWARE_DETECTED
-        if infected and not authorization.is_system_admin(request.user):
+        if is_quarantined(version) and not authorization.is_system_admin(request.user):
             return Response(
                 {
                     "detail": "This file was quarantined by the security scan and "

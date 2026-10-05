@@ -114,6 +114,81 @@ class AuditTrailTests(ScopedTestCase):
         response = client_for(self.root).get(reverse("admin-audit"), {"user": "x"})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def delete_as(self, user, document):
+        response = client_for(user).delete(
+            reverse("document-detail", args=[document.id])
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_a_deleted_documents_trail_keeps_its_subject(self):
+        """Deleting a document cleared the document on every row about it:
+        the delete itself and each earlier view lost their subject, so who
+        read document D before it was deleted had no answer."""
+        document_id = self.chemistry_doc.id
+        self.delete_as(self.chemistry_member, self.chemistry_doc)
+
+        rows = self.rows(self.root, document=str(document_id))
+
+        self.assertEqual(
+            {row["action"] for row in rows}, {"DOCUMENT_VIEW", "DOCUMENT_DELETE"}
+        )
+        self.assertTrue(all(row["document"] == document_id for row in rows))
+        deleted = next(row for row in rows if row["action"] == "DOCUMENT_DELETE")
+        self.assertEqual(deleted["document_title"], "Salary Revisions")
+
+    def test_a_deleted_document_stays_in_its_departments_trail(self):
+        """Deleted by someone outside the department, it is still the
+        department's: judged by the department recorded on the row."""
+        chemistry_admin = make_user("ops_che_admin", Role.DEPARTMENT_ADMIN, "Chemistry")
+        document_id = self.chemistry_doc.id
+        self.delete_as(self.root, self.chemistry_doc)
+
+        rows = self.rows(chemistry_admin, action="DOCUMENT_DELETE")
+
+        self.assertEqual([row["document"] for row in rows], [document_id])
+        self.assertEqual(rows[0]["document_title"], "Salary Revisions")
+
+    def test_a_deleted_document_stays_withheld_from_other_departments(self):
+        self.delete_as(self.root, self.chemistry_doc)
+
+        denied = [
+            row
+            for row in self.rows(self.physics_admin, result="DENIED")
+            if row["username"] == "ops_phy"
+        ]
+        self.assertTrue(denied)
+        self.assertIsNone(denied[0]["document"])
+        self.assertTrue(denied[0]["document_withheld"])
+        self.assertEqual(self.rows(self.physics_admin, action="DOCUMENT_DELETE"), [])
+
+    def test_a_withheld_title_does_not_leak_through_the_metadata(self):
+        """The delete row records the title, for after the document is gone.
+        It must be withheld wherever the title field is."""
+        joint = Document.objects.create(
+            title="Joint Grant", owner=self.physics_member, department="Chemistry"
+        )
+        self.delete_as(self.physics_member, joint)
+
+        rows = self.rows(self.physics_admin, action="DOCUMENT_DELETE")
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["document_withheld"])
+        self.assertEqual(rows[0]["document_title"], "")
+        self.assertNotIn("document_title", rows[0]["metadata"])
+
+    def test_a_rename_keeps_a_deleted_documents_trail_in_the_department(self):
+        from accounts.models import Department
+        from accounts.services import rename_department
+
+        chemistry = Department.objects.create(name="Chemistry", code="CHE")
+        chemistry_admin = make_user("ops_che_admin", Role.DEPARTMENT_ADMIN, "Chemistry")
+        self.delete_as(self.root, self.chemistry_doc)
+
+        rename_department(chemistry, "Chemical Sciences")
+        chemistry_admin.profile.refresh_from_db()
+
+        self.assertEqual(len(self.rows(chemistry_admin, action="DOCUMENT_DELETE")), 1)
+
 
 @override_settings(**EAGER)
 class ProcessingMonitorTests(ScopedTestCase):

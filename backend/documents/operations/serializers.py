@@ -30,9 +30,19 @@ class AuditLogSerializer(serializers.ModelSerializer):
     def get_username(self, entry):
         return entry.user.get_username() if entry.user_id else ""
 
+    @staticmethod
+    def _document_id(entry):
+        # document_ref outlives the document; document_id does not.
+        return entry.document_ref or entry.document_id
+
     def _outside_scope(self, entry) -> bool:
         scope = self.context.get("department_scope")
-        return scope is not None and entry.document.department != scope
+        if scope is None:
+            return False
+        if entry.document is not None:
+            return entry.document.department != scope
+        # Deleted: judged by its department when the row was written.
+        return entry.document_department != scope
 
     def get_document(self, entry):
         """Withheld, like the title, for another department's document.
@@ -43,12 +53,12 @@ class AuditLogSerializer(serializers.ModelSerializer):
         in their own audit trail exactly which ones were another
         department's documents - the existence leak the 404 exists to stop.
         """
-        if entry.document_id is None or self._outside_scope(entry):
+        if self._document_id(entry) is None or self._outside_scope(entry):
             return None
-        return entry.document_id
+        return self._document_id(entry)
 
     def get_document_withheld(self, entry) -> bool:
-        return entry.document_id is not None and self._outside_scope(entry)
+        return self._document_id(entry) is not None and self._outside_scope(entry)
 
     def get_document_title(self, entry):
         """Withheld from a department admin for another department's document.
@@ -59,9 +69,22 @@ class AuditLogSerializer(serializers.ModelSerializer):
         Revisions 2025'" discloses another department's document to someone
         who may not read it. A system admin sees every title.
         """
-        if entry.document_id is None or self._outside_scope(entry):
+        if self._document_id(entry) is None or self._outside_scope(entry):
             return ""
-        return entry.document.title
+        if entry.document is not None:
+            return entry.document.title
+        # Deleted. Only the delete row recorded the title.
+        return entry.metadata.get("document_title", "")
+
+    def to_representation(self, entry):
+        data = super().to_representation(entry)
+        if data["document_withheld"] and "document_title" in data["metadata"]:
+            data["metadata"] = {
+                key: value
+                for key, value in data["metadata"].items()
+                if key != "document_title"
+            }
+        return data
 
 
 class OperationsJobSerializer(serializers.ModelSerializer):

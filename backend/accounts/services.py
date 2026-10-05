@@ -56,7 +56,7 @@ def rename_department(department: Department, new_name: str) -> Department:
     silently move every member and document into a department that no
     longer exists - and out of reach of each other.
     """
-    from documents.models import Conversation, Document, EvaluationDataset
+    from documents.models import AuditLog, Conversation, Document, EvaluationDataset
 
     old_name = department.name
     new_name = new_name.strip()
@@ -83,6 +83,10 @@ def rename_department(department: Department, new_name: str) -> Department:
     Document.objects.filter(department=old_name).update(department=new_name)
     Conversation.objects.filter(department=old_name).update(department=new_name)
     EvaluationDataset.objects.filter(department=old_name).update(department=new_name)
+    # Or a deleted document's trail would fall out of its department's view.
+    AuditLog.objects.filter(document_department=old_name).update(
+        document_department=new_name
+    )
 
     return department
 

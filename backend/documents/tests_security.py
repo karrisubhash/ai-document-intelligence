@@ -305,6 +305,71 @@ class ScanStageTests(TestCase):
         client.force_authenticate(reviewer)
         self.assertEqual(client.get(url).status_code, status.HTTP_200_OK)
 
+    def quarantine(self):
+        document, job = self.upload(EICAR, name="eicar.txt")
+        with override_settings(DOCUMENT_SCANNER=SCANNER):
+            with self.assertRaises(DocumentInfected):
+                run_pipeline(job.id)
+        return document, job
+
+    def test_the_owner_cannot_reprocess_a_quarantined_file(self):
+        """The download gate read the NEWEST job, and a new job's error code
+        is empty: the owner clicked Reprocess and, until a worker rescanned
+        it, every department member could download the flagged file."""
+        document, _ = self.quarantine()
+        owner = APIClient()
+        owner.force_authenticate(self.user)
+
+        response = owner.post(reverse("document-reprocess", args=[document.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(
+            ProcessingJob.objects.filter(
+                document_version=document.current_version
+            ).count(),
+            1,
+        )
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.Status.QUARANTINED)
+
+    def test_an_administrator_cannot_retry_a_quarantined_job(self):
+        from accounts.models import UserProfile
+
+        document, job = self.quarantine()
+        admin = make_user(
+            "scan_dept_admin", UserProfile.Role.DEPARTMENT_ADMIN, "Registry"
+        )
+        client = APIClient()
+        client.force_authenticate(admin)
+
+        response = client.post(reverse("admin-job-retry", args=[job.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(
+            ProcessingJob.objects.filter(
+                document_version=document.current_version
+            ).count(),
+            1,
+        )
+
+    def test_only_a_completed_rerun_lifts_the_quarantine(self):
+        """Whatever creates a new job, a queued one does not clear the
+        verdict; only a run that completed - and so passed the scan - does."""
+        document, _ = self.quarantine()
+        version = document.current_version
+        colleague = make_user("scan_colleague_2", department="Registry")
+        client = APIClient()
+        client.force_authenticate(colleague)
+        url = reverse("document-download", args=[document.id])
+
+        ProcessingJob.objects.create(document_version=version)
+        self.assertEqual(client.get(url).status_code, status.HTTP_403_FORBIDDEN)
+
+        ProcessingJob.objects.create(
+            document_version=version, status=ProcessingJob.Status.COMPLETED
+        )
+        self.assertEqual(client.get(url).status_code, status.HTTP_200_OK)
+
     def test_an_infected_document_is_never_parsed(self):
         """The whole point of scanning before extraction."""
         document, job = self.upload(EICAR, name="eicar.txt")
@@ -572,6 +637,52 @@ class ThrottlingTests(TestCase):
                 self.client.get(reverse("document-list")).status_code,
                 status.HTTP_200_OK,
             )
+
+
+class SecretKeyGuardTests(SimpleTestCase):
+    """Production settings refuse to load without a real secret key.
+
+    Settings are read once per process, so each case loads them in a fresh
+    interpreter, exactly as a deployment would.
+    """
+
+    def load_settings(self, key):
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        return subprocess.run(
+            [sys.executable, "-c", "import config.settings"],
+            cwd=Path(__file__).resolve().parents[1],
+            env={
+                **os.environ,
+                "DJANGO_DEBUG": "False",
+                "DJANGO_SECRET_KEY": key,
+                "DJANGO_ALLOWED_HOSTS": "docs.example.org",
+            },
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    def test_an_empty_key_is_refused(self):
+        result = self.load_settings("")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ImproperlyConfigured", result.stderr)
+
+    def test_the_shipped_placeholders_are_refused(self):
+        """`.env.example` ships `change-me`. Deployed unedited, it passed the
+        guard, and the deployment's key was public."""
+        for key in ("change-me", "unsafe-development-key"):
+            with self.subTest(key=key):
+                result = self.load_settings(key)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ImproperlyConfigured", result.stderr)
+
+    def test_a_real_key_is_accepted(self):
+        result = self.load_settings("k8Vq2-not-a-placeholder-" + "x" * 40)
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
 
 class TransportSecurityTests(SimpleTestCase):

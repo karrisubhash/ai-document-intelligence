@@ -56,10 +56,16 @@ class AuditLogView(ListAPIView):
         )
 
         department = _department_scope(self.request.user)
+        # A document of the department: its current department while it
+        # exists, the one recorded on the row once it has been deleted.
+        in_department = Q(document__department=department) | Q(
+            document__isnull=True,
+            document_ref__isnull=False,
+            document_department=department,
+        )
         if department is not None:
             queryset = queryset.filter(
-                Q(user__profile__department=department)
-                | Q(document__department=department)
+                Q(user__profile__department=department) | in_department
             )
 
         params = self.request.query_params
@@ -67,7 +73,9 @@ class AuditLogView(ListAPIView):
             queryset = queryset.filter(action=params["action"])
         if params.get("result"):
             queryset = queryset.filter(result=params["result"])
-        for name, field in (("user", "user_id"), ("document", "document_id")):
+        # document_ref, not document_id: a deleted document's trail stays
+        # queryable by its id.
+        for name, field in (("user", "user_id"), ("document", "document_ref")):
             value = params.get(name, "")
             if value:
                 if not value.isdigit():
@@ -77,7 +85,7 @@ class AuditLogView(ListAPIView):
             # Filtering by another department's document id would answer
             # "does it exist?" through whether any row comes back, which the
             # serializer withholding the id cannot prevent.
-            queryset = queryset.filter(document__department=department)
+            queryset = queryset.filter(in_department)
 
         since = _boundary(params, "since", end_of_day=False)
         until = _boundary(params, "until", end_of_day=True)
@@ -150,7 +158,7 @@ class JobRetryView(APIView):
                 {"detail": str(exc), "job_id": exc.job.id},
                 status=status.HTTP_409_CONFLICT,
             )
-        except services.DocumentArchived as exc:
+        except (services.DocumentArchived, services.DocumentQuarantined) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

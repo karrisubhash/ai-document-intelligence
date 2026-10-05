@@ -43,14 +43,20 @@ DEBUG = (
 # deployment is forgeable by anyone who has read this file.
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "")
 
-if not SECRET_KEY:
+# The placeholders this repository itself publishes. `.env.example` ships
+# DJANGO_SECRET_KEY=change-me, and a copy deployed unedited passed the
+# check below with a key anyone can read.
+PLACEHOLDER_SECRET_KEYS = {"change-me", "unsafe-development-key"}
+
+if not SECRET_KEY or SECRET_KEY in PLACEHOLDER_SECRET_KEYS:
     if not DEBUG:
         raise ImproperlyConfigured(
-            "DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is not true. "
+            "DJANGO_SECRET_KEY must be set to a secret value when DJANGO_DEBUG "
+            "is not true (it is empty, or a placeholder from .env.example). "
             'Generate one with: python -c "from django.core.management.utils '
             'import get_random_secret_key; print(get_random_secret_key())"'
         )
-    SECRET_KEY = "unsafe-development-key"
+    SECRET_KEY = SECRET_KEY or "unsafe-development-key"
 
 # Comma-separated, because a deployment behind a real hostname or load
 # balancer needs its own and hard-coding localhost silently 400s there.

@@ -68,13 +68,20 @@ user cannot do but decides nothing.
 - Size, emptiness and extension are checked **before anything is stored**; oversize is a
   413. nginx caps bodies at 55 MB so the application produces the error.
 - Ingestion sniffs magic bytes, so a mislabelled file never reaches the wrong parser.
-- The **heuristic scanner** (enable with `DOCUMENT_SCANNER`) runs before validation and
-  quarantines disguised executables, Office macros, PDF active content (`/JavaScript`,
-  `/OpenAction`, `/Launch`, embedded files) and the EICAR string. **It is not an
-  antivirus** — there is no signature database. Point `DOCUMENT_SCANNER` at ClamAV or a
-  cloud scanner for real coverage. Quarantined files are never previewed, and the
-  download endpoint refuses them (403) to everyone but a system administrator - judged per
-  version, so an earlier infected upload stays refused after a clean one replaces it.
+- The **heuristic scanner** (enable with `DOCUMENT_SCANNER`) runs before any parser. It
+  **quarantines** disguised executables (PE, ELF, Mach-O), scripts that start with a `#!`
+  interpreter line and the EICAR string. Office
+  macros and PDF active content (`/JavaScript`, `/OpenAction`, `/Launch`, embedded files)
+  are only **flagged**: the file is marked suspicious, the findings are recorded, and it is
+  still processed and downloadable. **It is not an antivirus** — there is no signature
+  database. Point `DOCUMENT_SCANNER` at ClamAV or a cloud scanner for real coverage.
+  Quarantined files are never previewed, never processed again (reprocess and retry are
+  refused; a file the scanner was wrong about is uploaded as a new version), and the
+  download endpoint refuses them (403) to everyone but a system administrator. This is
+  judged per version, so an earlier infected upload stays refused after a clean one
+  replaces it.
+- **Before its scan finishes, a new upload can be downloaded** by everyone who can read
+  it. Scanning runs in the pipeline, not in the upload request. See the known gaps.
 - Media is **never served statically**. Bytes are reachable only through the
   authenticated, audited download endpoint; S3 storage uses private ACLs and never hands
   out bucket URLs.
@@ -129,6 +136,12 @@ administrator sees their members' denied attempts on other departments' document
 the document's id or title - a denied row exists only for an id that exists, so the id
 alone would reveal which ids are real.
 
+Deleting a document does not erase its trail. Every row about a document keeps the
+document's id and department. The delete row also keeps its title, so the trail still
+answers what was deleted, by whom, and who read it before. The title therefore outlives
+the document in the audit table. Whether that is acceptable, and for how long audit rows
+are kept, is a retention decision for the institution; nothing prunes the table today.
+
 ## Logging
 
 Structured JSON through one formatter that redacts document content whatever the caller
@@ -141,6 +154,9 @@ messages.
 | Gap | Why it matters | Status |
 |---|---|---|
 | No antivirus engine | The heuristic scanner has no signatures | Integration point exists (`DOCUMENT_SCANNER`) |
+| A new upload is downloadable before its scan completes | Scanning is asynchronous; a flagged file is quarantined only once a worker reaches it | Institutional decision: holding every file until scanned would also hold back previews of every document in processing |
+| Redis has no password | Read access to Redis exposes session keys; it is reachable from every container on the compose network, not from outside | Accepted for a single host; required before any cross-host deployment |
+| `/django-admin/` is reachable from the internet | Password-only superuser login, limited to 1 request/s per IP at the edge | Institutional decision: restrict to an admin network or VPN |
 | No encryption at rest in the application | Relies on disk/volume or bucket encryption | Enable on the storage layer |
 | No SSO / MFA | Institutional identity is usually federated | Not built |
 | Conversation history keeps citation text after access is revoked | It is a record of what that user was shown; a department change does not retract it | By design; revisit if policy requires |
