@@ -5,20 +5,23 @@ half of the same idea. Both replace the bundled `LexicalReranker`, which
 scores term overlap and is therefore blind to the passage that answers a
 question in words the question did not use. What this one asks for instead
 of an AWS account, granted model access and a network round trip per query
-is roughly 91 MB of weights resident in every worker process and a few
-hundred milliseconds of CPU per question. Reranking only ever sees
-`RAG_RETRIEVAL_DEPTH` candidates, which is what makes that affordable here
-and would not make it affordable for embedding.
+is model weights resident in every web worker process and CPU time per
+question. Reranking only ever sees `RAG_RETRIEVAL_DEPTH` candidates, which
+is what makes that affordable here and would not make it affordable for
+embedding.
 
-THE MODEL. `cross-encoder/ms-marco-MiniLM-L6-v2` by default: 22.7M
-parameters, 91 MB of fp32 weights, a 512-token window covering the query
-and the passage together. The BAAI rerankers are the obvious alternatives
-and both lose on the axis that decides this one: `bge-reranker-base`
-carries roughly 8x the compute-bearing parameters and `bge-reranker-v2-m3`
-roughly 27x, which on CPU is the difference between a reranked question and
-a timed-out one. Their extra capacity is multilingual, and this corpus is
-English. The quality gap to the twice-as-slow L12 variant of this same
-model is 0.01 NDCG@10, which is noise.
+THE MODEL. `BAAI/bge-reranker-base` by default (see DEFAULT_MODEL below for
+why): about 278M parameters, about 1.1 GB of fp32 weights per process, a
+512-token window covering the query and the passage together.
+`cross-encoder/ms-marco-MiniLM-L6-v2` (22.7M parameters, 91 MB) is the
+low-latency alternative: RAG_RERANKER_LOCAL_MODEL selects it. MEASURED on
+this project's v2 benchmark, each at its calibrated floor: MiniLM retrieves
+better (recall@1 0.980 vs 0.857) and reranks several times faster (on a
+4-core laptop CPU, 20 OCR-sized passages took 13.4 s per question on
+bge-reranker-base in production); bge-reranker-base answers slightly more
+of the questions it should (abstention accuracy 0.614 vs 0.561). Neither
+dominates; on CPU-only hardware MiniLM is usually the better trade. See
+docs/evaluation/README.md and docs/operations/performance.md.
 
 THE SCORE RANGE IS NOT THE LIBRARY'S DEFAULT, AND THAT IS THE FAILURE THIS
 MODULE IS ARRANGED AROUND. sentence-transformers resolves a cross-encoder's
@@ -131,6 +134,26 @@ DEFAULT_MODEL = "BAAI/bge-reranker-base"
 # constants are one decision, not two.
 DEFAULT_RELEVANCE_FLOOR = 0.30
 
+# CALIBRATED floors for the two models measured end to end, chosen on the
+# synthetic DEVELOPMENT set (evaluation/calibration-c1.template.json) by a
+# rule written down before any result was seen - maximise abstention
+# accuracy, ties to the higher floor - and then confirmed ONCE on the v2
+# test set, which played no part in choosing them. Measured 2026-10-04/05:
+#
+#   bge-reranker-base  dev: 0.30 -> 0.02 raises abstention accuracy
+#                      0.432 -> 0.486; v2: 0.561 -> 0.614, coverage
+#                      0.491 -> 0.544, citation accuracy 0.929 -> 0.860.
+#   MiniLM-L6          the rule keeps 0.30 (ties at 0.01 and below).
+#
+# So the nine-pair picture above ("nearly binary") did not hold on
+# paraphrased questions: some passages that answer them score between 0.02
+# and 0.30 on bge-reranker-base. Any other model gets the default and
+# should be calibrated the same way. See docs/evaluation/README.md.
+CALIBRATED_FLOORS = {
+    "BAAI/bge-reranker-base": 0.02,
+    "cross-encoder/ms-marco-MiniLM-L6-v2": 0.30,
+}
+
 # Pairs per forward pass. Smaller than the embedder's 32 because each item
 # here is a query AND a passage rather than one text, and because a whole
 # batch is at most RAG_RETRIEVAL_DEPTH candidates - there is no throughput
@@ -185,6 +208,10 @@ class LocalCrossEncoderReranker:
     def __init__(self):
         self.model_id = (
             getattr(settings, "RAG_RERANKER_LOCAL_MODEL", "") or DEFAULT_MODEL
+        )
+
+        self.default_relevance_floor = CALIBRATED_FLOORS.get(
+            self.model_id, DEFAULT_RELEVANCE_FLOOR
         )
 
         # The version IS the model id, as it is for the local embedding

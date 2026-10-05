@@ -398,7 +398,12 @@ class Command(BaseCommand):
 
     @staticmethod
     def _version_without_processing(document, upload, owner):
-        """Create the version and job, but queue nothing.
+        """Create the version, but no job and nothing queued.
+
+        No ProcessingJob either. A QUEUED job with no broker message counts
+        as an active run, so the "reprocess later" this option is for was
+        refused with 409 for two hours per document, and recovery never saw
+        it (it only reclaims PROCESSING jobs). Reprocess creates the job.
 
         Deliberately duplicates the small part of
         `services.create_document_version` that is not the enqueue, rather
@@ -409,7 +414,7 @@ class Command(BaseCommand):
         """
         import hashlib
 
-        from documents.models import DocumentVersion, ProcessingJob
+        from documents.models import DocumentVersion
 
         hasher = hashlib.sha256()
         for chunk in upload.chunks():
@@ -429,5 +434,4 @@ class Command(BaseCommand):
         document.current_version = version
         document.status = Document.Status.UPLOADED
         document.save(update_fields=["current_version", "status", "updated_at"])
-        ProcessingJob.objects.create(document_version=version)
         return version

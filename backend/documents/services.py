@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from datetime import timedelta
 
 from django.conf import settings
@@ -9,14 +10,19 @@ from .models import Document, DocumentVersion, ProcessingJob
 from .processing.errors import ErrorCode
 from .tasks import process_document_task
 
+logger = logging.getLogger(__name__)
+
 # Job states that mean "a worker has this, or is about to".
 ACTIVE_JOB_STATUSES = (ProcessingJob.Status.QUEUED, ProcessingJob.Status.PROCESSING)
 
 # A PROCESSING job whose row has not moved for this long is presumed dead.
 # Set well above the Celery hard time limit plus Redis's one-hour
-# visibility timeout: under acks_late a worker killed mid-task has its
-# message redelivered after that hour, and declaring the job dead sooner
-# would race the redelivery that is about to finish it.
+# visibility timeout: when a whole WORKER dies with a task in hand, acks_late
+# leaves the message to be redelivered after that hour, and declaring the
+# job dead sooner would race the redelivery that is about to finish it. A
+# pool child killed by the hard limit or the OOM killer is NOT redelivered
+# (Celery acknowledges it as failed - see CELERY_TASK_ACKS_LATE); this
+# threshold and recover_stalled_jobs are what reclaim that job.
 DEFAULT_STALLED_JOB_MINUTES = 120
 
 
@@ -101,9 +107,49 @@ def create_document_version(
     document.current_version = version
     document.status = locked.status
 
-    transaction.on_commit(lambda: process_document_task.delay(job.id))
+    transaction.on_commit(lambda: enqueue(job.id))
 
     return version
+
+
+def enqueue(job_id: int) -> None:
+    """Hand a committed job to the broker - or record that it could not be.
+
+    Runs after the commit, so the document, version and QUEUED job already
+    exist. A broker that is down used to leave exactly that: a job QUEUED
+    with no message behind it, which counts as an active run (Reprocess
+    refused with 409) and which stalled-job recovery never reclaims, plus a
+    500 for the upload that HAD been stored. Recorded as a failed job
+    instead, it says why and can be retried from the Processing screen.
+    """
+    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
+        # Eager mode runs the pipeline INSIDE delay(); what it raises is the
+        # pipeline's own outcome, not a broker that could not be reached.
+        process_document_task.delay(job_id)
+        return
+    try:
+        process_document_task.delay(job_id)
+    except Exception as exc:
+        logger.warning(
+            "pipeline.enqueue_failed",
+            extra={"job_id": job_id, "error": type(exc).__name__},
+        )
+        job = ProcessingJob.objects.select_related("document_version__document").get(
+            pk=job_id
+        )
+        ProcessingJob.objects.filter(
+            pk=job_id, status=ProcessingJob.Status.QUEUED
+        ).update(
+            status=ProcessingJob.Status.FAILED,
+            error_code=ErrorCode.INFRASTRUCTURE_ERROR,
+            error_message=f"Could not be queued for processing: {type(exc).__name__}",
+            completed_at=timezone.now(),
+            updated_at=timezone.now(),
+        )
+        document = job.document_version.document
+        Document.objects.filter(
+            pk=document.pk, current_version=job.document_version
+        ).update(status=Document.Status.FAILED, updated_at=timezone.now())
 
 
 def reprocess_document(document: Document) -> ProcessingJob:
@@ -141,7 +187,7 @@ def reprocess_document(document: Document) -> ProcessingJob:
         job = ProcessingJob.objects.create(document_version=version)
 
     document.status = locked.status
-    transaction.on_commit(lambda: process_document_task.delay(job.id))
+    transaction.on_commit(lambda: enqueue(job.id))
 
     return job
 

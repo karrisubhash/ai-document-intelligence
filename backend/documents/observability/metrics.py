@@ -32,10 +32,11 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 # render() and backend/gunicorn.conf.py, which is where dead workers get
 # reaped so a restarted worker's counters are not double-counted forever.
 #
-# The Celery workers are a different matter and deliberately so: they are
-# separate CONTAINERS, and the right answer there is a scrape target per
-# container, which is what Prometheus expects. Their pipeline telemetry is
-# also on stdout as structured JSON regardless.
+# The Celery workers are separate CONTAINERS, so each is its own scrape
+# target, which is what Prometheus expects: the same multiprocess directory
+# per container, served by the worker's main process on :9100 (see
+# config/celery.py). Their pipeline telemetry is also on stdout as
+# structured JSON regardless.
 REGISTRY = CollectorRegistry()
 
 # Buckets in seconds, tuned for what this system actually does: sub-second

@@ -122,6 +122,24 @@ class BackupTests(TestCase):
         # descriptions of archives that no longer exist.
         self.assertEqual(len(list(self.tmp.glob("db-*.manifest.json"))), 2)
 
+    @override_settings(BACKUP_RETENTION=2)
+    def test_prune_applies_the_same_retention_to_media_archives(self):
+        """Only dumps were pruned, so every --include-media run kept another
+        full copy of the media forever."""
+        from io import StringIO
+
+        from documents.management.commands.backup import Command
+
+        for stamp in ("20260101T000000Z", "20260102T000000Z", "20260103T000000Z"):
+            (self.tmp / f"media-{stamp}.tar.gz").write_bytes(b"archive")
+
+        Command(stdout=StringIO())._prune(self.tmp)
+
+        self.assertEqual(
+            sorted(path.name for path in self.tmp.glob("media-*.tar.gz")),
+            ["media-20260102T000000Z.tar.gz", "media-20260103T000000Z.tar.gz"],
+        )
+
     @skip_without_pg_dump
     def test_media_is_archived_only_when_asked(self):
         self.run_backup()
@@ -178,6 +196,61 @@ class RestoreSafetyTests(TestCase):
         )
         self.assertTrue(Command._is_benign("Command was: SET transaction_timeout = 0;"))
         self.assertFalse(Command._is_benign("could not connect to server"))
+
+    def test_a_failed_pg_restore_over_a_live_database_is_a_failure(self):
+        """The target already has every table, so "tables exist afterwards"
+        passed even when pg_restore refused the file and changed nothing."""
+        from unittest import mock
+
+        dump = self.tmp / "db-test.dump"
+        dump.write_bytes(b"pretend archive")
+        refused = subprocess.CompletedProcess(
+            args=["pg_restore"],
+            returncode=1,
+            stdout="",
+            stderr="pg_restore: error: unsupported version (1.16) in file header\n",
+        )
+
+        with (
+            mock.patch(
+                "documents.management.commands.restore.subprocess.run",
+                return_value=refused,
+            ),
+            self.assertRaises(CommandError) as caught,
+        ):
+            call_command("restore", str(dump), yes=True, skip_checksum=True)
+
+        self.assertIn("pg_restore failed", str(caught.exception))
+        self.assertIn("unsupported version", str(caught.exception))
+
+    def test_an_unreadable_manifest_does_not_skip_the_checksum(self):
+        dump = self.tmp / "db-test.dump"
+        dump.write_bytes(b"pretend archive")
+        dump.with_suffix(".manifest.json").write_text("{ not json")
+
+        with self.assertRaises(CommandError) as caught:
+            call_command("restore", str(dump), yes=True)
+
+        self.assertIn("cannot be read", str(caught.exception))
+
+    def test_a_schema_from_newer_code_is_not_reported_as_matching(self):
+        from io import StringIO
+
+        from documents.management.commands.restore import Command
+
+        command = Command(stdout=StringIO())
+        command._report_schema_gap(
+            {
+                "migrations": {
+                    "documents": "9999_from_the_future",
+                    "accounts": "0001_initial",
+                }
+            }
+        )
+        output = command.stdout.getvalue()
+
+        self.assertIn("AHEAD of this code", output)
+        self.assertNotIn("schema matches", output)
 
 
 class ProductionConfigurationTests(TestCase):

@@ -1,7 +1,6 @@
 import logging
 import time
 
-from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction
 from django.utils import timezone
 
@@ -12,6 +11,7 @@ from documents.models import (
     DocumentContent,
     DocumentFigure,
     DocumentTable,
+    DocumentVersion,
     ExtractionResult,
     PageContent,
     ProcessingEvent,
@@ -20,7 +20,7 @@ from documents.models import (
 from documents.observability import telemetry
 
 from .context import IngestionContext, StageResult
-from .errors import ErrorCode
+from .errors import ErrorCode, ran_out_of_time
 from .figures import detector as figure_detector
 from .normalize import strip_nul
 from .scanning import DocumentInfected
@@ -73,7 +73,14 @@ ANALYSIS_STAGES = [
 ]
 
 
-def run_pipeline(processing_job_id: int) -> None:
+def run_pipeline(processing_job_id: int, *, will_retry=None) -> None:
+    """Run every stage of one job.
+
+    `will_retry(exc)` says whether a failure is about to be retried by the
+    caller (the Celery task knows its retry budget; this does not). A
+    failure that will be retried is not recorded as FAILED - see
+    _mark_retrying.
+    """
     job = ProcessingJob.objects.select_related("document_version__document").get(
         id=processing_job_id
     )
@@ -85,8 +92,8 @@ def run_pipeline(processing_job_id: int) -> None:
     # again and would re-run the whole pipeline; and a job that was
     # declared STALLED has already been replaced by a fresh one, so running
     # it would put two passes in a race to be the live one. FAILED jobs are
-    # NOT skipped in general - a retryable failure is marked FAILED and then
-    # retried through this same path.
+    # NOT skipped in general: a job recovered by an operator (or one failed
+    # before this rule existed) still runs if its message is delivered.
     if _is_terminal(job):
         logger.info(
             "pipeline.skipped_terminal_job",
@@ -124,8 +131,13 @@ def run_pipeline(processing_job_id: int) -> None:
 
             for stage, stage_fn in ANALYSIS_STAGES:
                 _run_stage(job, context, stage, stage_fn)
+
+            _publish_content(context)
     except Exception as exc:
-        _mark_failed(job, document, exc)
+        if will_retry is not None and will_retry(exc):
+            _mark_retrying(job, document, exc)
+        else:
+            _mark_failed(job, document, exc)
         raise
     else:
         _mark_completed(job, document)
@@ -194,6 +206,33 @@ def _run_stage(job, context, stage, stage_fn) -> None:
         document_id=job.document_version.document_id,
         job_id=job.id,
     )
+
+
+def _publish_content(context) -> None:
+    """Make this run's extraction pass the live one, now that it is complete.
+
+    Retrieval filters on `current_content`, so the pointer moves only once
+    the pass has its chunks and vectors. It used to move when the pages were
+    written - before classification, extraction and indexing - so during
+    every reprocess the document had a live pass with no chunks and dropped
+    out of search; and if a later stage then failed for good, it stayed out,
+    with the previous pass's chunks still in the database but filtered away.
+    Until this commits, the previous pass is what search and the content
+    endpoints use.
+    """
+    version = context.document_version
+
+    # A convenience view of the same content; the page rows are the
+    # representation everything downstream uses. strip_nul here too, not
+    # only on the page rows: a document containing a NUL byte once processed
+    # every stage and then died on this last write.
+    text = strip_nul("\n".join(page.text for page in context.pages)).strip()
+
+    DocumentVersion.objects.filter(pk=version.pk).update(
+        current_content=context.content, extracted_text=text
+    )
+    version.current_content = context.content
+    version.extracted_text = text
 
 
 def _persist_content(job, context) -> DocumentContent:
@@ -290,26 +329,7 @@ def _persist_content(job, context) -> DocumentContent:
             ]
         )
 
-        # This pass becomes the live one for the version, in the same
-        # transaction that wrote it. Retrieval filters on this pointer, so
-        # a half-written pass must never be reachable: until this line
-        # commits, the previous content is still the one search uses.
-        document_version.current_content = content
-
-        # Kept as a convenience view of the same content - the page-level
-        # rows above are the representation everything downstream uses.
-        #
-        # strip_nul here too, not only on the page rows. The first version
-        # stripped the pages and then wrote the raw text straight into this
-        # column, so a document containing a NUL byte still processed every
-        # stage successfully and then died on the very last write of the
-        # transaction - the exact failure the stripping was added to
-        # prevent, moved down by three lines. Found by a test that fed a
-        # NUL through the real pipeline rather than through the helper.
-        document_version.extracted_text = strip_nul(
-            "\n".join(page.text for page in context.pages)
-        ).strip()
-        document_version.save(update_fields=["extracted_text", "current_content"])
+        # NOT made the live pass here: see _publish_content.
 
     counts = {}
     for page in context.pages:
@@ -371,11 +391,16 @@ def _mark_started(job: ProcessingJob, document: Document) -> None:
 
 
 def _mark_completed(job: ProcessingJob, document: Document) -> None:
-    job.status = ProcessingJob.Status.COMPLETED
-    job.completed_at = timezone.now()
-    job.save(update_fields=["status", "completed_at", "updated_at"])
+    # One transaction. As two autocommit writes, a database blip between
+    # them left the job COMPLETED and the document "Processing": the retry
+    # that followed saw a terminal job and skipped it, so nothing ever
+    # corrected the document.
+    with transaction.atomic():
+        job.status = ProcessingJob.Status.COMPLETED
+        job.completed_at = timezone.now()
+        job.save(update_fields=["status", "completed_at", "updated_at"])
 
-    _set_document_status(job, document, Document.Status.COMPLETED)
+        _set_document_status(job, document, Document.Status.COMPLETED)
 
     telemetry.job_finished(
         Document.Status.COMPLETED,
@@ -383,6 +408,25 @@ def _mark_completed(job: ProcessingJob, document: Document) -> None:
         job_id=job.id,
         attempt=job.attempt,
     )
+
+
+def _mark_retrying(job: ProcessingJob, document: Document, exc: Exception) -> None:
+    """A transient failure that the task is about to retry.
+
+    Recorded as QUEUED, not FAILED. A FAILED job is not an active one, so
+    while its retry sat behind a backlog, Reprocess and the admin Retry
+    button both started a SECOND run over the same version - and when the
+    retry arrived the two raced to be the live extraction pass. QUEUED keeps
+    the run active (a second one is refused with 409), and the stalled-job
+    rule still reclaims it if the retry message is lost. The error is kept
+    so the screen can say why it is waiting.
+    """
+    job.status = ProcessingJob.Status.QUEUED
+    job.error_code = _error_code(exc)
+    job.error_message = f"Retrying after a transient failure: {exc}"
+    job.save(update_fields=["status", "error_code", "error_message", "updated_at"])
+
+    _set_document_status(job, document, Document.Status.QUEUED)
 
 
 def _mark_failed(job: ProcessingJob, document: Document, exc: Exception) -> None:
@@ -425,7 +469,7 @@ def _error_code(exc: Exception) -> str:
     # so it arrives here like any other exception. Named, because
     # UNEXPECTED_ERROR on a job that simply took too long sends whoever
     # reads it looking for a bug.
-    if isinstance(exc, SoftTimeLimitExceeded):
+    if ran_out_of_time(exc):
         return ErrorCode.TIMEOUT
     return getattr(exc, "code", ErrorCode.UNEXPECTED_ERROR)
 

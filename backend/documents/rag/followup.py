@@ -57,23 +57,20 @@ from .reranking import STOPWORDS, TERM
 # stale terms are noise that actively degrades retrieval.
 DEFAULT_HISTORY_TURNS = 2
 
-# A question with more content terms than this is treated as
-# self-contained. Measured rather than guessed: elliptical follow-ups
-# ("what about MECH?", "and for ECE?", "is that per semester?") carry one
-# or two content terms once stopwords are removed, while the shortest real
-# questions in this corpus carry four -
+# A question with no referring word (below) and at most this many content
+# terms is treated as dependent. Elliptical follow-ups ("what about MECH?",
+# "and for ECE?", "is that per semester?") carry one or two content terms
+# once stopwords are removed - but the two-term ones all open with words
+# REFERRING already catches, so the length rule only ever added ORDINARY
+# short questions. At 2, "What is the exam fee?" after a hostel-fee question
+# was rewritten to "...exam fee? hostel tech cse"; the hostel row then
+# outranked the exam-fee row and the answer quoted both.
 #
-#   "What is the minimum attendance required for the examination?"
-#       -> minimum, attendance, required, examination        = 4
-#   "What about MECH?"          -> mech                      = 1
-#
-# An earlier draft set this at 5 and classified both of those as dependent,
-# which would have appended the previous turn's vocabulary to a perfectly
-# good question and retrieved the wrong documents for it. Wrongly rewriting
-# an independent question is the more damaging error of the two, because it
-# corrupts a turn that would otherwise have worked and does not look like a
-# failure afterwards. So the bar sits just above the ellipses.
-MAX_DEPENDENT_TERMS = 2
+# An earlier draft set this at 5. Wrongly rewriting an independent question
+# is the more damaging error of the two, because it corrupts a turn that
+# would otherwise have worked and does not look like a failure afterwards.
+# So the bar is a single term ("Weekends?").
+MAX_DEPENDENT_TERMS = 1
 
 # Openings and words that refer to something already said. A question
 # containing one of these is dependent however long it is - "Does that
@@ -95,14 +92,22 @@ REFERRING = re.compile(
         |should|has|have|had|must)\s+
       (?:that|this|it|they|those|these|he|she)\b
   | \bthat\s+(?:one|policy|rule|figure|amount|document|case)\b
-  | \b(?:the\s+)?same\b
   | \bas\s+well\b                           # "...as well?" continues a turn
-  | \bthose\b | \bthese\b
-  | \bit\b | \bits\b | \bthey\b | \bthem\b | \btheir\b
-  | \bhe\b | \bshe\b | \bhis\b | \bher\b
   | ^\s*why\b(?!\s+(?:is|are|do|does)\s+\w+\s+\w+)   # bare "why?"
     """,
     re.I | re.X,
+)
+
+# Pronouns refer back only when nothing earlier in the question could be
+# their antecedent: "When is it due?" needs the conversation; "How do
+# students renew their library cards?" does not - "their" is the students.
+# Matched anywhere, the second was rewritten with the previous turn's
+# vocabulary. And "IT" in capitals is the department, not the pronoun: "the
+# budget of the IT department" referred to nothing.
+PRONOUN = re.compile(
+    r"(?-i:\b(?:[Ii]t|[Ii]ts)\b)"
+    r"|\b(?:they|them|their|those|these|he|she|his|her|(?:the\s+)?same)\b",
+    re.I,
 )
 
 
@@ -155,6 +160,13 @@ def looks_dependent(question: str) -> tuple:
 
     if REFERRING.search(stripped):
         return True, "refers to something said earlier"
+
+    # Two content words before the pronoun are taken to include its
+    # antecedent ("students renew THEIR"); one is usually just a verb or an
+    # adverb ("Can I get IT renewed?", "How long is IT valid?").
+    for match in PRONOUN.finditer(stripped):
+        if len(_content_terms(stripped[: match.start()])) < 2:
+            return True, "refers to something said earlier"
 
     terms = _content_terms(stripped)
     if len(terms) <= MAX_DEPENDENT_TERMS:

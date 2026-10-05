@@ -69,6 +69,57 @@ class DependenceDetectionTests(SimpleTestCase):
                 dependent, _ = followup.looks_dependent(question)
                 self.assertFalse(dependent, f"{question!r} should stand alone")
 
+    def test_short_questions_that_name_their_subject_stand_alone(self):
+        """Two content terms used to be enough to count as a follow-up, so
+        "What is the exam fee?" after a hostel-fee question retrieved on
+        "exam fee hostel tech cse" and quoted both rows."""
+        for question in (
+            "What is the exam fee?",
+            "What is the late fee?",
+            "How do students renew their library cards?",
+            "What is the budget of the IT department?",
+            "Do students lose their deposit if they leave early?",
+        ):
+            with self.subTest(question=question):
+                dependent, _ = followup.looks_dependent(question)
+                self.assertFalse(dependent, f"{question!r} should stand alone")
+
+    def test_a_pronoun_with_nothing_to_refer_to_is_a_follow_up(self):
+        for question in (
+            "When is it due?",
+            "How much does it cost?",
+            "Can I get it renewed?",
+            "How long is it valid for?",
+            "Weekends?",
+        ):
+            with self.subTest(question=question):
+                dependent, _ = followup.looks_dependent(question)
+                self.assertTrue(dependent, f"{question!r} should be dependent")
+
+
+class FocusedAnswerTests(SimpleTestCase):
+    def test_a_one_term_follow_up_is_matched_on_its_own_words(self):
+        """The two-matched-terms rule was applied to the WIDENED query, so a
+        sentence answering "What about weekends?" was refused for not also
+        repeating a term from the earlier turn."""
+        from documents.rag import context as ctx
+        from documents.rag.llm import ExtractiveAnswerer
+        from documents.tests_rag import chunk
+
+        text = "On weekends, students may sign back in by 11 pm at the gate office."
+        passage = ctx.Passage(
+            marker=1, chunk=chunk(1, text, title="Hostel"), text=text, relevance=1.0
+        )
+        built = ctx.BuiltContext(passages=[passage], characters=len(text))
+        built.focus = "What about weekends?"
+
+        response = ExtractiveAnswerer().answer(
+            question="What about weekends? hostel curfew time", context=built, prompt=""
+        )
+
+        self.assertFalse(response.abstained, response.text)
+        self.assertIn("11 pm", response.text)
+
 
 class ContextualizeTests(SimpleTestCase):
     HISTORY = history(

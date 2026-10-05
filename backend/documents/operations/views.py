@@ -73,6 +73,11 @@ class AuditLogView(ListAPIView):
                 if not value.isdigit():
                     raise exceptions.ValidationError({name: ["Must be an id."]})
                 queryset = queryset.filter(**{field: int(value)})
+        if params.get("document") and department is not None:
+            # Filtering by another department's document id would answer
+            # "does it exist?" through whether any row comes back, which the
+            # serializer withholding the id cannot prevent.
+            queryset = queryset.filter(document__department=department)
 
         since = _boundary(params, "since", end_of_day=False)
         until = _boundary(params, "until", end_of_day=True)

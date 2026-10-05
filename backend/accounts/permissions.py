@@ -63,12 +63,22 @@ def assignable_roles(actor) -> frozenset:
 
 
 def can_administer(actor, target) -> bool:
-    """Whether `actor` may edit `target`'s account at all."""
+    """Whether `actor` may edit `target`'s account at all.
+
+    Nobody may take over an account holding more power than they have. The
+    API never GRANTS is_superuser or is_staff, but resetting the password of
+    an account that already has them grants the same thing: a role-only
+    system administrator could set a superuser's password and sign in to
+    Django's admin as one, and a department administrator could do the same
+    with a staff account carrying Django model permissions.
+    """
+    if target.is_superuser and not actor.is_superuser:
+        return False
     if is_system_admin(actor):
         return True
     if not is_department_admin(actor):
         return False
-    if target.is_superuser:
+    if target.is_staff:
         return False
     profile = get_profile(target)
     return (

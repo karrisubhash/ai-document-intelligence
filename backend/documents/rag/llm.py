@@ -25,6 +25,25 @@ from .reranking import _terms
 
 ABSTENTION_TEXT = "I couldn't find enough information in the provided documents."
 
+
+def _normalise_reply(text: str) -> str:
+    text = (text or "").replace("’", "'").replace("‘", "'")
+    text = text.strip().strip("\"'“”").strip().rstrip(".").strip()
+    return " ".join(text.split()).lower()
+
+
+def is_abstention(text: str) -> bool:
+    """Whether a reply is the abstention sentence, as a model writes it.
+
+    Compared exactly, a reply that reproduced the quotes the system prompt
+    shows the sentence in, or wrote "couldn’t" with a typographic
+    apostrophe, did not count: carrying no markers, it then failed
+    grounding and was reported as UNGROUNDED - the hallucination signal -
+    instead of an honest abstention.
+    """
+    return _normalise_reply(text) == _normalise_reply(ABSTENTION_TEXT)
+
+
 # Sentence splitting good enough for institutional prose. Deliberately not a
 # full NLP sentence tokenizer - the failure mode of splitting "Clause 4.2"
 # badly is a slightly long quote, which is harmless here.
@@ -116,6 +135,19 @@ def _unwrap(text: str) -> list:
     return lines
 
 
+# A bracketed number in the DOCUMENT ("as per Government Order [12]",
+# "clause [2]") is the citation syntax this system uses for its own markers.
+# Quoted verbatim, it was read back as a citation: [12] failed grounding as
+# a passage that was never in the context, and [2] silently attached an
+# unrelated passage. Parentheses keep the reference readable and the figure
+# checkable, and leave square brackets to the markers alone.
+DOCUMENT_BRACKET = re.compile(r"\[(\d{1,3})\]")
+
+
+def _neutralise_brackets(text: str) -> str:
+    return DOCUMENT_BRACKET.sub(r"(\1)", text)
+
+
 class ExtractiveAnswerer:
     """Answers by quoting the passages, never by generating new text."""
 
@@ -191,9 +223,16 @@ class ExtractiveAnswerer:
                 matched = query_terms & sentence_terms
                 coverage = len(matched) / len(query_terms)
 
+                # The minimum-matched-terms rule applies to the question
+                # actually being answered: on a follow-up, the user's own
+                # words. Applied to the widened query, "What about weekends?"
+                # (one term of its own) refused "On weekends, students may
+                # sign back in by 11 pm" for not ALSO repeating a term from
+                # the earlier turn.
+                asked = focus_terms or query_terms
                 if (
-                    len(query_terms) >= self.MIN_MATCHED_TERMS
-                    and len(matched) < self.MIN_MATCHED_TERMS
+                    len(asked) >= self.MIN_MATCHED_TERMS
+                    and len(asked & sentence_terms) < self.MIN_MATCHED_TERMS
                 ):
                     continue
 
@@ -247,7 +286,7 @@ class ExtractiveAnswerer:
         if not data:
             best = scored[0][1]
             if len(best.text) <= self.TABLE_QUOTE_LIMIT:
-                text = f"{best.text.strip()} [{best.marker}]"
+                text = f"{_neutralise_brackets(best.text.strip())} [{best.marker}]"
                 return LLMResponse(
                     text=text,
                     abstained=False,
@@ -342,7 +381,7 @@ class ExtractiveAnswerer:
         sentence. Those labels are document content too: the detector
         verified every cell against the page before the table was stored.
         """
-        quoted = f"{sentence.strip()} [{passage.marker}]"
+        quoted = f"{_neutralise_brackets(sentence.strip())} [{passage.marker}]"
 
         header = getattr(passage, "table_header", ())
         if not header:

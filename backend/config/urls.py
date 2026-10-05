@@ -8,7 +8,13 @@ from documents.observability.views import metrics_view
 from documents.operations.views import DashboardView
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    # NOT "admin/": the application's own administration screens live at
+    # /admin/users, /admin/audit, ... and the edge sends a path to Django or
+    # to the app by prefix. With Django's admin mounted at /admin/, those
+    # screens worked only through in-app navigation - a reload, a bookmark or
+    # a new tab got Django's admin login instead. This is the operators'
+    # back door for superusers; it does not need the obvious URL.
+    path("django-admin/", admin.site.urls),
     path("api/documents/", include("documents.api.urls")),
     path("api/search/", include("documents.search.urls")),
     path("api/chat/", include("documents.chat.urls")),

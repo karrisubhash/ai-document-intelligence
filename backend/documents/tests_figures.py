@@ -261,6 +261,32 @@ class FigureAbstentionTests(TestCase):
         self.assertIn("page 1", hints[0])
         self.assertIn("only text found inside them was extracted", hints[0])
 
+    def test_an_ungrounded_answer_keeps_its_reason(self):
+        """UNGROUNDED is the hallucination signal; an image in a retrieved
+        document is not a reason to relabel it."""
+        from documents.rag import engine
+
+        answer = engine._abstain(
+            "q",
+            engine.Abstention.UNGROUNDED,
+            0.0,
+            retrieved_document_ids=[self.document.id],
+        )
+
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+        self.assertTrue(any("Enrolment Chart" in note for note in answer.notes))
+
+    def test_an_unanswered_question_is_still_pointed_at_the_figure(self):
+        from documents.rag import engine
+
+        answer = engine._abstain(
+            "q",
+            engine.Abstention.NO_RELEVANT_PASSAGES,
+            0.0,
+            retrieved_document_ids=[self.document.id],
+        )
+        self.assertEqual(answer.abstention_reason, engine.Abstention.MAYBE_IN_A_FIGURE)
+
     def test_no_documents_means_no_hint_to_give(self):
         from documents.rag import engine
 

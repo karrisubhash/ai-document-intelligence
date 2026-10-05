@@ -278,3 +278,40 @@ class ChatPlanningTests(TestCase):
         message = Message.objects.filter(role=Message.Role.ASSISTANT).latest("id")
         self.assertTrue(message.metadata["planned"])
         self.assertEqual(len(message.metadata["plan"]), 4)
+
+    def follow_up(self, first, question):
+        opening = self.ask(first)
+        return self.client.post(
+            reverse("chat"),
+            {"question": question, "conversation_id": opening.data["conversation_id"]},
+            format="json",
+        )
+
+    def test_a_multi_part_follow_up_is_planned_on_the_users_own_words(self):
+        """A widened follow-up is "<words> <borrowed terms>". Planned on that
+        string, the borrowed terms split off at the "? " into a part that
+        re-asked the previous turn; and with the whole question as every
+        step's focus, each step's correct sentence was refused."""
+        response = self.follow_up(
+            "What is the attendance minimum?",
+            "What about the hostel curfew, the late return fine and the bus pass cost?",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        steps = response.data["plan"]["steps"]
+        self.assertEqual(len(steps), 3, [step["question"] for step in steps])
+        self.assertNotIn("attendance", " ".join(step["question"] for step in steps))
+        for expected in ("10 pm", "5 rupees", "12000"):
+            self.assertIn(expected, response.data["answer"])
+        self.assertEqual(response.data["plan"]["unanswered"], [])
+
+    def test_a_two_part_follow_up_stays_one_question(self):
+        """Two parts are not planned - measured to work as one retrieval. The
+        borrowed terms used to turn them into three."""
+        response = self.follow_up(
+            "What is the attendance minimum?",
+            "What about the hostel curfew and the late return fine?",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["plan"]["planned"])

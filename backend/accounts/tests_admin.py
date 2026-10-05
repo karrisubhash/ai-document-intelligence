@@ -239,3 +239,96 @@ class DepartmentRegistryTests(AdminTestCase):
             .data
         ]
         self.assertEqual(names, ["Physics"])
+
+
+class PrivilegeBoundaryTests(AdminTestCase):
+    """Nobody takes over an account holding more power than they have."""
+
+    def set_password(self, actor, target):
+        return self.as_user(actor).post(
+            reverse("admin-user-set-password", args=[target.id]),
+            {"password": STRONG + "-new"},
+            format="json",
+        )
+
+    def test_a_role_only_system_admin_cannot_reset_a_superusers_password(self):
+        superuser = User.objects.create_superuser("owner", password=STRONG)
+
+        response = self.set_password(self.system_admin, superuser)
+
+        self.assertNotEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        superuser.refresh_from_db()
+        self.assertTrue(superuser.check_password(STRONG))
+
+    def test_a_department_admin_cannot_reset_a_staff_account(self):
+        staff = make_user("phy_staff", Role.STAFF, "Physics")
+        staff.is_staff = True
+        staff.save(update_fields=["is_staff"])
+
+        response = self.set_password(self.physics_admin, staff)
+
+        self.assertNotEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        staff.refresh_from_db()
+        self.assertTrue(staff.check_password(STRONG))
+
+    def test_a_superuser_may_still_manage_another_superuser(self):
+        actor = User.objects.create_superuser("owner", password=STRONG)
+        target = User.objects.create_superuser("owner2", password=STRONG)
+
+        self.assertEqual(
+            self.set_password(actor, target).status_code, status.HTTP_204_NO_CONTENT
+        )
+
+
+class DepartmentDisclosureTests(AdminTestCase):
+    def test_a_department_admin_sees_only_their_own_departments_counts(self):
+        rows = {
+            row["name"]: row
+            for row in self.as_user(self.physics_admin)
+            .get(reverse("admin-department-list"))
+            .data["results"]
+        }
+
+        self.assertIsNotNone(rows["Physics"]["member_count"])
+        self.assertIsNone(rows["Chemistry"]["member_count"])
+        self.assertIsNone(rows["Chemistry"]["document_count"])
+
+    def test_a_system_admin_sees_every_count(self):
+        rows = (
+            self.as_user(self.system_admin)
+            .get(reverse("admin-department-list"))
+            .data["results"]
+        )
+        self.assertTrue(all(row["member_count"] is not None for row in rows))
+
+    def test_an_inactive_department_takes_no_new_members(self):
+        Department.objects.filter(name="Physics").update(is_active=False)
+
+        response = self.as_user(self.physics_admin).post(
+            reverse("admin-user-list"),
+            {"username": "late_joiner", "password": STRONG, "role": Role.STUDENT},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(username="late_joiner").exists())
+
+    def test_a_rename_onto_an_unregistered_spelling_in_use_is_refused(self):
+        """ "physics" records are a separate tenant; renaming Physics onto
+        that spelling would merge them."""
+        make_user("lowercase_member", Role.STUDENT, "physics")
+        physics = Department.objects.get(name="Physics")
+
+        response = self.as_user(self.system_admin).patch(
+            reverse("admin-department-detail", args=[physics.id]),
+            {"name": "physics"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        physics.refresh_from_db()
+        self.assertEqual(physics.name, "Physics")
+        self.assertEqual(
+            UserProfile.objects.filter(department="Physics").count(),
+            2,  # phy_admin and phy_student, untouched
+        )

@@ -10,6 +10,7 @@ from documents.api import discovery
 from documents.audit import record_event
 from documents.models import AuditLog, Document, DocumentChunk, ProcessingJob
 from documents.permissions import DocumentAccessPolicy
+from documents.processing.errors import ErrorCode
 from documents.services import (
     DocumentArchived,
     ProcessingInProgress,
@@ -425,6 +426,27 @@ class DocumentViewSet(viewsets.ModelViewSet):
             return Response(
                 {"detail": "Document has no such version to download."},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # A file the scanner flagged is quarantined: the pipeline refused to
+        # parse it, and handing the original bytes to every department member
+        # (students included) as an attachment undid that decision. Judged
+        # per VERSION - an earlier infected upload stays infected after a
+        # clean one replaces it. A system administrator may still retrieve
+        # it, for review.
+        infected = (
+            ProcessingJob.objects.filter(document_version=version)
+            .order_by("-created_at")
+            .values_list("error_code", flat=True)
+            .first()
+        ) == ErrorCode.MALWARE_DETECTED
+        if infected and not authorization.is_system_admin(request.user):
+            return Response(
+                {
+                    "detail": "This file was quarantined by the security scan and "
+                    "cannot be downloaded. An administrator can review it."
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         return FileResponse(

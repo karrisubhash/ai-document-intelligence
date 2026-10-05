@@ -96,8 +96,27 @@ class Command(BaseCommand):
             for app, code in sorted(leaves.items())
             if recorded.get(app, "") < code
         }
+        # The other direction: a dump taken by NEWER code. migrate cannot
+        # undo that, and this code may fail against columns it does not
+        # know - which "schema matches" used to hide.
+        ahead = {
+            app: (dump, leaves.get(app, "(none)"))
+            for app, dump in sorted(recorded.items())
+            if dump > leaves.get(app, "")
+        }
+        if ahead:
+            self.stdout.write(
+                self.style.WARNING(
+                    "The restored schema is AHEAD of this code (the backup was "
+                    "taken by a newer release). Deploy that release, or restore "
+                    "an older backup:"
+                )
+            )
+            for app, (dump, code) in ahead.items():
+                self.stdout.write(f"    {app}: restored at {dump}, code at {code}")
         if not behind:
-            self.stdout.write("  schema matches this codebase's migrations")
+            if not ahead:
+                self.stdout.write("  schema matches this codebase's migrations")
             return
         self.stdout.write(
             self.style.WARNING("The code is ahead of the restored schema. Run migrate:")
@@ -112,10 +131,19 @@ class Command(BaseCommand):
             return None
         try:
             return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Present but unreadable is not the same as absent. Treated as
+            # absent, it silently skipped the checksum - the one check that
+            # says this archive is the one the manifest describes.
+            return {"unreadable": True}
 
     def _check_checksum(self, dump_path: Path, manifest: dict):
+        if manifest.get("unreadable"):
+            raise CommandError(
+                "the manifest beside this archive cannot be read, so its "
+                "checksum cannot be verified. Use --skip-checksum only if you "
+                "know why."
+            )
         expected = manifest.get("sha256")
         if not expected:
             return
@@ -176,6 +204,19 @@ class Command(BaseCommand):
         notices = [line for line in result.stderr.splitlines() if line.strip()]
         benign = [line for line in notices if self._is_benign(line)]
         unexplained = [line for line in notices if not self._is_benign(line)]
+
+        # A non-zero exit WITH a message nobody has explained is a failure.
+        # Checking only "are there tables afterwards" could not tell: a
+        # restore over a live database - the case --clean exists for - finds
+        # every table already there, so a pg_restore that refused the file
+        # outright ("unsupported version in file header") and changed
+        # nothing was reported as a successful restore.
+        if result.returncode != 0 and unexplained:
+            raise CommandError(
+                f"pg_restore failed (exit {result.returncode}); the database may "
+                f"be unchanged or partly restored. Output was:\n  "
+                + "\n  ".join(unexplained[:10])
+            )
 
         tables = self._count_tables(database)
 

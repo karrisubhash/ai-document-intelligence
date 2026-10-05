@@ -1,7 +1,7 @@
 import os
 
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_init, worker_process_init, worker_process_shutdown
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
@@ -70,3 +70,39 @@ def warm_models(**kwargs):
             name="model-warmup",
             daemon=True,
         ).start()
+
+
+@worker_init.connect
+def serve_worker_metrics(**kwargs):
+    """Expose this worker container's metrics for Prometheus to scrape.
+
+    The pipeline's metrics - stage counts and durations, job outcomes,
+    failures, pages, indexed documents - are recorded where the pipeline
+    runs: in the worker's child processes. Prometheus scraped only the
+    backend, so every one of them read zero forever and the alerts built on
+    them could never fire. Each child writes its samples to the container's
+    PROMETHEUS_MULTIPROC_DIR (a tmpfs, so it starts empty with the
+    container); this main process serves them aggregated, the way gunicorn's
+    /metrics does for its workers.
+    """
+    port = os.environ.get("CELERY_METRICS_PORT", "")
+    directory = os.environ.get("PROMETHEUS_MULTIPROC_DIR", "")
+    if not port or not directory:
+        return
+
+    from prometheus_client import CollectorRegistry, multiprocess, start_http_server
+
+    registry = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry, path=directory)
+    start_http_server(int(port), registry=registry)
+
+
+@worker_process_shutdown.connect
+def reap_worker_metrics(pid=None, **kwargs):
+    """Drop a recycled child's live gauges, as gunicorn's child_exit does."""
+    if not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        return
+
+    from prometheus_client import multiprocess
+
+    multiprocess.mark_process_dead(pid or os.getpid())

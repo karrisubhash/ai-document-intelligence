@@ -92,13 +92,30 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
     question = (question or "").strip()
 
     max_steps = getattr(settings, "RAG_MAX_PLAN_STEPS", planner.MAX_STEPS)
-    parts = planner.plan(question, max_steps=max_steps)
+
+    # A widened follow-up arrives as "<the user's words> <borrowed terms>",
+    # with the user's words as `focus`. Planning runs on the user's words
+    # only. Planned on the widened string, "...the library fine? minimum
+    # attendance required" split at the "? " into an extra part that
+    # re-asked the PREVIOUS question - a step, a retrieval and an answer (or
+    # an "unanswered" note) for something nobody asked this turn.
+    focus = (kwargs.get("focus") or "").strip()
+    parts = planner.plan(focus or question, max_steps=max_steps)
 
     if len(parts) <= 1:
         # Not compound, or planning is switched off. This is the ordinary
         # path and must behave exactly as it did before this module
         # existed - one retrieval, one answer, same object shape.
         return _single(user, question, started, **kwargs)
+
+    # Each part then retrieves with the borrowed terms behind it, exactly
+    # as a single follow-up does, and is answered against ITS OWN words.
+    # With the whole multi-part question as every step's focus, a sentence
+    # had to cover a third of the terms of all the parts together, so a
+    # correct answer to one part ("The hostel curfew is 10 pm") was refused.
+    widening = (
+        question[len(focus) :].strip() if focus and question.startswith(focus) else ""
+    )
 
     steps = []
     composed = []
@@ -118,7 +135,11 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
     timings = {}
 
     for part in parts:
-        result = ask(user, part, **kwargs)
+        if focus:
+            query = f"{part} {widening}".strip()
+            result = ask(user, query, **{**kwargs, "focus": part})
+        else:
+            result = ask(user, part, **kwargs)
         if answerer is None and result.model_name:
             # Which answerer produced these answers, taken from the first
             # step that reached one. Reported rather than left blank so a

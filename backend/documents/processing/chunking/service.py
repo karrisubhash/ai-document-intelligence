@@ -1,8 +1,9 @@
 import functools
+from contextlib import contextmanager
 
 from django.conf import settings
 from django.contrib.postgres.search import SearchVector
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils.module_loading import import_string
 
 from documents.models import DocumentChunk, DocumentChunkEmbedding, DocumentContent
@@ -91,7 +92,43 @@ def load_tables(content: DocumentContent) -> dict:
     return tables
 
 
+# Namespace for this module's advisory locks, so they cannot collide with
+# another use of pg_advisory_lock on the same database.
+LOCK_NAMESPACE = 7301
+
+
+@contextmanager
+def content_lock(content_id: int):
+    """Serialize chunking of ONE extraction pass across every process.
+
+    The pipeline's INDEXING stage and a `reindex` task can chunk the same
+    DocumentContent at the same time (`reindex --stale-only` picks exactly
+    the passes the pipeline has just written and not yet indexed). Each
+    transaction deleted the chunks it could see - none of the other's
+    uncommitted rows - and inserted its own, so both sets survived and every
+    passage was retrieved twice; or one side deleted chunks the other was
+    about to embed, and that job failed. A row lock would not be enough:
+    embedding happens after the chunk transaction commits. A session-level
+    advisory lock spans both, needs no open transaction, and is released by
+    Postgres itself if the worker dies.
+    """
+    key = int(content_id) & 0x7FFFFFFF
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_lock(%s, %s)", [LOCK_NAMESPACE, key])
+    try:
+        yield
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_unlock(%s, %s)", [LOCK_NAMESPACE, key])
+
+
 def chunk_content(content_id: int, *, processing_job=None) -> dict:
+    """Chunk, embed and index one DocumentContent - one process at a time."""
+    with content_lock(content_id):
+        return _chunk_content(content_id, processing_job=processing_job)
+
+
+def _chunk_content(content_id: int, *, processing_job=None) -> dict:
     """Chunk one DocumentContent, embed the chunks, and index them.
 
     Returns a summary. Embedding is optional: when no provider is

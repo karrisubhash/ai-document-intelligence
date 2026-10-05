@@ -88,8 +88,19 @@ class SessionLoginTests(TestCase):
         unknown = AuditLog.objects.get(
             user__isnull=True, action=AuditLog.Action.LOGIN_FAILED
         )
-        self.assertEqual(unknown.metadata["attempted_username"], "mallory")
+        # Not the name itself: the username box is where people type their
+        # password by mistake. A keyed fingerprint still groups a run of
+        # attempts against one name.
+        self.assertNotIn("mallory", str(unknown.metadata))
         self.assertNotIn("password", str(unknown.metadata).lower())
+        self.login(username=" Mallory ")
+        fingerprints = set(
+            AuditLog.objects.filter(
+                user__isnull=True, action=AuditLog.Action.LOGIN_FAILED
+            ).values_list("metadata__attempted_username_fingerprint", flat=True)
+        )
+        self.assertEqual(len(fingerprints), 1)
+        self.assertEqual(len(next(iter(fingerprints))), 16)
 
     def test_failed_logins_are_counted_where_monitoring_looks(self):
         """A 400 is not a 401, so the middleware alone never counted these."""
@@ -166,6 +177,35 @@ class ExpiringTokenTests(TestCase):
             created=timezone.now() - timedelta(hours=13)
         )
         self.assertNotEqual(self.issue(), old)
+
+    def test_signing_in_again_never_returns_a_token_about_to_expire(self):
+        old = self.issue()
+        Token.objects.filter(key=old).update(
+            created=timezone.now() - timedelta(hours=11, minutes=59)
+        )
+        self.assertNotEqual(self.issue(), old)
+
+    def test_signing_in_again_keeps_a_young_token(self):
+        old = self.issue()
+        self.assertEqual(self.issue(), old)
+
+    def test_a_lost_creation_race_returns_the_winning_token(self):
+        """Token.user is unique; two simultaneous sign-ins used to 500."""
+        from unittest import mock
+
+        from django.db import IntegrityError
+
+        from accounts import authentication
+
+        winner = Token.objects.create(user=self.user)
+        with (
+            mock.patch.object(authentication.Token.objects, "filter") as filtered,
+            mock.patch.object(
+                authentication.Token.objects, "create", side_effect=IntegrityError
+            ),
+        ):
+            filtered.return_value.first.return_value = None
+            self.assertEqual(authentication.issue_token(self.user), winner)
 
     def test_logout_revokes_the_token(self):
         key = self.issue()
@@ -307,3 +347,104 @@ class ThrottlingBehindAProxyTests(TestCase):
         from rest_framework.settings import api_settings
 
         self.assertIsNotNone(api_settings.NUM_PROXIES)
+
+
+class CredentialChangesOutsideTheApiTests(TestCase):
+    """Password checks and resets that never pass through the API's views."""
+
+    PASSWORD = "Old-pass-phrase-1"
+
+    def setUp(self):
+        self.user = User.objects.create_user("outside", password=self.PASSWORD)
+        Token.objects.create(user=self.user)
+
+    def test_a_password_set_anywhere_revokes_api_tokens(self):
+        """Django's admin form and `changepassword` both end in
+        set_password() + save(); neither revoked the tokens."""
+        self.user.set_password("New-pass-phrase-2")
+        self.user.save()
+
+        self.assertFalse(Token.objects.filter(user=self.user).exists())
+
+    def test_saving_anything_else_keeps_the_tokens(self):
+        self.user.last_login = timezone.now()
+        self.user.save(update_fields=["last_login"])
+
+        self.assertTrue(Token.objects.filter(user=self.user).exists())
+
+    def test_a_hash_upgrade_on_login_is_not_a_password_change(self):
+        """Django re-hashes a password with an outdated hasher when it is
+        next checked. That is not a change, and must not log scripts out."""
+        from django.contrib.auth.hashers import make_password
+        from django.test import override_settings
+
+        hashers = [
+            "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+            "django.contrib.auth.hashers.MD5PasswordHasher",
+        ]
+        with override_settings(PASSWORD_HASHERS=hashers):
+            User.objects.filter(pk=self.user.pk).update(
+                password=make_password(self.PASSWORD, hasher="md5")
+            )
+            self.user.refresh_from_db()
+            self.assertTrue(self.user.check_password(self.PASSWORD))
+            self.user.refresh_from_db()
+            self.assertTrue(
+                self.user.password.startswith("pbkdf2_"), "upgrade happened"
+            )
+
+        self.assertTrue(Token.objects.filter(user=self.user).exists())
+
+    def test_a_failed_django_admin_login_is_audited_and_counted(self):
+        from documents.observability import metrics
+
+        before = metrics.auth_failures._value.get()
+        self.client.post(
+            reverse("admin:login"), {"username": "outside", "password": "wrong"}
+        )
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                user=self.user,
+                action=AuditLog.Action.LOGIN_FAILED,
+                metadata__method="django-admin",
+            ).exists()
+        )
+        self.assertEqual(metrics.auth_failures._value.get(), before + 1)
+
+    def test_an_api_failure_is_recorded_once(self):
+        cache.clear()
+        APIClient().post(
+            reverse("api-token-auth"),
+            {"username": "outside", "password": "wrong"},
+            format="json",
+        )
+
+        self.assertEqual(
+            AuditLog.objects.filter(action=AuditLog.Action.LOGIN_FAILED).count(), 1
+        )
+
+
+class DeactivationEndsSessionsTests(TestCase):
+    def test_a_deactivated_account_stays_signed_out_after_reactivation(self):
+        """An inactive account's session was refused, not ended - so
+        switching the account back on revived it."""
+        cache.clear()
+        user = User.objects.create_user("seasonal", password=PASSWORD)
+        client = APIClient(enforce_csrf_checks=False)
+        self.assertEqual(
+            client.post(
+                reverse("auth-login"), {"username": "seasonal", "password": PASSWORD}
+            ).status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(client.get(reverse("me")).status_code, status.HTTP_200_OK)
+
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+        user.is_active = True
+        user.save(update_fields=["is_active"])
+
+        self.assertEqual(
+            client.get(reverse("me")).status_code, status.HTTP_401_UNAUTHORIZED
+        )

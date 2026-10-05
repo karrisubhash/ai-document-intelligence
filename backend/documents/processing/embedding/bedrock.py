@@ -13,11 +13,13 @@ the meaning does.
 search result can still say which kind of similarity produced it - the same
 honesty the baseline had, now with the other answer.
 
-WIDTH. Titan V2 emits 1024 dimensions natively, and `EMBEDDING_DIMENSIONS`
-was widened from 384 to match. It can also emit 512 or 256 (99% and 97% of
-the retrieval accuracy, at half and a quarter of the storage); either is a
-defensible choice and either needs the column, this provider and a full
-re-index changed together, never separately.
+WIDTH. Titan V2 emits 1024 dimensions natively and can also emit 512 or 256
+(99% and 97% of the retrieval accuracy, at half and a quarter of the
+storage) - and NOTHING ELSE. The vector column is 384 wide (bge-small's
+width, `EMBEDDING_DIMENSIONS` in models/chunk.py), which Titan cannot
+produce, so this provider refuses to load until the column is migrated to
+one of Titan's widths. Column, provider and a full re-index change
+together, never separately.
 
 ONE TEXT PER CALL. Titan's InvokeModel body takes `inputText`, singular -
 there is no batch form. The caller hands us up to `EMBED_BATCH_SIZE` texts
@@ -70,6 +72,10 @@ MAX_INPUT_CHARS = 50_000
 DEFAULT_CONCURRENCY = 8
 
 
+# The only output widths Titan Text Embeddings V2 accepts.
+TITAN_DIMENSIONS = frozenset({256, 512, 1024})
+
+
 class BedrockEmbeddingUnavailable(RuntimeError):
     """boto3 is missing, or there is nothing to authenticate with."""
 
@@ -96,6 +102,15 @@ class BedrockTitanEmbeddingProvider:
         self.dimensions = int(
             getattr(settings, "EMBEDDING_DIMENSIONS", 0) or EMBEDDING_DIMENSIONS
         )
+        if self.dimensions not in TITAN_DIMENSIONS:
+            # Refused here rather than by Titan at the first document - a
+            # ValidationException per chunk that surfaced as an
+            # "unavailable" provider and a retried job.
+            raise BedrockEmbeddingUnavailable(
+                f"Titan Text Embeddings V2 produces {sorted(TITAN_DIMENSIONS)} "
+                f"dimensions; the vector column is {self.dimensions}. Migrate the "
+                f"column (and re-index) before switching to Bedrock embeddings."
+            )
 
         self.concurrency = int(
             getattr(settings, "EMBEDDING_BEDROCK_CONCURRENCY", 0) or DEFAULT_CONCURRENCY

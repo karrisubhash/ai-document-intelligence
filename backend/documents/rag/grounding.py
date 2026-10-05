@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 
-from .llm import ABSTENTION_TEXT
+from .llm import is_abstention
 from .reranking import _terms
 
 MARKER = re.compile(r"\[(\d{1,3})\]")
@@ -154,6 +154,24 @@ def _normalize_fact(token: str) -> str:
     return token.rstrip("./-:")
 
 
+# A figure with a unit or currency stuck to it ("rs1200", "10km", "75%"),
+# and a whole-hour time ("10:00"). The fact tokenizer keeps attached letters
+# and the minutes, so "Rs1200" in a passage and "Rs 1200" or "1,200 rupees"
+# in the answer compared as "rs1200" against "1200", and "10:00 p.m."
+# against "10 PM" as "10:00" against "10" - correct answers rejected for
+# formatting, which _normalize_fact exists to prevent. Identifiers with
+# internal structure ("reg/2024/117") match neither pattern and still have
+# to match exactly.
+UNIT_FIGURE = re.compile(r"[a-z]*?(\d+(?:\.\d+)?)[a-z%]*")
+WHOLE_HOUR = re.compile(r"(\d{1,2}):00")
+
+
+def _numeric_core(fact: str):
+    """The bare number in a figure, or None for anything more structured."""
+    match = UNIT_FIGURE.fullmatch(fact) or WHOLE_HOUR.fullmatch(fact)
+    return match.group(1) if match else None
+
+
 def _facts(text: str) -> set:
     """Fact tokens in a piece of text, normalized."""
     return {
@@ -177,14 +195,27 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
     """Check an answer against the context it was supposed to use."""
     report = GroundingReport()
 
-    if abstained or answer_text.strip() == ABSTENTION_TEXT:
+    if abstained or is_abstention(answer_text):
         # An abstention makes no claims, so there is nothing to ground. It
         # is the correct output when evidence is missing, not a failure.
         report.grounded = True
         return report
 
     available = set(context.by_marker())
-    cited = extract_markers(answer_text)
+    # A bracketed number that is not one of the context's markers but IS
+    # printed in a retrieved passage ("Government Order [12]") is the
+    # document's own reference, quoted - not a citation of passage 12.
+    # Counting it made a verbatim, correct quote fail as ungrounded.
+    quoted = {
+        int(match.group(1))
+        for passage in context.passages
+        for match in MARKER.finditer(passage.text)
+    }
+    cited = tuple(
+        marker
+        for marker in extract_markers(answer_text)
+        if marker in available or marker not in quoted
+    )
     report.cited_markers = cited
 
     invalid = tuple(marker for marker in cited if marker not in available)
@@ -214,9 +245,12 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
     # --- Check 3: every stated fact is in a cited passage ----------------
     supported_facts = _facts(supporting)
     stated_facts = _answer_facts(answer_text)
+    supported_cores = {_numeric_core(fact) for fact in supported_facts} - {None}
 
     unsupported_facts = sorted(
-        fact for fact in stated_facts if fact not in supported_facts
+        fact
+        for fact in stated_facts
+        if fact not in supported_facts and _numeric_core(fact) not in supported_cores
     )
     report.unsupported_facts = tuple(unsupported_facts)
 

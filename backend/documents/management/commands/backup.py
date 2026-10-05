@@ -223,6 +223,14 @@ class Command(BaseCommand):
             stale.unlink(missing_ok=True)
             self.stdout.write(f"  pruned {stale.name}")
 
+        # Media archives under the same retention. Only the dumps were
+        # pruned, so every --include-media run kept another full copy of
+        # MEDIA_ROOT forever - the largest files the backup writes.
+        media = sorted(destination.glob("media-*.tar.gz"), reverse=True)
+        for stale in media[keep:]:
+            stale.unlink(missing_ok=True)
+            self.stdout.write(f"  pruned {stale.name}")
+
         if len(dumps) > keep:
             self.stdout.write(
                 self.style.SUCCESS(f"Kept the {keep} most recent backup(s)")

@@ -129,6 +129,11 @@ class RagAnswer:
     # duration_ms says a question was slow; this says which part was.
     timings: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
+    # How this answer was ACTUALLY produced, for anything that aggregates
+    # answers (evaluation): the configured reranker or answerer was not the
+    # one that ran.
+    reranker_degraded: bool = False
+    answerer_fell_back: bool = False
 
 
 @functools.cache
@@ -245,7 +250,12 @@ def _abstain(question, reason, started, **extra) -> RagAnswer:
         hints = _figure_hints(extra.get("retrieved_document_ids") or [])
         if hints:
             notes += hints
-            reason = Abstention.MAYBE_IN_A_FIGURE
+            # UNGROUNDED means an answer WAS produced and failed verification
+            # - the hallucination signal telemetry counts by reason. A logo
+            # or letterhead in a retrieved document is not a reason to
+            # relabel that; the hint stays as a note.
+            if reason != Abstention.UNGROUNDED:
+                reason = Abstention.MAYBE_IN_A_FIGURE
 
     answer = RagAnswer(
         question=question,
@@ -348,6 +358,7 @@ def ask(
             semantic_retrieval=retrieval.semantic,
             notes=[*notes, f"best relevance {best:.3f} below floor {floor:.3f}"],
             timings=timings,
+            reranker_degraded=degraded,
         )
 
     # --- Build context ----------------------------------------------------
@@ -408,6 +419,8 @@ def ask(
         "generative": response.generative,
         "semantic_retrieval": retrieval.semantic,
         "reranker_name": reranker.name,
+        "reranker_degraded": degraded,
+        "answerer_fell_back": bool(fell_back_from),
         "timings": timings,
     }
 

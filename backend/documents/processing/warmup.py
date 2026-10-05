@@ -38,6 +38,7 @@ def warm(*, reason: str = "startup", components=ALL) -> dict:
     model was missing would turn a slower search into no search at all.
     """
     from documents.processing.chunking import service as chunking_service
+    from documents.processing.chunking.exceptions import EmbeddingProviderNotConfigured
     from documents.rag import engine
 
     loaded = {}
@@ -55,18 +56,34 @@ def warm(*, reason: str = "startup", components=ALL) -> dict:
             return
         loaded[component] = round(time.monotonic() - started, 2)
 
-    try:
-        provider = chunking_service.get_provider()
-    except Exception:
-        provider = None
-    if "embedding" in components and provider is not None:
+    # Looking a provider up is guarded as well as loading it. import_string
+    # on a mistyped path raises here, and gunicorn treats an exception in
+    # post_worker_init as a boot failure and HALTS THE SERVER - a typo in
+    # RAG_RERANKER took uploads, listing, search and sign-in down with chat.
+    # A lookup that fails is reported like a load that fails, so
+    # `warm_models` says so instead of "no models are configured".
+    def lookup(component, get):
+        try:
+            return get()
+        except EmbeddingProviderNotConfigured:
+            return None  # nothing configured is not a failure
+        except Exception as exc:
+            loaded[component] = type(exc).__name__
+            logger.warning(
+                "model.warmup_failed",
+                extra={"component": component, "error": type(exc).__name__},
+            )
+            return None
+
+    if "embedding" in components:
+        provider = lookup("embedding", chunking_service.get_provider)
         if hasattr(provider, "_get_model"):
             attempt("embedding", provider._get_model)
 
     # Web processes rerank; Celery workers never do, and warming a 1 GB
     # cross-encoder in a worker that only indexes is memory spent on nothing.
     if "reranker" in components:
-        reranker = engine.get_reranker()
+        reranker = lookup("reranker", engine.get_reranker)
         if hasattr(reranker, "_get_model"):
             attempt("reranker", reranker._get_model)
 

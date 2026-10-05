@@ -1,0 +1,383 @@
+{
+  "name": "institutional-calibration",
+  "version": "c1",
+  "description": "DEVELOPMENT set for choosing thresholds - never a reported score. Synthetic questions over the same nine synthetic documents as institutional-v2, each checked by one reviewer that the answer is stated in the claimed document (or, for abstentions, in none of the nine) and by another that it does not repeat a v2 test case's fact from the same angle. Thresholds are chosen HERE by a rule written down before any result was seen, and v2 is then run once at the chosen value, so the test set never informs the choice. Every corpus document is loaded, including any that no case names, because distractors are part of what the floor has to cope with.",
+  "corpus": [
+    "@academic-regulations",
+    "@examination-policy",
+    "@fee-structure",
+    "@grievance-procedure",
+    "@hostel-regulations",
+    "@it-acceptable-use",
+    "@library-rules",
+    "@placement-policy",
+    "@scholarship-rules"
+  ],
+  "cases": [
+    {
+      "question": "Up to which day is a student's attendance computed?",
+      "expected_answer": "the last instructional day of the semester",
+      "relevant_documents": [
+        "@academic-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (academic-regulations). DIRECT. Clause 4.2, second sentence. This fact is not used by any test question; the test set asks only about the 75 percent figure in this clause. The source sentence wraps across two lines in the file; the quote joins it with a single space."
+    },
+    {
+      "question": "Do I have to pay anything to get my marked answer script checked again?",
+      "expected_answer": "Yes. A revaluation application must be accompanied by the prescribed fee (the amount is not stated).",
+      "relevant_documents": [
+        "@academic-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (academic-regulations). PARAPHRASE. The question avoids 'revaluation', 'application', 'fee', 'submitted' and 'results'. It says 'pay' and 'checked again'. It asks about the fee, which is a different fact from the 15-day deadline that the test set asks about in this clause. The document never gives the amount, so an answer that quotes a figure (for example the 2500 exam fee from fee-structure) is unsupported and should fail grounding. A correct answer says that a prescribed fee applies."
+    },
+    {
+      "question": "What supporting document must accompany an application for condonation?",
+      "expected_answer": "a certificate from a registered practitioner (condonation is on medical grounds)",
+      "relevant_documents": [
+        "@academic-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "NEAR-MISS (academic-regulations). NEAR-MISS. 'Condonation' and 'application' also appear in scholarship-rules.txt with a different meaning. Clause 3.5 says that 'Applications for all financial aid close on 30 September' and that 'there is no provision for condonation of this date'. Clause 2.4 says that examination condonation 'does not restore a scholarship'. If retrieval lands on scholarship-rules, the system will likely answer that there is no provision for condonation, or that it does not apply. That is a confident, cited, wrong answer. The fact tested here (the practitioner's certificate) is not asked by any test question. The test set's condonation questions check the 65 percent bound and the 65 to 75 percent band."
+    },
+    {
+      "question": "What must a candidate carry into the examination hall?",
+      "expected_answer": "the institute identity card",
+      "relevant_documents": [
+        "@examination-policy"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (examination-policy). DIRECT, Clause 14.2, in the clause's own words (candidate, carry, examination hall). The nearest test question is 'What happens if I forget my ID card on the day of a test?'. That one names the card and asks what happens (entry refused). This one asks what item is required, so the answer is different. Only examination-policy mentions an identity card, so no other document can be confused with it. A system that answers 'entry is refused' has answered the test question, not this one."
+    },
+    {
+      "question": "I was caught reading from crib notes during my first paper this term. Can I still sit my other papers this term?",
+      "expected_answer": "No. The candidate is debarred from all examinations of that semester.",
+      "relevant_documents": [
+        "@examination-policy"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (examination-policy). PARAPHRASE and BOUND, Clause 12.1. 'Crib notes' stands for unauthorised material, 'paper' for examination and 'term' for semester. Grep confirms none of term, paper, sit, caught, crib or reading appears anywhere in the corpus, and the question shares no content word with examination-policy. Its only word matches are in unrelated clauses: 'first' (grievance 2.1 'First stage') and 'other' (placement 5.1). It uses the same sentence as the test's cheating question but asks something different: whether the penalty reaches the student's remaining papers. An answer that limits the penalty to the one paper, or says 'debarred' without the scope, is wrong. The line-wrap note on the direct malpractice question applies to this quote too."
+    },
+    {
+      "question": "If I can't make the resit, is there another one a few months later?",
+      "expected_answer": "No. The supplementary examination is conducted once per academic year, in July.",
+      "relevant_documents": [
+        "@examination-policy"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (examination-policy). PARAPHRASE and BOUND, Clause 12.5. 'Resit' is the reader's word for the supplementary examination. The question avoids supplementary, examination, conducted, academic year and July, and shares no content word with examination-policy. Its only word matches are in the wrong documents: 'later' (hostel 3.1 curfew) and 'another' (IT 1.1 and 2.6). 'Resit' may also pull semantically toward revaluation in academic-regulations 6.4. The nearest test question, the direct 'When is the supplementary examination held?', asks when. This one asks whether a second sitting exists, and the 'No' has to be inferred from 'once per academic year, in July'. Caveat: the document never says who sits the supplementary examination, so the answerer has to link resit to supplementary itself, just as the test's 'Tuesday night' question requires knowing Tuesday is a weekday."
+    },
+    {
+      "question": "How late can a candidate arrive and still be allowed into the examination hall?",
+      "expect_abstention": true,
+      "notes": "ABSTAIN (examination-policy). NOT ANSWERED IN THE CORPUS (the topic is covered, this detail is not). I read all nine documents and grepped them for late, arriv, minute, start, commence, begin, hour, am/pm times, admit, entry, enter, seat, hall and permit. examination-policy (12.1 malpractice, 12.5 supplementary, 14.2 identity) controls entry to the hall only through the identity card. It gives no reporting time, grace period or late-entry rule. academic-regulations (attendance, condonation, grading, revaluation), fee-structure, library-rules, hostel-regulations, scholarship-rules, grievance-procedure, it-acceptable-use and placement-policy say nothing about exam timing or arriving late. Retrieval will find related passages, and several are tempting wrong answers. 'Entry is refused without it' (14.2) is the wrong condition. 'Late' appears in fee-structure (late payment surcharge), library 9.4 (late return fine) and scholarship 3.5 (late applications not considered). 'Later' appears in hostel 3.1 (returning later needs the warden's written permission). 'Admitted' appears in grievance 2.1 (a late grievance is admitted only with the Dean's written reasons). Answering by analogy, e.g. 'with written permission', is the failure. The question does not overlap any test abstention, including the duplicate identity card fee."
+    },
+    {
+      "question": "Under the 2024-25 fee structure, what tuition is listed for B.Tech MECH?",
+      "expected_answer": "78000",
+      "relevant_documents": [
+        "@fee-structure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (fee-structure). DIRECT, TABLE. Every content word comes from the document: fee structure, 2024-25, tuition, B.Tech MECH. The test asks for the MECH hostel fee (58000) and for CSE and ECE tuition, never this cell. 78000 appears nowhere else in the table: the wrong column gives 2500 or 58000, and confusing MECH with M.Tech gives 95000. The evidence runs verbatim (tab-separated, LF) from the header row to the MECH row, so the column label is included."
+    },
+    {
+      "question": "What does the teaching itself cost on the master's degree in computer science?",
+      "expected_answer": "95000",
+      "relevant_documents": [
+        "@fee-structure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (fee-structure). PARAPHRASE, TABLE (the test has no fee-structure paraphrase case). Avoids 'tuition', 'fee', 'programme', 'M.Tech' and 'CSE'; none of the question's content words appears in fee-structure (checked by grep). Lexically it points elsewhere: 'computer' occurs only in the IT policy and 'degree' only in the placement policy. The reader must map 'teaching itself' to the Tuition column and 'master's in computer science' to M.Tech CSE, the only postgraduate row. 95000 appears only once in the table; the B.Tech CSE row gives 85000. The test never asks this cell. Evidence is the whole table, verbatim."
+    },
+    {
+      "question": "How much does it cost to live on campus as an undergraduate in electronics and communication?",
+      "expected_answer": "60000",
+      "relevant_documents": [
+        "@fee-structure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (fee-structure). PARAPHRASE, TABLE. Avoids 'hostel', 'fee', 'B.Tech' and 'ECE'. None of its content words appears in fee-structure, and three point elsewhere lexically: 'campus' (placement policy), 'undergraduate' (library rules), 'electronics' (the IT policy's 'electronic mail' after stemming). The reader must map 'live on campus' to the Hostel column and 'undergraduate in electronics and communication' to B.Tech ECE. 60000 is shared with the B.Tech CSE and M.Tech CSE rows, so this tests retrieval and the relevance floor more than row reading; the wrong-row answer is MECH's 58000. The test never asks this cell. Evidence runs verbatim from the header through the ECE row."
+    },
+    {
+      "question": "What examination fee applies to B.Tech ECE students?",
+      "expected_answer": "2500",
+      "relevant_documents": [
+        "@fee-structure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "NEAR-MISS (fee-structure). NEAR-MISS. The exact phrase 'examination fee' occurs in only one corpus document, and it is not this one: scholarship-rules Clause 3.2 says means-tested aid 'covers the examination fee in full'. Fee-structure labels the column 'Exam Fee' and never uses the words 'examination' or 'student'. Scholarship-rules uses both, and 'examination' also appears throughout the examination policy and academic regulations. So on the question's key term the wrong document is the better lexical match. Retrieving scholarship-rules gives a confident, cited, wrong answer ('covered in full', i.e. nothing to pay). Only the B.Tech ECE and programme tokens anchor the right document. This is a different cell from the test's M.Tech CSE exam fee (3000), and the answer differs. Evidence runs verbatim from the header through the ECE row."
+    },
+    {
+      "question": "Is there a tuition discount for a student whose sibling also studies at the institute?",
+      "expect_abstention": true,
+      "notes": "ABSTAIN (fee-structure). ABSTAIN, next to the fee table. All nine documents were read: academic-regulations, examination-policy, fee-structure, grievance-procedure, hostel-regulations, it-acceptable-use, library-rules, placement-policy and scholarship-rules. None mentions siblings, discounts, concessions or waivers. A corpus grep for sibling|brother|sister|twin|child|relative|discount|concession|waiver found nothing. Fee-structure lists only undiscounted figures, a deadline and a surcharge. The only tuition reduction anywhere is the merit scholarship: 50 percent of tuition for an aggregate of 80 percent or above (scholarship-rules Clause 2.1), which depends on marks. Means-tested aid (Clause 3.2) depends on 'annual family income', the likely semantic lure for 'sibling', and covers the exam fee and hostel charges, not tuition. The expected wrong answers are therefore '50 percent' or 'means-tested aid', neither of which depends on siblings. Not close to any test abstain case (TA stipend, duplicate identity card fee, v1 visitor parking charge)."
+    },
+    {
+      "question": "Within how many working days does the office appoint a committee for a grievance?",
+      "expected_answer": "10 working days",
+      "relevant_documents": [
+        "@grievance-procedure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (grievance-procedure). DIRECT (Clause 2.3 Acknowledgement - the one clause of this document the v2 test set never asks about). Two figures in one sentence: 3 working days is the acknowledgement, 10 is the committee appointment, so an answer that grabs the first number it sees is wrong. 'Working day' also appears in fee-structure ('the last working day of July') as a calendar deadline rather than a count of days."
+    },
+    {
+      "question": "If I'm unhappy with the outcome of my complaint, who can I take it to next?",
+      "expected_answer": "the Director",
+      "relevant_documents": [
+        "@grievance-procedure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (grievance-procedure). PARAPHRASE (Clause 4.2 Appeal). Shares no content word with the clause or with any other corpus document: avoids 'appeal', 'grievance', 'committee', 'decision', 'lodged' and 'Director'; 'complaint', 'outcome' and 'take it to next' are the reader's words. Asks WHO hears an appeal; the v2 test only asks HOW LONG (15 days) from this sentence, so this is a different fact."
+    },
+    {
+      "question": "What happens if the people looking into my complaint take longer than they're allowed?",
+      "expected_answer": "The committee records the reason and informs the complainant of a revised date.",
+      "relevant_documents": [
+        "@grievance-procedure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (grievance-procedure). PARAPHRASE (Clause 3.4 Decision). Shares no content word with the clause: avoids 'committee', 'decision', 'issues', '45 days', 'appointment', 'records', 'reason', 'informs' and 'revised date'. The answer sentence is elliptical - 'Where it cannot' only means 'cannot issue its decision within 45 days' when read with the sentence before it, which is why both are quoted - so a chunker or answerer that separates them loses the condition. The office's 3- and 10-working-day limits carry no stated consequence, so only the committee reading is answerable. The v2 test asks for the 45-day limit itself; this asks what happens when it is missed."
+    },
+    {
+      "question": "Will a grievance submitted late still be considered?",
+      "expected_answer": "Only where the Dean records reasons in writing.",
+      "relevant_documents": [
+        "@grievance-procedure"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "NEAR-MISS (grievance-procedure). NEAR-MISS (Clause 2.1 First stage). 'Late' and 'considered' are the scholarship rules' words: Clause 3.5 says 'Late applications are not considered, and there is no provision for condonation of this date', so retrieving that document gives a confident, well-cited, wrong flat 'No'. 'Late' also appears in fee-structure (late payment surcharge of 500 rupees per week) and library-rules (late return fine), and 'submitted' in the academic regulations' revaluation clause (15 days), all with different rules; hostel-regulations makes a lateness exception depend on 'written permission from the warden', the wrong official. The grievance procedure never uses the word 'late' (it says 'submitted after that period') and its answer is a qualified yes. The first sentence is quoted only as the antecedent of 'that period'; the v2 test asks for the 30-day window itself, this asks what happens after it has passed."
+    },
+    {
+      "question": "How many members sit on the committee that hears a grievance?",
+      "expect_abstention": true,
+      "notes": "ABSTAIN (grievance-procedure). ABSTAIN, UNANSWERABLE BY OMISSION. Checked all nine documents. grievance-procedure says the office 'appoints a committee' (Clause 2.3) and describes what it does (hears the complainant in person, 3.1; issues its decision within 45 days of appointment, 3.4; its decision is appealable to the Director, 4.2) but never states its size, membership or chair. 'Committee' and 'member' occur in no other document, and none describes the composition of any panel: academic-regulations (attendance, condonation, grading, revaluation), examination-policy (malpractice, supplementary examination, identity card), fee-structure (fee table, late surcharge), hostel-regulations (curfew, visitors, vacating), library-rules (borrowing, overdue fines, reference section), scholarship-rules (merit eligibility, attendance condition, means-tested aid, application window, simultaneous awards), it-acceptable-use (accounts, passwords, network quota, prohibited use 'pending an inquiry' with no inquiry body described, laboratory computers, printing), placement-policy (registration, eligibility, one-offer rule, internship credit, deferral, records - the Training and Placement Cell has no stated membership). The trap: the only 'member' in the whole corpus is the 'one member of the institute community' who may accompany the complainant (3.1), so answering 'one' is the failure."
+    },
+    {
+      "question": "What must a resident returning after the hostel curfew have?",
+      "expected_answer": "Written permission from the warden.",
+      "relevant_documents": [
+        "@hostel-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (hostel-regulations). Clause 3.1, second sentence. This fact is not in benchmark-v2: the test set's curfew questions ask only for the times (Tuesday 10 pm, Saturday 11 pm). Uses the document's words: resident, returning, curfew, written permission. In the file the sentence wraps after 'Residents'; the line break is collapsed to one space here."
+    },
+    {
+      "question": "My train back from a family wedding on Friday night doesn't get in until about 1 am. Is there anything I need to arrange beforehand, and with whom?",
+      "expected_answer": "Yes. Written permission from the warden is needed to return after curfew.",
+      "relevant_documents": [
+        "@hostel-regulations"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (hostel-regulations). Clause 3.1. Leaves out every key term in the clause: hostel, curfew, resident, returning, later, written, permission, warden. Describes a situation instead of naming the rule. Friday is a weekday, so the curfew is 10 pm, and 1 am is past either stated curfew. Naming Friday avoids Sunday, which the document does not cover. Not tested in benchmark-v2. In the file the second sentence wraps after 'Residents'; the line break is collapsed to one space here."
+    },
+    {
+      "question": "What is the penalty for a resident who comes back after curfew without the warden's written permission?",
+      "expect_abstention": true,
+      "notes": "ABSTAIN (hostel-regulations). I checked all nine documents and none states a penalty. hostel-regulations: Clause 3.1 says written permission from the warden is needed to return late, but gives no consequence for returning without it. Clauses 3.6 and 8.2 cover visitors and vacating. library-rules: has a 'late return fine' of 5 rupees per day per book, and suspension once fines exceed 500 rupees, but only for books. That is the main trap. fee-structure: the 500 rupees per week late surcharge applies to fee payment only. examination-policy: debarment applies to exam malpractice only. it-acceptable-use: suspension of access is for prohibited IT use, and 2 rupees per page is for printing. grievance-procedure: covers hostel accommodation grievances but sets no penalties. academic-regulations, scholarship-rules and placement-policy say nothing about hostel discipline. Retrieval will strongly find the curfew clause, which looks related but has no answer. Different from the test set's hostel abstain question (maximum students per room)."
+    },
+    {
+      "question": "How often must a password be changed?",
+      "expected_answer": "every 180 days",
+      "relevant_documents": [
+        "@it-acceptable-use"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (it-acceptable-use). DIRECT, Clause 1.4. Uses the clause's own words 'password' and 'changed'. The test set asks about the 12-character length in this same sentence. This question asks for the other figure next to it, so an answer that grabs the first number it sees ('12') is wrong. '180 days' does not appear in any other corpus document."
+    },
+    {
+      "question": "What is the charge for each additional page beyond the printing allowance?",
+      "expected_answer": "2 rupees per page",
+      "relevant_documents": [
+        "@it-acceptable-use"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (it-acceptable-use). DIRECT, Clause 4.1. The test set asks for the allowance itself (200 pages). This asks for the overage price in the next sentence, so it is a different fact. Per-unit rupee charges also appear in library-rules (5 rupees per day per book) and fee-structure (500 rupees per week), so the answer must come from this clause. The line break in the source between 'are' and 'charged' is shown here as a single space."
+    },
+    {
+      "question": "How much can I download and stream on my student internet connection in a month before I hit the limit?",
+      "expected_answer": "50 gigabytes",
+      "relevant_documents": [
+        "@it-acceptable-use"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (it-acceptable-use). PARAPHRASE, Clause 2.2. Avoids 'account', 'data', 'allowance', 'gigabytes', 'monthly' and 'quota'. 'Download and stream', 'internet connection' and 'limit' are the reader's words. The test set asks what happens AFTER the allowance is exceeded (reduced speed). This asks how big the allowance is, which the test set never asks."
+    },
+    {
+      "question": "Could I earn some money on the side by hosting websites for paying clients over the institute's internet connection?",
+      "expected_answer": "No. Operating a commercial service is prohibited.",
+      "relevant_documents": [
+        "@it-acceptable-use"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (it-acceptable-use). PARAPHRASE and BOUND, Clause 2.6. Describes a scenario ('earn some money', 'hosting websites for paying clients') and avoids 'operating', 'commercial', 'service', 'network' and 'prohibited'. The answer is a negative stated in the document. The test set has no question about Clause 2.6."
+    },
+    {
+      "question": "When are access privileges suspended?",
+      "expected_answer": "Immediately on detection of a prohibited use (operating a commercial service, running a network scanner, or attempting to access another user's files), pending an inquiry.",
+      "relevant_documents": [
+        "@it-acceptable-use"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "NEAR-MISS (it-acceptable-use). NEAR-MISS, Clause 2.6. 'Privileges ... suspended' also appears in library-rules Clause 9.4: 'Borrowing privileges are suspended once the accumulated fine exceeds 500 rupees.' Retrieving the library rules gives a confident, cited, wrong answer ('once the fine exceeds 500 rupees'). This is the mirror of the test set's library case ('At what point do I lose borrowing privileges?'), whose notes name the IT policy as the distractor. That case asks for the library answer; this one asks for the IT answer, which no test question covers. The word 'access' is the only cue pointing to the IT policy."
+    },
+    {
+      "question": "How many failed password attempts are allowed before a student account is locked?",
+      "expect_abstention": true,
+      "notes": "ABSTAIN (it-acceptable-use). UNANSWERABLE BY OMISSION. I checked all nine documents: academic-regulations, examination-policy, fee-structure, grievance-procedure, hostel-regulations, it-acceptable-use, library-rules, placement-policy and scholarship-rules. Only it-acceptable-use covers accounts and passwords. Clause 1.1 covers one account per student and the ban on sharing credentials. Clause 1.4 covers password length (12 characters), changing it every 180 days, and never asking for a password by email. No clause mentions account lockout or a limit on failed logins. The only near-match is 'attempting to access another user's files' in Clause 2.6, which means something else. None of the other eight documents mentions accounts, passwords or logins. Retrieval will land on Clause 1.4, whose numbers (12, 180) invite a made-up answer."
+    },
+    {
+      "question": "I'm doing a master's and already have five titles checked out. Can I take one more?",
+      "expected_answer": "Yes. A postgraduate student may borrow up to six.",
+      "relevant_documents": [
+        "@library-rules"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (library-rules). PARAPHRASE, scenario. Avoids every key term of clause 9.1: master's for postgraduate, titles for books, checked out/take for borrow, and no 'six' or 'at one time'. The count is given as 'five', a word that appears nowhere in the corpus. The answer needs two small steps: a master's student is postgraduate, and one more makes six, which is within 'up to six'. The test's 'How many books may a postgraduate student borrow?' asks for the figure; this asks for a permission at a given count. It catches an answer that applies the clause's first figure (four, undergraduate) and says no. 'Allowed' was avoided because it shares a stem with the IT policy's 'allowance'. Both sentences are quoted because the postgraduate sentence leaves out 'books at one time'."
+    },
+    {
+      "question": "How many days can a student keep a borrowed book before it becomes overdue?",
+      "expect_abstention": true,
+      "notes": "ABSTAIN (library-rules). ABSTAIN BY OMISSION. Checked all nine documents. library-rules gives borrowing limits (9.1), the fine rate and suspension threshold (9.4) and the reference-section rule (9.7). It never states a loan period, due date or return deadline. None of the other eight mention library loans: academic-regulations (attendance, condonation, grading, 15-day revaluation window), fee-structure (fees due by the last working day of July, 500 rupees per week surcharge), hostel-regulations (curfew, visitors, vacating), examination-policy (malpractice, July supplementary, identity card), scholarship-rules (merit, 85 percent attendance, means-tested aid, 30 September close, simultaneous awards), grievance-procedure (30, 3, 10, 45 and 15 day periods, all grievance steps), it-acceptable-use (180-day password change, data quota, lab files deleted each semester, printing) and placement-policy (15 August registration, 8-week internship). A search for loan/due/keep/renew/return across all nine found only the late return fine and the hostel's 'returning later' curfew rule. Trap: the overdue clause retrieves strongly and says 'per day', and the corpus is full of day counts (15, 30, 45, 180), so an answerer that generalises will give a confident number. It differs from the test's library abstain case (faculty borrowing limit). It shares 'keep a book' with the answerable test case on the cost of keeping a book past its due date (word overlap 0.17), but asks for the one thing that clause leaves out."
+    },
+    {
+      "question": "What must support a summer internship for it to be credited towards the degree?",
+      "expected_answer": "A report countersigned by the host organisation.",
+      "relevant_documents": [
+        "@placement-policy"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (placement-policy). DIRECT. Clause 3.2. The test set asks about the internship's minimum length (8 weeks); this asks about the other condition in the same sentence, the countersigned report, which no test question covers. If an answer only gives '8 weeks', it has grabbed the wrong half of the clause. Line wraps in the source are collapsed to single spaces in the quote."
+    },
+    {
+      "question": "From what point does the one-offer rule apply to a student?",
+      "expected_answer": "From the moment the offer is accepted in writing, not from the date of joining.",
+      "relevant_documents": [
+        "@placement-policy"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (placement-policy). DIRECT. Clause 2.5, second sentence. The test set asks WHETHER an accepting student is withdrawn ('Once I accept an offer, can I keep interviewing...'); this asks WHEN the rule takes effect, which the test never checks. If the answer says 'from the date of joining', it has reversed the clause."
+    },
+    {
+      "question": "I've said yes to a company, but I want to push my start date back by a year without checking with the college's jobs office first. What would happen to me?",
+      "expected_answer": "You would be barred from campus placement for the remainder of the academic year.",
+      "relevant_documents": [
+        "@placement-policy"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (placement-policy). PARAPHRASE. Clause 4.4, which the test set does not touch at all. The question avoids 'defer', 'accepted offer', 'consent', 'barred', 'campus placement', 'cell' and 'academic year'. Watch for an answer that confuses this with the one-offer rule in clause 2.5 (withdrawal from placement activity). That is a different consequence with a different trigger."
+    },
+    {
+      "question": "Whose written permission do I need before deferring a job offer I have already accepted?",
+      "expected_answer": "The placement cell's (the Training and Placement Cell's written consent); without it the student is barred from campus placement for the rest of the academic year.",
+      "relevant_documents": [
+        "@placement-policy"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "NEAR-MISS (placement-policy). NEAR-MISS. The exact phrase 'written permission' appears only in hostel-regulations.txt Clause 3.1 ('Residents returning later must have written permission from the warden'). Placement-policy says 'written consent'. A lexical retriever matching on 'written permission' will land on the hostel curfew and answer 'the warden', which is well formed and wrong. grievance-procedure.txt Clause 2.1 ('the Dean records reasons in writing') is a weaker second distractor that would give 'the Dean of Students'. This is the same clause as the previous paraphrase but a different fact: who gives consent, not what the penalty is."
+    },
+    {
+      "question": "What share of hostel charges does means-tested aid cover?",
+      "expected_answer": "up to 40 percent of hostel charges",
+      "relevant_documents": [
+        "@scholarship-rules"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (scholarship-rules). DIRECT, Clause 3.2. Uses the clause's own terms ('means-tested aid', 'hostel charges'). The test set asks only for the income threshold in this clause (300000), never for what the aid covers, so this is a different fact. The same sentence also says 'examination fee in full', so an answer that gives the first coverage item it sees is wrong. Line wraps in the file are collapsed to single spaces in the quote."
+    },
+    {
+      "question": "If a scholarship holder does not meet the attendance condition, for how long is the scholarship withdrawn?",
+      "expected_answer": "for the remainder of the year",
+      "relevant_documents": [
+        "@scholarship-rules"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "DIRECT (scholarship-rules). DIRECT, Clause 2.4. The test set asks for this clause's threshold (85 percent); this asks how long the withdrawal lasts, which no test case asks. 'Remainder of' also appears in hostel-regulations 8.2 ('remainder of that semester') and placement-policy 4.4 ('remainder of the academic year'), so an answer copied from either of those is wrong. Line wraps collapsed to single spaces."
+    },
+    {
+      "question": "My parents don't earn much. Is there any help so I don't have to pay to sit my exams?",
+      "expected_answer": "Yes. Means-tested aid (for annual family income below 300000 rupees) covers the examination fee in full.",
+      "relevant_documents": [
+        "@scholarship-rules"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "PARAPHRASE (scholarship-rules). PARAPHRASE, Clause 3.2. Avoids every key term in the clause: 'income', 'means-tested', 'aid', 'examination fee', 'scholarship', 'rupees'. 'Earn' stands for income and 'pay to sit my exams' stands for the examination fee. Different from the test case 'What income level qualifies for means-tested aid?': that one asks for the threshold, this one asks what is covered. Retrieving the fee structure (exam fee 2500/3000) gives an amount owed instead of the waiver. Line wraps collapsed to single spaces."
+    },
+    {
+      "question": "How much of a student's tuition does the merit scholarship cover?",
+      "expected_answer": "50 percent of tuition for the following year",
+      "relevant_documents": [
+        "@scholarship-rules"
+      ],
+      "relevant_pages": [
+        1
+      ],
+      "notes": "NEAR-MISS (scholarship-rules). NEAR-MISS, Clause 2.1. 'Tuition' is also a column header in fee-structure.txt, with rupee figures per programme (85000, 82000, 78000, 95000). A system that retrieves the fee table gives a rupee amount such as 85000 instead of a 50 percent share. The scholarship document also gives a different percentage for a different benefit (up to 40 percent of hostel charges, Clause 3.2), which a sloppy answer could swap in. The test set asks only for this clause's eligibility aggregate (80 percent), not for what the award covers."
+    },
+    {
+      "question": "What proof of family income must be submitted with an application for means-tested aid?",
+      "expect_abstention": true,
+      "notes": "ABSTAIN (scholarship-rules). UNANSWERABLE BY OMISSION. I checked all nine documents: academic-regulations, examination-policy, fee-structure, grievance-procedure, hostel-regulations, it-acceptable-use, library-rules, placement-policy, scholarship-rules. Scholarship-rules 3.2 gives only the income threshold (below 300000 rupees) and what the aid covers, and 3.5 gives only the closing date (30 September). No document says what documentation or proof is needed for any financial aid application. The corpus does name other supporting evidence: a certificate from a registered practitioner for medical condonation (academic-regulations 4.3), the identity card (examination-policy 14.2), written permission (hostel 3.1), a written grievance (grievance 2.1), and an internship report countersigned by the host organisation (placement 3.2). None of these concerns income. A system that generalises from the medical-certificate clause would give a confident wrong answer. This differs from all eight test abstain cases."
+    }
+  ]
+}

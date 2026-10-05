@@ -86,6 +86,12 @@ class DocumentAccessPolicy(permissions.BasePermission):
         )
 
         action = self._audit_action(view, request)
+        if action is None and not allowed:
+            # A refusal is recorded whatever the action. Unmapped actions
+            # (the processing timeline, polled every few seconds and holding
+            # no document content) are not audited when ALLOWED, but an
+            # outsider's attempt on one must not vanish from the trail.
+            action = AuditLog.Action.DOCUMENT_VIEW
         if action:
             metadata = {}
             # Which version was fetched is part of what happened. Only a

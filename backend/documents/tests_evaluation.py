@@ -414,14 +414,44 @@ class EvaluationRunTests(TestCase):
         self.assertIn("recall_at_k", result.scores)
         self.assertTrue(result.cited_documents)
 
-    def test_a_user_without_access_scores_zero_rather_than_bypassing(self):
-        """Evaluation runs through the permission filter, like a real
-        question does."""
-        outsider = make_user("eval_outsider", department="Mechanical")
-        run = runner.run_dataset(self.dataset(), outsider)
+    def test_a_department_dataset_is_run_only_inside_its_department(self):
+        """Stored answers are shown to the dataset's department but produced
+        with the run user's access. Run by another department's member, they
+        could quote that department's documents; run by a system
+        administrator, anyone's."""
+        from accounts.models import UserProfile
 
-        self.assertEqual(run.metrics["retrieval"]["mrr"], 0.0)
-        self.assertEqual(run.metrics["generation"]["answered"], 0)
+        outsider = make_user("eval_outsider", department="Mechanical")
+        root = make_user("eval_root", UserProfile.Role.SYSTEM_ADMIN, "")
+        dataset = self.dataset()
+        for user in (outsider, root):
+            with self.subTest(user=user.username):
+                with self.assertRaises(runner.EvaluationScopeError):
+                    runner.run_dataset(dataset, user)
+        self.assertFalse(EvaluationRun.objects.exists())
+
+    def test_a_run_that_ran_degraded_says_so(self):
+        """Captured from settings before any case ran, the configuration
+        named the configured reranker even when every case fell back."""
+        from unittest import mock
+
+        real_ask = runner.rag.ask
+
+        def degraded_ask(user, question, **kwargs):
+            answer = real_ask(user, question, **kwargs)
+            answer.reranker_degraded = True
+            return answer
+
+        with mock.patch.object(runner.rag, "ask", side_effect=degraded_ask):
+            run = runner.run_dataset(self.dataset(), self.user)
+
+        self.assertEqual(run.metrics["system"]["degraded_reranks"], 3)
+        self.assertEqual(run.configuration["degraded"]["reranker"], 3)
+
+    def test_a_healthy_run_records_no_degradation(self):
+        run = runner.run_dataset(self.dataset(), self.user)
+        self.assertEqual(run.metrics["system"]["degraded_reranks"], 0)
+        self.assertNotIn("degraded", run.configuration)
 
     def test_system_metrics_record_latency(self):
         run = runner.run_dataset(self.dataset(), self.user)

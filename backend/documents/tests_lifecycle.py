@@ -158,6 +158,204 @@ class StaleJobStatusTests(TestCase):
         )
         self.assertEqual(failed.metadata["error_code"], ErrorCode.TIMEOUT)
 
+    def test_a_timeout_wrapped_by_the_code_it_interrupted_is_still_a_timeout(self):
+        """The embedder wraps every failure as a retryable provider error and
+        the OCR extractors as OCR_FAILED. A timeout raised inside them was
+        retried three more times, or recorded as an OCR failure."""
+        from documents.processing.errors import StageError, TransientError
+
+        def embedder_interrupted(context):
+            try:
+                raise SoftTimeLimitExceeded()
+            except Exception as exc:
+                raise TransientError("embedding provider unavailable") from exc
+
+        def ocr_interrupted(context):
+            try:
+                raise SoftTimeLimitExceeded()
+            except Exception as exc:
+                raise StageError("OCR failed", code=ErrorCode.OCR_FAILED) from exc
+
+        for interrupted in (embedder_interrupted, ocr_interrupted):
+            with self.subTest(stage=interrupted.__name__):
+                document = make_document(self.owner, title=interrupted.__name__)
+                job = job_for(document)
+                stages = [
+                    (
+                        stage,
+                        interrupted
+                        if stage == ProcessingJob.Stage.TEXT_EXTRACTION
+                        else fn,
+                    )
+                    for stage, fn in pipeline.CONTENT_STAGES
+                ]
+                with mock.patch.object(pipeline, "CONTENT_STAGES", stages):
+                    with self.assertRaises(StageError) as raised:
+                        run_pipeline(job.id)
+
+                job.refresh_from_db()
+                self.assertEqual(job.error_code, ErrorCode.TIMEOUT)
+                self.assertFalse(is_retryable(raised.exception))
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class EnqueueFailureTests(TestCase):
+    """A job the broker never received must not pose as an active run."""
+
+    def test_a_job_that_could_not_be_queued_is_failed_and_replaceable(self):
+        owner = make_user("enqueue_owner")
+        document = Document.objects.create(
+            title="Broker down", owner=owner, department=owner.profile.department
+        )
+        with (
+            mock.patch.object(
+                services.process_document_task,
+                "delay",
+                side_effect=ConnectionError("redis"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            services.create_document_version(
+                document, make_txt_file(), uploaded_by=owner
+            )
+
+        document.refresh_from_db()
+        job = job_for(document)
+        self.assertEqual(job.status, ProcessingJob.Status.FAILED)
+        self.assertEqual(job.error_code, ErrorCode.INFRASTRUCTURE_ERROR)
+        self.assertEqual(document.status, Document.Status.FAILED)
+
+        # And Reprocess is not refused as "already queued".
+        with mock.patch.object(services.process_document_task, "delay"):
+            services.reprocess_document(document)
+
+
+class PendingRetryTests(TestCase):
+    """A transient failure waiting on its Celery retry is still an active run.
+
+    It used to be recorded as FAILED first. FAILED is not active, so while the
+    retry waited behind a backlog, Reprocess and the admin Retry button both
+    started a second run over the same version, and the two raced to be the
+    live extraction pass when the retry arrived.
+    """
+
+    def setUp(self):
+        self.owner = make_user("retry_owner")
+        self.document = make_document(self.owner)
+        self.job = job_for(self.document)
+
+    def fail_transiently(self, will_retry):
+        from documents.processing.errors import TransientError
+
+        def unavailable(context):
+            raise TransientError("scanner unavailable")
+
+        stages = [
+            (stage, unavailable if stage == ProcessingJob.Stage.TEXT_EXTRACTION else fn)
+            for stage, fn in pipeline.CONTENT_STAGES
+        ]
+        with mock.patch.object(pipeline, "CONTENT_STAGES", stages):
+            with self.assertRaises(TransientError):
+                run_pipeline(self.job.id, will_retry=lambda exc: will_retry)
+        self.job.refresh_from_db()
+        self.document.refresh_from_db()
+
+    def test_a_failure_about_to_be_retried_stays_queued(self):
+        self.fail_transiently(will_retry=True)
+
+        self.assertEqual(self.job.status, ProcessingJob.Status.QUEUED)
+        self.assertEqual(self.document.status, Document.Status.QUEUED)
+        self.assertIn("scanner unavailable", self.job.error_message)
+
+    def test_reprocess_is_refused_while_the_retry_is_pending(self):
+        self.fail_transiently(will_retry=True)
+
+        with mock.patch.object(services.process_document_task, "delay"):
+            with self.assertRaises(services.ProcessingInProgress):
+                services.reprocess_document(self.document)
+        self.assertEqual(
+            ProcessingJob.objects.filter(
+                document_version=self.document.current_version
+            ).count(),
+            1,
+        )
+
+    def test_the_last_attempt_is_recorded_as_failed(self):
+        self.fail_transiently(will_retry=False)
+
+        self.assertEqual(self.job.status, ProcessingJob.Status.FAILED)
+        self.assertEqual(self.document.status, Document.Status.FAILED)
+
+    def test_the_retry_then_runs_to_completion(self):
+        self.fail_transiently(will_retry=True)
+
+        run_pipeline(self.job.id)
+
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, ProcessingJob.Status.COMPLETED)
+        self.assertEqual(self.job.attempt, 2)
+        self.assertEqual(self.job.error_code, "")
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class ReprocessKeepsTheDocumentSearchableTests(TestCase):
+    """A new extraction pass becomes live only once it is complete.
+
+    The pointer search filters on used to move as soon as the pages were
+    written, before indexing - so every reprocess took the document out of
+    search, and a reprocess that then failed left it out for good.
+    """
+
+    def setUp(self):
+        self.owner = make_user("reprocess_search_owner")
+        self.document = make_document(self.owner)
+        run_pipeline(job_for(self.document).id)
+        self.version = self.document.current_version
+        self.version.refresh_from_db()
+        self.live = self.version.current_content_id
+
+    def searchable(self):
+        return bool(search_service.search(self.owner, "attendance").hits)
+
+    def reprocess_failing_at(self, failing_stage):
+        from documents.processing.errors import StageError
+
+        def broken(context):
+            # Nothing has published the new pass yet at this point.
+            self.assertTrue(self.searchable(), "dropped out of search mid-run")
+            raise StageError(
+                "provider rejected the document", code=ErrorCode.UNEXPECTED_ERROR
+            )
+
+        stages = [
+            (stage, broken if stage == failing_stage else fn)
+            for stage, fn in pipeline.ANALYSIS_STAGES
+        ]
+        with mock.patch.object(services.process_document_task, "delay"):
+            job = services.reprocess_document(self.document)
+        with mock.patch.object(pipeline, "ANALYSIS_STAGES", stages):
+            with self.assertRaises(StageError):
+                run_pipeline(job.id)
+        self.version.refresh_from_db()
+
+    def test_a_reprocess_that_fails_late_leaves_the_previous_pass_live(self):
+        self.assertTrue(self.searchable())
+
+        self.reprocess_failing_at(ProcessingJob.Stage.INDEXING)
+
+        self.assertEqual(self.version.current_content_id, self.live)
+        self.assertTrue(self.searchable())
+
+    def test_a_successful_reprocess_switches_to_the_new_pass(self):
+        with mock.patch.object(services.process_document_task, "delay"):
+            job = services.reprocess_document(self.document)
+        run_pipeline(job.id)
+
+        self.version.refresh_from_db()
+        self.assertNotEqual(self.version.current_content_id, self.live)
+        self.assertEqual(self.version.current_content.processing_job_id, job.id)
+        self.assertTrue(self.searchable())
+
 
 @override_settings(**EAGER)
 class ReprocessConcurrencyTests(APITestCase):
@@ -199,6 +397,50 @@ class ReprocessConcurrencyTests(APITestCase):
             status=ProcessingJob.Status.COMPLETED
         )
         self.assertEqual(self.reprocess().status_code, status.HTTP_202_ACCEPTED)
+
+
+class ChunkingIsSerializedPerContentTests(TransactionTestCase):
+    """The pipeline's indexing and a re-index task must not chunk the same
+    extraction pass at once: both deleted only what they could see and both
+    inserted, leaving every passage indexed twice."""
+
+    def test_a_second_chunker_waits_for_the_first(self):
+        from documents.models import DocumentChunk
+        from documents.processing.chunking import service as chunking_service
+
+        owner = make_user("chunk_lock_owner")
+        with override_settings(MEDIA_ROOT=MEDIA_ROOT):
+            document = make_document(owner)
+            run_pipeline(job_for(document).id)
+        document.current_version.refresh_from_db()
+        content_id = document.current_version.current_content_id
+        finished = threading.Event()
+        errors = []
+
+        def reindex():
+            try:
+                chunking_service.chunk_content(content_id)
+            except Exception as exc:  # asserted on below
+                errors.append(exc)
+            finally:
+                connection.close()
+                finished.set()
+
+        with override_settings(MEDIA_ROOT=MEDIA_ROOT):
+            with chunking_service.content_lock(content_id):
+                thread = threading.Thread(target=reindex)
+                thread.start()
+                self.assertFalse(
+                    finished.wait(1.0), "chunked a pass another process was chunking"
+                )
+            self.assertTrue(finished.wait(60))
+            thread.join()
+
+        self.assertEqual(errors, [])
+        chunks = DocumentChunk.objects.filter(document_content_id=content_id)
+        self.assertEqual(
+            chunks.count(), chunks.values("chunk_index").distinct().count()
+        )
 
 
 class ConcurrentVersionUploadTests(TransactionTestCase):
@@ -457,6 +699,23 @@ class NoExistenceLeakTests(APITestCase):
     def test_the_attempt_is_still_audited(self):
         self.client.get(reverse("document-detail", args=[self.document.id]))
 
+        self.assertTrue(
+            AuditLog.objects.filter(
+                user=self.outsider,
+                document=self.document,
+                result=AuditLog.Result.DENIED,
+            ).exists()
+        )
+
+    def test_an_attempt_on_an_unaudited_read_is_still_recorded(self):
+        """The processing timeline is not audited when allowed (it is
+        polled every few seconds), but a refusal there left no row at all."""
+        self.assertEqual(
+            self.client.get(
+                reverse("document-processing", args=[self.document.id])
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
         self.assertTrue(
             AuditLog.objects.filter(
                 user=self.outsider,

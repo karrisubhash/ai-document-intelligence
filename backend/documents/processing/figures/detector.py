@@ -24,6 +24,8 @@ width and height are in the dictionary anyway.
 
 from dataclasses import dataclass, field
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 DETECTOR_NAME = "embedded-image"
 DETECTOR_VERSION = "v1"
 
@@ -64,6 +66,10 @@ def _image_xobjects(page):
         if xobjects is None:
             return []
         xobjects = xobjects.get_object()
+    except SoftTimeLimitExceeded:
+        # Swallowed with the rest, the task would run on to the HARD limit,
+        # be killed, and leave the job PROCESSING until someone noticed.
+        raise
     except Exception:
         # A malformed resource dictionary means "no figures we can vouch
         # for", not a failed document. The text extraction that matters has
@@ -82,6 +88,8 @@ def _image_xobjects(page):
                     int(obj.get("/Height") or 0),
                 )
             )
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             continue
 

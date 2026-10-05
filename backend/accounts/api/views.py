@@ -5,6 +5,7 @@ from django.contrib.auth import (
     logout,
     update_session_auth_hash,
 )
+from django.db import transaction
 from django.db.models import Count, Q
 from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
@@ -19,11 +20,15 @@ from rest_framework.views import APIView
 from accounts import permissions
 from accounts.authentication import issue_token
 from accounts.models import Department, UserProfile
-from accounts.services import rename_department, revoke_api_tokens
+from accounts.services import (
+    DepartmentNameInUse,
+    record_failed_login,
+    rename_department,
+    revoke_api_tokens,
+)
 from documents.audit import record_event
 from documents.models import AuditLog
-from documents.observability import telemetry
-from documents.throttling import LoginRateThrottle
+from documents.throttling import AccountLoginRateThrottle, LoginRateThrottle
 
 from .serializers import (
     AdminUserSerializer,
@@ -66,25 +71,7 @@ def _audit_login(user, *, method):
 def _authenticate(request, data, *, method):
     user = authenticate(request, username=data["username"], password=data["password"])
     if user is None:
-        target = User.objects.filter(username=data["username"]).first()
-        # Written directly rather than through record_event, which attaches
-        # only an AUTHENTICATED user. The attempt belongs on the targeted
-        # account's trail; for a username that matches no account, the
-        # attempted name is kept instead (truncated, never the password).
-        AuditLog.objects.create(
-            user=target,
-            action=AuditLog.Action.LOGIN_FAILED,
-            result=AuditLog.Result.DENIED,
-            metadata={
-                "method": method,
-                **(
-                    {}
-                    if target is not None
-                    else {"attempted_username": data["username"][:150]}
-                ),
-            },
-        )
-        telemetry.login_failed(method)
+        record_failed_login(data["username"], method=method)
         # One message for "no such user" and "wrong password", so the
         # endpoint cannot be used to discover which usernames exist. A 400,
         # as DRF's own token view returns, so existing clients see no change.
@@ -136,7 +123,7 @@ class LoginView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [LoginRateThrottle]
+    throttle_classes = [LoginRateThrottle, AccountLoginRateThrottle]
 
     def post(self, request):
         _enforce_csrf(request)
@@ -173,7 +160,7 @@ class LogoutView(APIView):
 
 class PasswordChangeView(APIView):
     permission_classes = [IsAuthenticated]
-    throttle_classes = [LoginRateThrottle]
+    throttle_classes = [LoginRateThrottle, AccountLoginRateThrottle]
 
     def post(self, request):
         serializer = PasswordChangeSerializer(
@@ -204,7 +191,7 @@ class TokenView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [LoginRateThrottle]
+    throttle_classes = [LoginRateThrottle, AccountLoginRateThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -395,7 +382,19 @@ class DepartmentAdminViewSet(
             if isinstance(response.data, dict)
             else response.data
         )
+        # A department admin sees their OWN department's counts only. How
+        # many people and documents every other department holds is exactly
+        # the disclosure the document policy refuses to make.
+        scope = (
+            None
+            if permissions.is_system_admin(request.user)
+            else permissions.get_profile(request.user).department
+        )
         for row in rows:
+            if scope is not None and row["name"] != scope:
+                row["member_count"] = None
+                row["document_count"] = None
+                continue
             row["member_count"] = self._members.get(row["name"], 0)
             row["document_count"] = self._documents.get(row["name"], 0)
         return response
@@ -413,9 +412,13 @@ class DepartmentAdminViewSet(
         department = serializer.instance
         old_name = department.name
         new_name = serializer.validated_data.pop("name", old_name)
-        department = serializer.save()
-        if new_name != old_name:
-            rename_department(department, new_name)
+        try:
+            with transaction.atomic():
+                department = serializer.save()
+                if new_name != old_name:
+                    rename_department(department, new_name)
+        except DepartmentNameInUse as exc:
+            raise exceptions.ValidationError({"name": [str(exc)]}) from exc
         record_event(
             user=self.request.user,
             action=AuditLog.Action.DEPARTMENT_UPDATE,

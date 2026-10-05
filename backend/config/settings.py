@@ -130,6 +130,10 @@ REST_FRAMEWORK = {
         # Credential guessing. Deliberately tight; a human who has
         # genuinely forgotten their password does not need 20 tries a minute.
         "login": os.getenv("THROTTLE_LOGIN", "10/minute"),
+        # Attempts against one account from all addresses together - the
+        # bound on a guessing run spread across a botnet. NIST SP 800-63B
+        # caps failed attempts per account at 100.
+        "login_account": os.getenv("THROTTLE_LOGIN_ACCOUNT", "100/hour"),
         # Writes bytes and queues worker time.
         "upload": os.getenv("THROTTLE_UPLOAD", "60/hour"),
         # Runs two retrievers and a fusion pass.
@@ -589,8 +593,20 @@ RAG_RERANKER_LOCAL_DEVICE = os.getenv("RAG_RERANKER_LOCAL_DEVICE", "cpu")
 RAG_ANSWERER_PROVIDER = os.getenv("RAG_ANSWERER_PROVIDER", "")
 
 # Both override whatever the named provider preset supplies. Set these
-# directly to reach an endpoint that has no preset.
+# directly to reach an endpoint that has no preset; with a base URL and NO
+# provider name, no preset applies at all (the key is then read from
+# RAG_ANSWERER_API_KEY, or the variable RAG_ANSWERER_KEY_ENV names).
 RAG_ANSWERER_BASE_URL = os.getenv("RAG_ANSWERER_BASE_URL", "")
+
+# The NAME of the environment variable holding the key, for an endpoint
+# whose key lives somewhere other than the preset's default variable.
+RAG_ANSWERER_KEY_ENV = os.getenv("RAG_ANSWERER_KEY_ENV", "")
+
+# Say so when a custom endpoint is a third party that trains on what it is
+# sent; the answer metadata reports it.
+RAG_ANSWERER_PROVIDER_TRAINS_ON_INPUT = (
+    os.getenv("RAG_ANSWERER_PROVIDER_TRAINS_ON_INPUT", "False").lower() == "true"
+)
 
 # Near-zero by default. This is grounded extraction over supplied passages,
 # not creative writing, and sampling variance here shows up as an answer
@@ -785,9 +801,19 @@ CELERY_TASK_ROUTES = {
 # how much is actually waiting.
 CELERY_WORKER_PREFETCH_MULTIPLIER = int(os.getenv("CELERY_PREFETCH_MULTIPLIER", "1"))
 
-# Acknowledge after completion, not on receipt, so a worker killed mid-task
-# returns the task to the queue instead of losing it. Safe here because the
-# pipeline is idempotent per job - see _discard_previous_attempt.
+# Acknowledge after completion, not on receipt, so a WORKER that dies with a
+# task in hand - the container stopped, the host rebooted - leaves the
+# message in the broker, which redelivers it once the visibility timeout
+# (Redis: one hour) has passed. Safe because the pipeline is idempotent per
+# job - see _discard_previous_attempt. Measured: two jobs held by a worker
+# that was killed during a host shutdown finished when the stack next came up.
+#
+# What this does NOT cover: a pool CHILD killed while the worker lives on
+# (the hard time limit, the OOM killer). Celery acknowledges those as failed
+# by default (task_reject_on_worker_lost is off, deliberately - a file that
+# kills its worker would be redelivered to kill the next one), so the job
+# is left PROCESSING and `manage.py recover_stalled_jobs` is what reclaims
+# it. Schedule it.
 CELERY_TASK_ACKS_LATE = True
 
 # Time limits. Without them a Tesseract or poppler subprocess that hangs on

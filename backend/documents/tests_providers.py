@@ -145,6 +145,40 @@ class OpenAICompatibleConfigurationTests(SimpleTestCase):
         self.assertEqual(answerer.base_url, "https://llm.internal.example/v1")
         self.assertEqual(answerer.model, "served-model")
 
+    @override_settings(
+        RAG_ANSWERER_PROVIDER="",
+        RAG_ANSWERER_BASE_URL="https://gateway.internal/v1",
+        RAG_ANSWERER_MODEL="llama",
+    )
+    def test_a_base_url_without_a_provider_inherits_no_preset(self):
+        """With the provider name defaulted to Gemini, a custom endpoint got
+        Gemini's key variable - an exported GEMINI_API_KEY was sent to it as
+        the bearer token - and Gemini's training flag and version label."""
+        answerer = OpenAICompatibleAnswerer()
+
+        self.assertEqual(answerer.provider, "custom")
+        self.assertEqual(answerer.key_env, "RAG_ANSWERER_API_KEY")
+        self.assertFalse(answerer.trains_on_free_tier)
+        self.assertEqual(answerer.version, "custom/llama")
+        with (
+            mock.patch.dict(os.environ, {"GEMINI_API_KEY": "google-key"}, clear=True),
+            self.assertRaises(OpenAICompatibleNotConfigured),
+        ):
+            answerer._api_key()
+
+    @override_settings(
+        RAG_ANSWERER_PROVIDER="",
+        RAG_ANSWERER_BASE_URL="https://gateway.internal/v1",
+        RAG_ANSWERER_MODEL="llama",
+        RAG_ANSWERER_KEY_ENV="GATEWAY_TOKEN",
+        RAG_ANSWERER_PROVIDER_TRAINS_ON_INPUT=True,
+    )
+    def test_the_documented_overrides_take_effect(self):
+        answerer = OpenAICompatibleAnswerer()
+
+        self.assertEqual(answerer.key_env, "GATEWAY_TOKEN")
+        self.assertTrue(answerer.trains_on_free_tier)
+
     def test_the_key_is_read_from_the_environment_only(self):
         answerer = OpenAICompatibleAnswerer()
         with mock.patch.dict(os.environ, {answerer.key_env: "secret-from-env"}):
@@ -333,13 +367,15 @@ class GuardrailsApplyToEveryAnswererTests(TestCase):
             any("was unavailable" in note for note in answer.notes), answer.notes
         )
 
+    @override_settings(RAG_RERANKER_LOCAL_MODEL="cross-encoder/ms-marco-MiniLM-L6-v2")
     def test_a_degraded_reranker_is_held_to_the_lexical_floor(self):
         """A model outage must not turn into a wave of false abstentions.
 
-        The local cross-encoder's own floor is 0.30. When its model fails,
-        the scores it returns are LEXICAL scores, which live on a different
-        scale - holding them to 0.30 abstained on questions the lexical
-        reranker would have answered at its own floor of 0.15.
+        MiniLM's calibrated floor is 0.30 (chosen here so the lexical 0.2
+        below would FAIL it). When its model fails, the scores it returns
+        are LEXICAL scores, which live on a different scale - holding them
+        to 0.30 abstained on questions the lexical reranker would have
+        answered at its own floor of 0.15.
         """
         reranker = LocalCrossEncoderReranker()
         reranker._model = FailingModel()
@@ -378,18 +414,31 @@ class GuardrailsApplyToEveryAnswererTests(TestCase):
                 0.5,
             )
 
-    def test_an_undegraded_cross_encoder_keeps_its_own_floor(self):
-        with override_settings(RAG_RELEVANCE_FLOOR=None):
-            self.assertEqual(
-                engine.resolve_relevance_floor(LocalCrossEncoderReranker()), 0.30
-            )
+    def test_an_undegraded_cross_encoder_keeps_its_calibrated_floor(self):
+        """Per model: calibrated on the development set, confirmed once on
+        the v2 test set. An uncalibrated model gets the default."""
+        for model, floor in (
+            ("", 0.02),  # the default model, bge-reranker-base
+            ("BAAI/bge-reranker-base", 0.02),
+            ("cross-encoder/ms-marco-MiniLM-L6-v2", 0.30),
+            ("some/uncalibrated-reranker", 0.30),
+        ):
+            with (
+                self.subTest(model=model),
+                override_settings(
+                    RAG_RELEVANCE_FLOOR=None, RAG_RERANKER_LOCAL_MODEL=model
+                ),
+            ):
+                self.assertEqual(
+                    engine.resolve_relevance_floor(LocalCrossEncoderReranker()), floor
+                )
 
 
 # --- Bedrock Titan embeddings ------------------------------------------------
 
 
 class StubBedrockRuntime:
-    def __init__(self, width=384, raises=None):
+    def __init__(self, width=1024, raises=None):
         self.width = width
         self.raises = raises
         self.bodies = []
@@ -404,6 +453,11 @@ class StubBedrockRuntime:
         }
 
 
+# Titan Text Embeddings V2 emits 256, 512 or 1024 dimensions and nothing
+# else, so the request contract is exercised at a width it supports. These
+# stubs used to accept 384 - the column's width - and so pinned a request
+# the real API rejects.
+@override_settings(EMBEDDING_DIMENSIONS=1024)
 class BedrockEmbeddingTests(SimpleTestCase):
     def provider(self, client):
         provider = BedrockTitanEmbeddingProvider()
@@ -416,9 +470,9 @@ class BedrockEmbeddingTests(SimpleTestCase):
 
         self.assertEqual(len(batch.vectors), 2)
         self.assertTrue(batch.semantic)
-        self.assertEqual(batch.dimensions, 384)
+        self.assertEqual(batch.dimensions, 1024)
         for body in client.bodies:
-            self.assertEqual(body["dimensions"], 384)
+            self.assertEqual(body["dimensions"], 1024)
             self.assertTrue(body["normalize"])
             self.assertEqual(body["modelId"], "amazon.titan-embed-text-v2:0")
 
@@ -427,7 +481,7 @@ class BedrockEmbeddingTests(SimpleTestCase):
         batch = self.provider(client).embed(["", "   ", "real"])
 
         self.assertEqual(len(client.bodies), 1)
-        self.assertEqual(batch.vectors[0], [0.0] * 384)
+        self.assertEqual(batch.vectors[0], [0.0] * 1024)
 
     def test_order_is_preserved_across_concurrent_calls(self):
         class Echo(StubBedrockRuntime):
@@ -436,7 +490,7 @@ class BedrockEmbeddingTests(SimpleTestCase):
                 value = float(text.split("-")[1])
                 return {
                     "body": io.BytesIO(
-                        json.dumps({"embedding": [value] * 384}).encode()
+                        json.dumps({"embedding": [value] * 1024}).encode()
                     )
                 }
 
@@ -448,7 +502,15 @@ class BedrockEmbeddingTests(SimpleTestCase):
         """A vector of the wrong width cannot go in the column, and must not
         be padded or truncated into one."""
         with self.assertRaises(BedrockEmbeddingUnavailable):
-            self.provider(StubBedrockRuntime(width=1024)).embed(["text"])
+            self.provider(StubBedrockRuntime(width=384)).embed(["text"])
+
+    @override_settings(EMBEDDING_DIMENSIONS=384)
+    def test_a_width_titan_cannot_produce_is_refused_at_load(self):
+        """The column is 384 wide (bge-small); Titan cannot emit 384, and
+        every chunk would have failed at the API instead."""
+        with self.assertRaises(BedrockEmbeddingUnavailable) as raised:
+            BedrockTitanEmbeddingProvider()
+        self.assertIn("Migrate the column", str(raised.exception))
 
     @override_settings(AWS_BEDROCK_REGION="")
     def test_no_region_is_a_clear_error_not_a_silent_default(self):
@@ -634,3 +696,30 @@ class LocalCrossEncoderTests(SimpleTestCase):
         )
         self.assertEqual(len(ranked), 1)
         self.assertIn("reranker_degraded", ranked[0].signals)
+
+
+class AbstentionRecognitionTests(SimpleTestCase):
+    """A model writes the abstention sentence the way a model writes it."""
+
+    def test_quotes_apostrophes_and_a_missing_full_stop_still_abstain(self):
+        from documents.rag.llm import ABSTENTION_TEXT, is_abstention
+
+        for reply in (
+            ABSTENTION_TEXT,
+            f'"{ABSTENTION_TEXT}"',
+            ABSTENTION_TEXT.replace("'", "’"),
+            f"“{ABSTENTION_TEXT.rstrip('.')}”",
+            f"  {ABSTENTION_TEXT}\n",
+        ):
+            with self.subTest(reply=reply):
+                self.assertTrue(is_abstention(reply))
+
+    def test_an_answer_is_not_an_abstention(self):
+        from documents.rag.llm import is_abstention
+
+        self.assertFalse(is_abstention("Attendance must be 75 percent [1]."))
+        self.assertFalse(
+            is_abstention(
+                "I couldn't find enough information about fees, but [1] says 75."
+            )
+        )

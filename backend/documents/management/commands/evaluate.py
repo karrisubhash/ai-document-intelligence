@@ -112,7 +112,10 @@ class Command(BaseCommand):
             raise CommandError(f"No dataset named {options['dataset']!r}")
 
         self.stdout.write(f"Running {dataset} as {user.username}...")
-        run = evaluation.run_dataset(dataset, user, label=options["label"])
+        try:
+            run = evaluation.run_dataset(dataset, user, label=options["label"])
+        except evaluation.EvaluationScopeError as exc:
+            raise CommandError(str(exc)) from exc
 
         self._print_run(run)
 

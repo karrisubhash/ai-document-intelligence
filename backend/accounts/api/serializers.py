@@ -137,6 +137,11 @@ class AdminUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True, required=False, trim_whitespace=False, max_length=128
     )
+    # Whether the CALLER may edit this account - the same rule the write
+    # endpoints enforce, so the screen offers only what will succeed. A
+    # department admin's list includes their own account, other admins and
+    # superusers, which every write refuses.
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -153,8 +158,12 @@ class AdminUserSerializer(serializers.ModelSerializer):
             "password",
             "last_login",
             "date_joined",
+            "can_manage",
         ]
         read_only_fields = ["id", "is_superuser", "last_login", "date_joined"]
+
+    def get_can_manage(self, user) -> bool:
+        return permissions.can_administer(self.actor, user)
 
     # --- validation -------------------------------------------------------
 
@@ -198,6 +207,17 @@ class AdminUserSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"department": ["You may only assign your own department."]}
                 )
+            if target is None or "department" in profile_changes:
+                # Their own department goes through the registry too: an
+                # inactive department accepts no new assignments, and
+                # assigning it unchecked let a deactivated department keep
+                # growing.
+                try:
+                    own = resolve_department(own)
+                except UnknownDepartment as exc:
+                    raise serializers.ValidationError(
+                        {"department": [str(exc)]}
+                    ) from exc
             profile_changes["department"] = own
 
         if target is not None and target.pk == actor.pk:

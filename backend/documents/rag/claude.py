@@ -50,7 +50,7 @@ import logging
 
 from django.conf import settings
 
-from .llm import ABSTENTION_TEXT, ExtractiveAnswerer, LLMResponse
+from .llm import ABSTENTION_TEXT, ExtractiveAnswerer, LLMResponse, is_abstention
 
 logger = logging.getLogger("adi.llm")
 
@@ -333,7 +333,7 @@ class ClaudeAnswerer:
 
         return LLMResponse(
             text=text,
-            abstained=text.strip() == ABSTENTION_TEXT,
+            abstained=is_abstention(text),
             cited_markers=_markers(text),
             model_name=self.name,
             model_version=self.model,

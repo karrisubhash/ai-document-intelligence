@@ -86,14 +86,22 @@ class AuditTrailTests(ScopedTestCase):
         self.assertIn("ops_phy", users)
         self.assertNotIn("ops_che", users)
 
-    def test_another_departments_title_is_withheld_from_a_department_admin(self):
+    def test_another_departments_document_is_withheld_from_a_department_admin(self):
+        """Title AND id. A DENIED row exists only for an id that exists, so
+        the id alone told a probing admin which ids were real documents."""
         denied = [
             row
             for row in self.rows(self.physics_admin, result="DENIED")
-            if row["document"] == self.chemistry_doc.id
+            if row["username"] == "ops_phy"
         ]
         self.assertTrue(denied)
         self.assertEqual(denied[0]["document_title"], "")
+        self.assertIsNone(denied[0]["document"])
+        self.assertTrue(denied[0]["document_withheld"])
+
+    def test_filtering_by_another_departments_document_returns_nothing(self):
+        rows = self.rows(self.physics_admin, document=str(self.chemistry_doc.id))
+        self.assertEqual(rows, [])
 
     def test_a_system_admin_sees_everything_including_titles(self):
         rows = self.rows(self.root, document=str(self.chemistry_doc.id))
@@ -513,3 +521,76 @@ class WorkerWarmupTests(SimpleTestCase):
             release.set()
 
         self.assertLess(elapsed, 0.5, "the hook blocked the child's start-up")
+
+
+class WarmupNeverRaisesTests(SimpleTestCase):
+    """warm() runs in gunicorn's post_worker_init, where an exception is a
+    boot failure that halts the whole server."""
+
+    def test_a_reranker_that_cannot_be_imported_is_reported_not_raised(self):
+        from django.test import override_settings
+
+        from documents.processing import warmup
+        from documents.rag import engine
+
+        engine.reset_caches()
+        self.addCleanup(engine.reset_caches)
+        with override_settings(
+            RAG_RERANKER="documents.rag.local_rerank.NoSuchReranker"
+        ):
+            loaded = warmup.warm(reason="test", components=("reranker",))
+
+        self.assertIn(loaded.get("reranker"), ("ImportError", "AttributeError"))
+
+    def test_an_embedding_provider_that_cannot_be_imported_is_reported(self):
+        from django.test import override_settings
+
+        from documents.processing import warmup
+        from documents.processing.chunking import service as chunking_service
+
+        chunking_service.reset_provider_cache()
+        self.addCleanup(chunking_service.reset_provider_cache)
+        with override_settings(
+            DOCUMENT_EMBEDDING_PROVIDER="documents.nowhere.Provider"
+        ):
+            loaded = warmup.warm(reason="test", components=("embedding",))
+
+        self.assertIn("embedding", loaded)
+        self.assertNotIsInstance(loaded["embedding"], float)
+
+
+class WorkerMetricsTests(SimpleTestCase):
+    """Pipeline metrics are recorded in the workers; they must be served."""
+
+    def test_a_worker_serves_its_childrens_samples_when_configured(self):
+        import os
+        import tempfile
+
+        from config import celery as celery_config
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.dict(
+                os.environ,
+                {"CELERY_METRICS_PORT": "9100", "PROMETHEUS_MULTIPROC_DIR": directory},
+            ),
+            mock.patch("prometheus_client.start_http_server") as start,
+        ):
+            celery_config.serve_worker_metrics()
+
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[0], 9100)
+        self.assertIsNotNone(start.call_args.kwargs["registry"])
+
+    def test_nothing_is_served_without_a_port(self):
+        import os
+
+        from config import celery as celery_config
+
+        with (
+            mock.patch.dict(os.environ, {"CELERY_METRICS_PORT": ""}),
+            mock.patch("prometheus_client.start_http_server") as start,
+        ):
+            celery_config.serve_worker_metrics()
+
+        start.assert_not_called()

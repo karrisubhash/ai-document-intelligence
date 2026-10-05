@@ -55,3 +55,26 @@ class TransientError(StageError):
 
     def __init__(self, message, code=ErrorCode.INFRASTRUCTURE_ERROR):
         super().__init__(message, code=code)
+
+
+def ran_out_of_time(exc: BaseException) -> bool:
+    """Whether Celery's soft time limit is anywhere in this exception's chain.
+
+    The limit is raised INSIDE whatever code is running when it passes, and
+    much of that code wraps what it catches: the embedder turns any failure
+    into EmbeddingProviderUnavailable (and so a retryable TransientError),
+    the OCR extractors into StageError(OCR_FAILED). Judged by the outermost
+    exception alone, a document that ran out of time was retried three more
+    times - each with a fresh fifteen-minute budget, each running out at the
+    same place - or recorded as an OCR failure. The cause chain still holds
+    the truth; this reads it.
+    """
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        if isinstance(exc, SoftTimeLimitExceeded):
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__ or exc.__context__
+    return False

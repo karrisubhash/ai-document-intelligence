@@ -1,7 +1,7 @@
 from celery import shared_task
 from django.db import InterfaceError, OperationalError
 
-from .processing.errors import StageError
+from .processing.errors import StageError, ran_out_of_time
 from .processing.pipeline import run_pipeline
 from .processing.scanning import DocumentInfected
 
@@ -19,6 +19,10 @@ RETRYABLE_EXCEPTIONS = (
 
 
 def is_retryable(exc: Exception) -> bool:
+    # A document that ran out of time will run out of time again, however
+    # the timeout was wrapped on its way out (see ran_out_of_time).
+    if ran_out_of_time(exc):
+        return False
     # A quarantined file does not become clean on the next attempt.
     if isinstance(exc, DocumentInfected):
         return False
@@ -29,8 +33,11 @@ def is_retryable(exc: Exception) -> bool:
 
 @shared_task(bind=True, max_retries=MAX_RETRIES)
 def process_document_task(self, processing_job_id: int):
+    def will_retry(exc):
+        return is_retryable(exc) and self.request.retries < self.max_retries
+
     try:
-        run_pipeline(processing_job_id)
+        run_pipeline(processing_job_id, will_retry=will_retry)
     except Exception as exc:
         if is_retryable(exc):
             raise self.retry(exc=exc, countdown=2**self.request.retries) from exc

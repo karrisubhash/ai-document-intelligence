@@ -96,7 +96,7 @@ from django.conf import settings
 # contract plus a bug waiting for the next edit. If it ever has to be
 # copied instead of imported, the two must be changed together.
 from .claude import SYSTEM
-from .llm import ABSTENTION_TEXT, ExtractiveAnswerer, LLMResponse
+from .llm import ABSTENTION_TEXT, ExtractiveAnswerer, LLMResponse, is_abstention
 
 logger = logging.getLogger("adi.llm")
 
@@ -248,15 +248,21 @@ class OpenAICompatibleAnswerer:
     generative = True
 
     def __init__(self):
-        self.provider = (
-            (getattr(settings, "RAG_ANSWERER_PROVIDER", "") or DEFAULT_PROVIDER)
-            .strip()
-            .lower()
-        )
-
-        preset = PRESETS.get(self.provider)
-
+        named = (getattr(settings, "RAG_ANSWERER_PROVIDER", "") or "").strip().lower()
         base_url = (getattr(settings, "RAG_ANSWERER_BASE_URL", "") or "").strip()
+
+        # A base URL with no provider name is an endpoint with no preset.
+        # Defaulting the name to Gemini there handed the custom endpoint
+        # Gemini's key variable (so GEMINI_API_KEY, if exported, was sent to
+        # it as the bearer token), Gemini's "trains on free-tier input" flag
+        # and a "gemini/..." version string.
+        if base_url and not named:
+            self.provider = "custom"
+            preset = None
+        else:
+            self.provider = named or DEFAULT_PROVIDER
+            preset = PRESETS.get(self.provider)
+
         model = (getattr(settings, "RAG_ANSWERER_MODEL", "") or "").strip()
         key_env = (getattr(settings, "RAG_ANSWERER_KEY_ENV", "") or "").strip()
 
@@ -547,7 +553,7 @@ class OpenAICompatibleAnswerer:
 
         return LLMResponse(
             text=text,
-            abstained=text == ABSTENTION_TEXT,
+            abstained=is_abstention(text),
             cited_markers=_markers(text),
             model_name=self.name,
             model_version=self.version,

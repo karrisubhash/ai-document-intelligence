@@ -281,6 +281,30 @@ class ScanStageTests(TestCase):
         self.assertEqual(document.status, Document.Status.QUARANTINED)
         self.assertEqual(job.error_code, ErrorCode.MALWARE_DETECTED)
 
+    def test_a_quarantined_file_cannot_be_downloaded(self):
+        """Quarantine stopped the parsing but not the download: every
+        department member could pull the flagged bytes as an attachment."""
+        document, job = self.upload(EICAR, name="eicar.txt")
+        with override_settings(DOCUMENT_SCANNER=SCANNER):
+            with self.assertRaises(DocumentInfected):
+                run_pipeline(job.id)
+
+        colleague = make_user("scan_colleague", department="Registry")
+        client = APIClient()
+        client.force_authenticate(colleague)
+        url = reverse("document-download", args=[document.id])
+
+        self.assertEqual(client.get(url).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            client.get(url, {"version": 1}).status_code, status.HTTP_403_FORBIDDEN
+        )
+
+        from accounts.models import UserProfile
+
+        reviewer = make_user("scan_reviewer", UserProfile.Role.SYSTEM_ADMIN, "")
+        client.force_authenticate(reviewer)
+        self.assertEqual(client.get(url).status_code, status.HTTP_200_OK)
+
     def test_an_infected_document_is_never_parsed(self):
         """The whole point of scanning before extraction."""
         document, job = self.upload(EICAR, name="eicar.txt")
@@ -378,6 +402,7 @@ def rates(**overrides):
         "user": "1000/hour",
         "anon": "1000/hour",
         "login": "1000/minute",
+        "login_account": "1000/hour",
         "upload": "1000/hour",
         "search": "1000/hour",
         "chat": "1000/hour",
@@ -464,6 +489,68 @@ class ThrottlingTests(TestCase):
 
         self.assertNotEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
+    def test_whitespace_around_the_username_does_not_reset_the_limit(self):
+        """The serializer strips the username before authenticating, so
+        "victim " IS victim. Keyed on the raw value, every padding variant
+        was a fresh bucket and the limit never fired."""
+        client = APIClient()
+        url = reverse("api-token-auth")
+
+        with rates(login="2/minute"):
+            for padded in ("victim", "victim ", " victim"):
+                response = client.post(
+                    url, {"username": padded, "password": "wrong"}, format="json"
+                )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_one_account_has_a_ceiling_across_every_address(self):
+        """A guessing run spread over many addresses gets a fresh per-address
+        budget each time; the per-account ceiling is what bounds it."""
+        url = reverse("api-token-auth")
+
+        with rates(login="2/minute", login_account="3/hour"):
+            for index in range(3):
+                APIClient(REMOTE_ADDR=f"198.51.100.{index}").post(
+                    url, {"username": "victim", "password": "wrong"}, format="json"
+                )
+            response = APIClient(REMOTE_ADDR="198.51.100.99").post(
+                url, {"username": "victim", "password": "wrong"}, format="json"
+            )
+            other = APIClient(REMOTE_ADDR="198.51.100.99").post(
+                url, {"username": "someone_else", "password": "wrong"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertNotEqual(other.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_a_body_that_is_not_an_object_is_a_400_not_a_500(self):
+        for body in (["victim", "wrong"], "victim"):
+            with self.subTest(body=body):
+                response = APIClient().post(
+                    reverse("api-token-auth"), body, format="json"
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_password_changes_are_throttled_per_user_not_per_address(self):
+        """Behind one NAT every user shares an address. Keyed on the address
+        and a username the body does not carry, one person's attempts used
+        up everyone's - including anonymous sign-ins."""
+        url = reverse("auth-password")
+        other = make_user("throttle_neighbour", department="Registry")
+        neighbour = APIClient()
+        neighbour.force_authenticate(other)
+        body = {"current_password": "wrong", "new_password": "N3w-pass-phrase!"}
+
+        with rates(login="2/minute"):
+            for _ in range(3):
+                self.client.post(url, body, format="json")
+            exhausted = self.client.post(url, body, format="json")
+            response = neighbour.post(url, body, format="json")
+
+        self.assertEqual(exhausted.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertNotEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
     def test_upload_is_throttled_but_reading_is_not(self):
         with rates(upload="1/hour"):
             first = self.client.post(
@@ -540,3 +627,25 @@ class TransportSecurityTests(SimpleTestCase):
         self.assertTrue(settings.RUNNING_TESTS, "these tests run under the runner")
         self.assertEqual(settings.SESSION_COOKIE_SECURE, not settings_module.DEBUG)
         self.assertEqual(settings.CSRF_COOKIE_SECURE, not settings_module.DEBUG)
+
+
+class AdminMountTests(SimpleTestCase):
+    """Django's admin must not own the application's /admin/ prefix.
+
+    The edge (nginx in production, Vite's proxy in development) sends a path
+    to Django or to the frontend by prefix. With Django's admin at /admin/,
+    the application's administration screens - /admin/users, /admin/audit,
+    /admin/system - loaded only through in-app navigation: a reload, a
+    bookmark or a new tab was answered by Django's admin login, and a
+    superuser got a 404.
+    """
+
+    def test_django_admin_lives_under_its_own_prefix(self):
+        self.assertEqual(reverse("admin:index"), "/django-admin/")
+
+    def test_the_application_admin_paths_are_not_django_routes(self):
+        from django.urls import Resolver404, resolve
+
+        for path in ("/admin/", "/admin/users", "/admin/audit", "/admin/system"):
+            with self.subTest(path=path), self.assertRaises(Resolver404):
+                resolve(path)

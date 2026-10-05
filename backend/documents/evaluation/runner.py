@@ -16,7 +16,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from documents import rag
+from documents import authorization, rag
 from documents.models import EvaluationCaseResult, EvaluationDataset, EvaluationRun
 from documents.observability import telemetry
 from documents.processing.chunking import service as chunking_service
@@ -119,6 +119,32 @@ def score_case(answer, case, ks=DEFAULT_KS) -> dict:
     return scores
 
 
+class EvaluationScopeError(ValueError):
+    """The run would store answers produced with access its readers lack."""
+
+
+def check_runner_scope(dataset: EvaluationDataset, user) -> None:
+    """Refuse a run whose answers would outlive their access boundary.
+
+    A run's stored answers are shown to whoever may see the DATASET - its
+    department's members - but they are produced with the RUN USER's access.
+    Run as a system administrator, or as a member of another department, a
+    department's benchmark stored answers quoting documents that
+    department's members cannot read, and then showed them to those members.
+    A dataset with no department is visible to system administrators only,
+    so anyone may run it.
+    """
+    if not dataset.department:
+        return
+    profile = authorization.get_profile(user)
+    if authorization.is_system_admin(user) or profile.department != dataset.department:
+        raise EvaluationScopeError(
+            f"Dataset {dataset.name!r} belongs to {dataset.department!r}; run it "
+            f"as a member of that department (not a system administrator), so "
+            f"its stored answers come only from documents its readers can see."
+        )
+
+
 def run_dataset(
     dataset: EvaluationDataset,
     user,
@@ -127,6 +153,7 @@ def run_dataset(
     ks=DEFAULT_KS,
 ) -> EvaluationRun:
     """Execute every case and store per-case results plus aggregates."""
+    check_runner_scope(dataset, user)
     started = time.monotonic()
 
     run = EvaluationRun.objects.create(
@@ -140,6 +167,7 @@ def run_dataset(
     retrieval_pairs = []
     generation_cases = []
     latencies = []
+    degraded = {"reranker": 0, "answerer": 0}
 
     try:
         for case in dataset.cases.all():
@@ -180,6 +208,8 @@ def run_dataset(
                 }
             )
             latencies.append(answer.duration_ms)
+            degraded["reranker"] += int(answer.reranker_degraded)
+            degraded["answerer"] += int(answer.answerer_fell_back)
 
         retrieval = metrics.aggregate_retrieval(retrieval_pairs, ks=ks)
         generation = metrics.aggregate_generation(generation_cases)
@@ -188,8 +218,22 @@ def run_dataset(
             run.metrics = {
                 "retrieval": retrieval.to_dict(),
                 "generation": generation.to_dict(),
-                "system": _system_metrics(latencies),
+                "system": {
+                    **_system_metrics(latencies),
+                    "degraded_reranks": degraded["reranker"],
+                    "answerer_fallbacks": degraded["answerer"],
+                },
             }
+            # The configuration was captured before any case ran, from the
+            # settings. A run whose cross-encoder fell back to lexical scoring
+            # (at the lexical floor) or whose generative answerer fell back to
+            # quoting was stored as the configured one, so two runs could
+            # show identical configurations beside very different scores.
+            if any(degraded.values()):
+                run.configuration = {
+                    **run.configuration,
+                    "degraded": {**degraded, "cases": len(generation_cases)},
+                }
             run.cases_scored = len(generation_cases)
             run.status = EvaluationRun.Status.COMPLETED
             run.completed_at = timezone.now()
