@@ -34,8 +34,19 @@ export default function AuditPage() {
   const [since, setSince] = useState("");
   const [until, setUntil] = useState("");
 
+  // The date pickers choose LOCAL calendar days, and the rows are shown in
+  // local time. Sent as bare dates they were read as UTC days, so "today"
+  // was offset by the browser's distance from UTC (five and a half hours
+  // in India). Sent as the local day's first and last instants instead.
   const entries = useResource(
-    () => api.adminAudit({ page, action, result, since, until }),
+    () =>
+      api.adminAudit({
+        page,
+        action,
+        result,
+        since: since ? new Date(`${since}T00:00:00`).toISOString() : "",
+        until: until ? new Date(`${until}T23:59:59.999`).toISOString() : "",
+      }),
     [page, action, result, since, until],
   );
   const reset = (setter: (value: string) => void) => (value: string) => {
@@ -124,16 +135,12 @@ export default function AuditPage() {
                     </Badge>
                   </td>
                   <td>
-                    {entry.document ? (
-                      entry.document_title ? (
-                        <Link to={`/documents/${entry.document}`} className="link">
-                          {entry.document_title}
-                        </Link>
-                      ) : (
-                        <span className="muted" title="Belongs to another department">
-                          Document #{entry.document}
-                        </span>
-                      )
+                    {entry.document_withheld ? (
+                      <span className="muted">Another department&rsquo;s document</span>
+                    ) : entry.document ? (
+                      <Link to={`/documents/${entry.document}`} className="link">
+                        {entry.document_title || `Document #${entry.document}`}
+                      </Link>
                     ) : (
                       <span className="muted">—</span>
                     )}

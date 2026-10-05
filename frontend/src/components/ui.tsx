@@ -425,6 +425,7 @@ export function Dialog({
   variant?: "modal" | "drawer";
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const pressedOnBackdrop = useRef(false);
   const titleId = useId();
 
   useEffect(() => {
@@ -448,9 +449,17 @@ export function Dialog({
         event.preventDefault();
         onClose();
       }}
+      onMouseDown={(event) => {
+        pressedOnBackdrop.current = event.target === ref.current;
+      }}
       onClick={(event) => {
-        // A click on the backdrop lands on the dialog element itself.
-        if (event.target === ref.current) onClose();
+        // A click on the backdrop lands on the dialog element itself - but
+        // so does a text-selection drag that STARTED inside the dialog and
+        // ended over the backdrop (the click goes to their common
+        // ancestor). That closed the dialog and threw away what was typed.
+        // Both the press and the release must be on the backdrop.
+        if (event.target === ref.current && pressedOnBackdrop.current) onClose();
+        pressedOnBackdrop.current = false;
       }}
     >
       {open ? (

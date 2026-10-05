@@ -423,6 +423,8 @@ export interface AdminUser {
   department: string;
   last_login: string | null;
   date_joined: string;
+  /** Whether the caller may edit this account (the API's own rule). */
+  can_manage: boolean;
 }
 
 export interface RoleOption {
@@ -439,6 +441,8 @@ export interface AuditEntry {
   username: string;
   document: number | null;
   document_title: string;
+  /** Another department's document: neither its id nor its title is shown. */
+  document_withheld: boolean;
   metadata: Record<string, unknown>;
 }
 

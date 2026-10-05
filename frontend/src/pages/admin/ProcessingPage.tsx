@@ -52,9 +52,17 @@ export default function ProcessingPage() {
       toast(`Processing restarted for “${job.document_title}”.`);
       jobs.reload();
     } catch (caught) {
+      // A 409 has two causes - a run already queued, or an ARCHIVED
+      // document (restore it first) - and the server's own message names
+      // which. Every 409 used to be reported as the first.
+      const detail =
+        caught instanceof ApiError &&
+        typeof (caught.payload as { detail?: unknown } | null)?.detail === "string"
+          ? (caught.payload as { detail: string }).detail
+          : "";
       toast(
         caught instanceof ApiError && caught.status === 409
-          ? "A run for this document is already queued or in progress."
+          ? detail || "A run for this document is already queued or in progress."
           : errorMessage(caught),
         "danger",
       );

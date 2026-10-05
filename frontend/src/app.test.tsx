@@ -57,6 +57,27 @@ beforeEach(() => {
 });
 
 describe("session", () => {
+  it("does not sign anyone out when the server cannot be reached", async () => {
+    vi.spyOn(api, "me").mockRejectedValue(new ApiError(503, "down", null));
+    renderApp();
+
+    expect(await screen.findByText("The server cannot be reached")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sign in" })).not.toBeInTheDocument();
+  });
+
+  it("stays signed in when sign-out did not reach the server", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(me());
+    vi.spyOn(api, "logout").mockRejectedValue(new ApiError(0, "network", null));
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: /Asha Rao/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Sign out" }));
+
+    expect(await screen.findByText(/Sign-out did not complete/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sign in" })).not.toBeInTheDocument();
+  });
+
   it("shows the sign-in screen when there is no session", async () => {
     vi.spyOn(api, "me").mockRejectedValue(new ApiError(401, "no", null));
     renderApp();

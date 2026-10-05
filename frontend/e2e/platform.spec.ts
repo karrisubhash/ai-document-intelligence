@@ -218,6 +218,12 @@ test("a department admin manages their people and sees the denied attempt", asyn
   await expect(page.getByText(`Account ${username} created.`)).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/08-users.png`, fullPage: true });
 
+  // A reload is a full document request, which the edge (nginx, or Vite's
+  // proxy in development) routes by path prefix. /admin/* once went to
+  // Django's admin, so this screen survived only in-app navigation.
+  await page.reload();
+  await expect(page.locator("table")).toContainText(username);
+
   await page.getByRole("link", { name: "Audit log" }).click();
   await page.getByLabel("Result").selectOption("DENIED");
   await expect(page.locator("tbody tr", { hasText: "ravi" }).first()).toBeVisible();

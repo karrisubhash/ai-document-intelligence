@@ -10,7 +10,7 @@ import type {
   FeedbackRating,
 } from "../../api/types";
 import { formatDuration, formatPercent } from "../../lib/format";
-import { excerpt, findQuotedSpans } from "../../lib/highlight";
+import { excerpt, findQuotedSpans, toUtf16Offset } from "../../lib/highlight";
 import { explainAbstention } from "../../lib/labels";
 import { Markdown } from "../../lib/markdown";
 import PageText from "../PageText";
@@ -155,14 +155,22 @@ export function SourceDialog({
             start={source.data.character_start}
             end={source.data.character_end}
             quotes={findQuotedSpans(quote, source.data.page_text, [
-              source.data.character_start,
-              source.data.character_end,
+              toUtf16Offset(source.data.page_text, source.data.character_start),
+              toUtf16Offset(source.data.page_text, source.data.character_end),
             ])}
             label={`Page ${source.data.page_number}`}
           />
           <Link
             className="link"
-            to={`/documents/${source.data.document_id}?tab=text&page=${source.data.page_number}&start=${source.data.character_start}&end=${source.data.character_end}`}
+            // Offsets are only meaningful on the text they were cut from. When
+            // the document has been reprocessed since, the link opens the page
+            // without a highlight rather than marking whatever now sits at
+            // those positions as the evidence.
+            to={
+              source.data.is_current
+                ? `/documents/${source.data.document_id}?tab=text&page=${source.data.page_number}&start=${source.data.character_start}&end=${source.data.character_end}`
+                : `/documents/${source.data.document_id}?tab=text&page=${source.data.page_number}`
+            }
             onClick={onClose}
           >
             Open the document at this page

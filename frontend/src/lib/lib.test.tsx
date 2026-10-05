@@ -59,6 +59,22 @@ describe("Markdown", () => {
       items: ["a long item that wraps onto a second line", "next"],
     });
   });
+
+  it("keeps a quoted clause's own number", () => {
+    const { container } = render(<Markdown source={"12) Fees are payable in July.\n13) Late fees apply."} />);
+    const items = container.querySelectorAll("ol li");
+    expect(Array.from(items).map((item) => (item as HTMLLIElement).value)).toEqual([12, 13]);
+  });
+
+  it("renders a quoted table one row per line, not as one run-on paragraph", () => {
+    const table = "Programme\tTuition\tHostel\nB.Tech CSE\t85000\t60000\nB.Tech ECE\t82000\t60000 [1]";
+    const { container } = render(<Markdown source={table} renderCitation={(n, key) => <b key={key}>[{n}]</b>} />);
+
+    const rows = container.querySelectorAll(".prose-table-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[1].textContent).toBe("B.Tech CSE\t85000\t60000");
+    expect(container.querySelector("p")).toBeNull();
+  });
 });
 
 describe("highlighting", () => {
@@ -141,5 +157,23 @@ describe("upload checks", () => {
 
   it("derives a readable title from a filename", () => {
     expect(titleFromFilename("exam_regulations-2024.pdf")).toBe("Exam regulations 2024");
+  });
+});
+
+describe("API offsets", () => {
+  it("are code points, converted to UTF-16 indices before slicing", async () => {
+    const { toUtf16Offset } = await import("./highlight");
+    // "😀" is one code point and two UTF-16 units.
+    const text = "😀 Fees are due in July.";
+    expect(toUtf16Offset(text, 2)).toBe(3);
+    expect(text.slice(toUtf16Offset(text, 2), toUtf16Offset(text, 6))).toBe("Fees");
+    expect(toUtf16Offset("plain text", 5)).toBe(5);
+  });
+
+  it("highlight the cited words even after an astral character", async () => {
+    const { default: PageText } = await import("../components/PageText");
+    // The API says the span is code points 2..6 - "Fees".
+    const { container } = render(<PageText text="😀 Fees are due in July." start={2} end={6} />);
+    expect(container.querySelector("mark")?.textContent).toBe("Fees");
   });
 });

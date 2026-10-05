@@ -142,3 +142,27 @@ export function findQuotedSpans(
   }
   return spans;
 }
+
+const SURROGATE = /[\uD800-\uDFFF]/;
+
+/**
+ * An API offset, converted to an index into the same JavaScript string.
+ *
+ * Every offset the API returns (chunks, extracted fields, tables, search
+ * hits) counts Unicode code points, because that is what a Python string
+ * indexes. A JavaScript string indexes UTF-16 code units, so each character
+ * outside the Basic Multilingual Plane before a span - an emoji, a
+ * mathematical letter from a Word equation, a CJK Extension B character -
+ * shifted the highlight one place to the left of the evidence.
+ */
+export function toUtf16Offset(text: string, codePoints: number): number {
+  if (!SURROGATE.test(text)) return codePoints;
+  let units = 0;
+  let seen = 0;
+  for (const character of text) {
+    if (seen >= codePoints) break;
+    units += character.length;
+    seen += 1;
+  }
+  return units;
+}

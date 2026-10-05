@@ -70,7 +70,12 @@ function UserDialog({
       last_name: draft.last_name.trim(),
       role: draft.role,
       is_active: draft.is_active,
-      ...(system ? { department: draft.department } : {}),
+      // Only when it CHANGED: the picker lists active departments, so for a
+      // member of an inactive one an unchanged value was sent back and
+      // refused - no edit to that person could be saved at all.
+      ...(system && draft.department !== (user?.department ?? "")
+        ? { department: draft.department }
+        : {}),
     };
     if (user) return api.adminUpdateUser(user.id, body);
     return api.adminCreateUser({ ...body, username: draft.username.trim(), password: draft.password });
@@ -192,6 +197,14 @@ function UserDialog({
                       {department.name}
                     </option>
                   ))}
+                  {/* The person's current department, when it is no longer
+                      active: shown as what it is rather than silently
+                      displayed as "No department". */}
+                  {user?.department &&
+                  departments.data &&
+                  !departments.data.some((department) => department.name === user.department) ? (
+                    <option value={user.department}>{user.department} (inactive)</option>
+                  ) : null}
                 </select>
               ) : (
                 <input {...props} className="input" value={draft.department} disabled />
@@ -302,6 +315,7 @@ export default function UsersPage() {
   useDocumentTitle("Users");
   const toast = useToast();
   const { can } = useAuth();
+  const me = useMe();
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
   const [role, setRole] = useState("");
@@ -413,14 +427,22 @@ export default function UsersPage() {
                   </td>
                   <td>{user.last_login ? formatRelative(user.last_login) : "Never"}</td>
                   <td>
-                    <div className="button-row">
-                      <Button size="sm" onClick={() => setEditing(user)}>
-                        Edit
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setResetting(user)}>
-                        Set password
-                      </Button>
-                    </div>
+                    {user.can_manage ? (
+                      <div className="button-row">
+                        <Button size="sm" onClick={() => setEditing(user)}>
+                          Edit
+                        </Button>
+                        {/* Your own password is changed under Account, with
+                            the current password - never here. */}
+                        {user.id !== me.id ? (
+                          <Button size="sm" variant="ghost" onClick={() => setResetting(user)}>
+                            Set password
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="muted small">Managed by a system administrator</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -445,7 +467,13 @@ export default function UsersPage() {
           }}
         />
       ) : null}
-      <PasswordDialog user={resetting} onClose={() => setResetting(null)} />
+      {/* Keyed by account: what was typed (and any error) for one person
+          must not carry over to the next. */}
+      <PasswordDialog
+        key={resetting?.id ?? "closed"}
+        user={resetting}
+        onClose={() => setResetting(null)}
+      />
     </div>
   );
 }

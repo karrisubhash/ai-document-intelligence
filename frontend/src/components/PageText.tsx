@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { layeredSegments } from "../lib/highlight";
+import { layeredSegments, toUtf16Offset } from "../lib/highlight";
 
 /**
  * One page of extracted text, with the cited passage and - inside it - the
@@ -26,13 +26,19 @@ export default function PageText({
   label?: string;
 }) {
   const target = useRef<HTMLElement>(null);
-  const hasSpan = start !== null && start !== undefined && end !== null && end !== undefined;
+  // `start` and `end` are API offsets (code points); `quotes` were found in
+  // this string and are already JavaScript indices.
+  const hasSpan =
+    start !== null && start !== undefined && end !== null && end !== undefined;
+  const span: [number, number] | null = hasSpan
+    ? [toUtf16Offset(text, start), toUtf16Offset(text, end)]
+    : null;
   // With quotes, the span is context and the quotes are the evidence. With
   // none - a search hit, an extracted field - the span IS the evidence and
   // gets the strong highlight itself.
   const segments = quotes.length
-    ? layeredSegments(text, hasSpan ? [start, end] : null, quotes)
-    : layeredSegments(text, null, hasSpan ? [[start, end]] : []);
+    ? layeredSegments(text, span, quotes)
+    : layeredSegments(text, null, span ? [span] : []);
   const strongest = Math.max(...segments.map((segment) => segment.level));
   const key = `${start}-${end}-${quotes.map((quote) => quote.join(":")).join(",")}`;
 

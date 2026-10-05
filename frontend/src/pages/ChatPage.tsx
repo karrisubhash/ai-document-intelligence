@@ -43,11 +43,13 @@ function ConversationList({
   conversations,
   onNew,
   onChanged,
+  onMore,
 }: {
   activeId: number | null;
   conversations: Resource<Paginated<ConversationSummary>>;
   onNew: () => void;
   onChanged: () => void;
+  onMore: () => void;
 }) {
   const navigate = useNavigate();
   const toast = useToast();
@@ -105,6 +107,11 @@ function ConversationList({
       ) : (
         <p className="muted small">Your conversations will appear here.</p>
       )}
+      {conversations.data && conversations.data.results.length < conversations.data.count ? (
+        <Button variant="ghost" size="sm" onClick={onMore} loading={conversations.loading}>
+          Show older conversations
+        </Button>
+      ) : null}
 
       <Dialog
         open={Boolean(renaming)}
@@ -194,7 +201,17 @@ export default function ChatPage() {
     handoff.documentId ? { id: handoff.documentId, title: handoff.documentTitle ?? "" } : null,
   );
 
-  const conversations = useResource(() => api.conversations(), []);
+  // Every page loaded so far, newest first. Only the first 50 were ever
+  // reachable before; older conversations simply could not be opened.
+  const [conversationPages, setConversationPages] = useState(1);
+  const conversations = useResource(async () => {
+    const first = await api.conversations(1);
+    const results = [...first.results];
+    for (let page = 2; page <= conversationPages && results.length < first.count; page += 1) {
+      results.push(...(await api.conversations(page)).results);
+    }
+    return { ...first, results };
+  }, [conversationPages]);
   const history = useResource(() => api.conversation(conversationId!), [conversationId], {
     enabled: conversationId !== null,
   });
@@ -212,13 +229,29 @@ export default function ChatPage() {
   // data, so it is not rebuilt from history; any OTHER conversation is.
   const [turnsFor, setTurnsFor] = useState<number | null>(null);
 
+  // The conversation the route shows, and a counter that moves whenever it
+  // REALLY changes (not when StrictMode re-runs an effect). An answer that
+  // arrives after the user has moved to another conversation, or pressed
+  // "New question", belongs to the view it was asked in: it used to adopt
+  // whatever was on screen as its new conversation, and its follow-up was
+  // then sent to the wrong one.
+  const shown = useRef(conversationId);
+  const view = useRef(0);
+
   useEffect(() => {
-    if (conversationId === null) {
+    if (shown.current === conversationId) return;
+    shown.current = conversationId;
+    view.current += 1;
+    if (conversationId === null || conversationId !== turnsFor) {
+      // Another conversation's turns never sit under this URL while its
+      // own history loads - or, if the load fails, for good.
       setTurns([]);
-      setTurnsFor(null);
-      return;
+      if (conversationId === null) setTurnsFor(null);
     }
-    if (turnsFor === conversationId) return;
+  }, [conversationId, turnsFor]);
+
+  useEffect(() => {
+    if (conversationId === null || turnsFor === conversationId) return;
     if (!history.data || history.data.id !== conversationId) return;
     const rebuilt: Turn[] = [];
     const messages = history.data.messages;
@@ -240,11 +273,14 @@ export default function ChatPage() {
     thread.current?.scrollTo({ top: thread.current.scrollHeight, behavior: "smooth" });
   }, [turns]);
 
-  // A question handed over from the dashboard or search is sent at once.
+  // A question handed over from the dashboard or search is sent at once -
+  // and cleared from the history entry FIRST, or a reload or a remount of
+  // this page would send it again.
   const sentHandoff = useRef(false);
   useEffect(() => {
     if (handoff.question && !sentHandoff.current && conversationId === null) {
       sentHandoff.current = true;
+      navigate(location.pathname, { replace: true, state: {} });
       void send(handoff.question);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -254,6 +290,7 @@ export default function ChatPage() {
     const question = text.trim();
     if (!question || sending) return;
     const key = `t${Date.now()}`;
+    const askedIn = view.current;
     setTurns((current) => [...current, { key, question, answer: null }]);
     setDraft("");
     setSending(true);
@@ -263,21 +300,33 @@ export default function ChatPage() {
         conversation_id: conversationId,
         ...(scope ? { document_id: scope.id } : {}),
       });
+      if (view.current !== askedIn) {
+        // Saved in its own conversation, which the list now shows; not
+        // displayed over the one the user moved to.
+        conversations.reload();
+        return;
+      }
       setTurns((current) =>
         current.map((turn) => (turn.key === key ? { ...turn, answer: fromResponse(response) } : turn)),
       );
       if (conversationId === null) {
         setTurnsFor(response.conversation_id);
-        navigate(`/ask/${response.conversation_id}`, { replace: true, state: {} });
+        navigate(`/ask/${response.conversation_id}`, {
+          replace: true,
+          // Same screen, new URL: focus stays in the composer (Layout).
+          state: { keepFocus: true },
+        });
       }
       conversations.reload();
     } catch (caught) {
-      setTurns((current) =>
-        current.map((turn) => (turn.key === key ? { ...turn, error: caught } : turn)),
-      );
+      if (view.current === askedIn) {
+        setTurns((current) =>
+          current.map((turn) => (turn.key === key ? { ...turn, error: caught } : turn)),
+        );
+      }
     } finally {
       setSending(false);
-      composer.current?.focus();
+      if (view.current === askedIn) composer.current?.focus();
     }
   };
 
@@ -294,13 +343,19 @@ export default function ChatPage() {
   };
 
   const startNew = () => {
-    setTurns([]);
     setScope(null);
+    if (conversationId === null) {
+      // Already on the new-question screen: clearing it is a new view too,
+      // so an answer still on its way is not shown on the empty page.
+      view.current += 1;
+      setTurns([]);
+    }
     navigate("/ask");
     composer.current?.focus();
   };
 
-  const loadingHistory = conversationId !== null && history.loading && !turns.length;
+  // Showing a conversation whose turns have not been loaded yet.
+  const opening = conversationId !== null && turnsFor !== conversationId;
 
   return (
     <div className="chat">
@@ -309,16 +364,17 @@ export default function ChatPage() {
         conversations={conversations}
         onNew={startNew}
         onChanged={conversations.reload}
+        onMore={() => setConversationPages((pages) => pages + 1)}
       />
 
       <section className="chat-main" aria-label="Conversation">
         <div className="thread" ref={thread} aria-live="polite" aria-busy={sending}>
-          {history.error && conversationId !== null && !turns.length ? (
+          {history.error && opening ? (
             <ErrorState
               error={history.error}
               title="This conversation could not be opened"
             />
-          ) : loadingHistory ? (
+          ) : opening ? (
             <Skeleton lines={6} />
           ) : !turns.length ? (
             <EmptyState title="Ask a question about your documents" icon="✦">
@@ -395,8 +451,14 @@ export default function ChatPage() {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={onKeyDown}
+              disabled={opening}
             />
-            <Button type="submit" variant="primary" loading={sending} disabled={!draft.trim()}>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={sending}
+              disabled={!draft.trim() || opening}
+            >
               Ask
             </Button>
           </div>

@@ -4,7 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import type { Capabilities } from "./api/types";
 import { useAuth } from "./auth/AuthContext";
 import Layout from "./components/Layout";
-import { EmptyState, Spinner } from "./components/ui";
+import { Button, EmptyState, Spinner } from "./components/ui";
 import LoginPage from "./pages/LoginPage";
 
 // Split by area: someone who only searches never downloads the admin
@@ -54,7 +54,7 @@ function NotFound() {
 }
 
 export default function App() {
-  const { state } = useAuth();
+  const { state, refresh } = useAuth();
 
   if (state === "checking") {
     return (
@@ -65,6 +65,22 @@ export default function App() {
   }
 
   if (state === "signed-out") return <LoginPage />;
+
+  if (state === "unreachable") {
+    return (
+      <div className="centered">
+        <EmptyState title="The server cannot be reached" icon="⚠">
+          <p>
+            Your session may still be valid - nothing has been signed out. Check your connection,
+            then try again.
+          </p>
+          <Button variant="primary" onClick={() => void refresh().catch(() => undefined)}>
+            Try again
+          </Button>
+        </EmptyState>
+      </div>
+    );
+  }
 
   return (
     <Layout>

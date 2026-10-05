@@ -44,27 +44,34 @@ export default function SearchPage() {
   const [limit, setLimit] = useState(PAGE);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [asked, setAsked] = useState("");
+  // The search the results on screen came from. "Show more results" repeats
+  // THAT one with a larger limit - it used to read the live inputs, so
+  // editing the box or a filter without submitting replaced the list with a
+  // different search.
+  const [submitted, setSubmitted] = useState<{
+    query: string;
+    document_type: string;
+    department: string;
+  } | null>(null);
   const search = useAction(api.search);
 
-  const run = async (nextLimit = PAGE) => {
-    const text = query.trim();
-    if (!text) return;
+  const run = async (
+    request: { query: string; document_type: string; department: string },
+    nextLimit = PAGE,
+  ) => {
+    if (!request.query) return;
     setLimit(nextLimit);
-    const outcome = await search.run({
-      query: text,
-      limit: nextLimit,
-      document_type: documentType,
-      department,
-    });
+    const outcome = await search.run({ ...request, limit: nextLimit });
     if (outcome.ok) {
       setResult(outcome.value);
-      setAsked(text);
+      setAsked(request.query);
+      setSubmitted(request);
     }
   };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    run(PAGE);
+    void run({ query: query.trim(), document_type: documentType, department }, PAGE);
   };
 
   const documents = new Set(result?.results.map((hit) => hit.document_id));
@@ -186,7 +193,10 @@ export default function SearchPage() {
 
           <div className="button-row">
             {result.count >= limit && limit < 50 ? (
-              <Button onClick={() => run(Math.min(50, limit + PAGE))} loading={search.pending}>
+              <Button
+                onClick={() => submitted && void run(submitted, Math.min(50, limit + PAGE))}
+                loading={search.pending}
+              >
                 Show more results
               </Button>
             ) : null}

@@ -4,6 +4,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth, useMe } from "../auth/AuthContext";
 import { displayName } from "../lib/format";
 import { ROLE_LABEL } from "../lib/labels";
+import { useToast } from "./ui";
 
 interface NavItem {
   to: string;
@@ -60,6 +61,7 @@ function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate: () => vo
 function UserMenu() {
   const me = useMe();
   const { logout } = useAuth();
+  const toast = useToast();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
@@ -127,7 +129,14 @@ function UserMenu() {
             className="menu-item"
             onClick={() => {
               setOpen(false);
-              logout().finally(() => navigate("/", { replace: true }));
+              logout().then(
+                () => navigate("/", { replace: true }),
+                () =>
+                  toast(
+                    "Sign-out did not complete - you are still signed in. Check your connection and try again.",
+                    "danger",
+                  ),
+              );
             }}
           >
             Sign out
@@ -148,7 +157,12 @@ export default function Layout({ children }: { children: ReactNode }) {
   // screen-reader user expects it: the start of the new content.
   useEffect(() => {
     setNavOpen(false);
+    // Not when the page only rewrote its own URL (the first answer of a new
+    // conversation moves /ask to /ask/12): focus was pulled out of the
+    // composer the user was typing in.
+    if ((location.state as { keepFocus?: boolean } | null)?.keepFocus) return;
     document.getElementById("main")?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
   return (

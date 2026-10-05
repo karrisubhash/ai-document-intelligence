@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError, api, saveBlob } from "../api/client";
 import { useAction, usePolling, useResource } from "../api/hooks";
 import { DOCUMENT_TYPES, type DocumentDetail, type DocumentType } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 import {
   ContentPanel,
   FieldsPanel,
@@ -90,6 +91,13 @@ function Overview({ document }: { document: DocumentDetail }) {
         <Card title="Classification">
           {classification.loading && !classification.data ? (
             <Skeleton lines={2} />
+          ) : classification.error && !classification.data ? (
+            // A failed REQUEST is not a document that was never classified.
+            <ErrorState
+              error={classification.error}
+              onRetry={classification.reload}
+              title="The classification could not be loaded"
+            />
           ) : verdict ? (
             <DescriptionList
               items={[
@@ -206,7 +214,24 @@ export default function DocumentDetailPage() {
   });
   const document = resource.data;
   useDocumentTitle(document?.title ?? "Document");
-  usePolling(resource.reload, Boolean(document && IN_FLIGHT.includes(document.status)));
+  // While it processes, the page watches the PROCESSING TIMELINE, which is
+  // not an audited read, and reloads the document only when the run's status
+  // moves. Polling the document itself wrote a "viewed the document" audit
+  // row every three seconds, burying real views under status checks.
+  const lastRun = useRef<string | null>(null);
+  usePolling(
+    () => {
+      api.processing(documentId).then(
+        (jobs) => {
+          const latest = jobs.length ? `${jobs[0].id}:${jobs[0].status}` : "";
+          if (lastRun.current !== null && latest !== lastRun.current) resource.reload();
+          lastRun.current = latest;
+        },
+        () => undefined, // a missed tick; the next one tries again
+      );
+    },
+    Boolean(document && IN_FLIGHT.includes(document.status)),
+  );
 
   const [editing, setEditing] = useState(false);
   const [confirm, setConfirm] = useState<"delete" | "archive" | null>(null);
@@ -217,6 +242,10 @@ export default function DocumentDetailPage() {
   );
   const remove = useAction(() => api.deleteDocument(documentId));
   const [downloading, setDownloading] = useState(false);
+  const { me } = useAuth();
+  // The API refuses it too; the button says why instead of failing on click.
+  const quarantineBlocksDownload =
+    document?.status === "QUARANTINED" && me?.role !== "SYSTEM_ADMIN" && !me?.is_superuser;
 
   const selectTab = (next: string) => {
     const nextParams = new URLSearchParams();
@@ -232,7 +261,9 @@ export default function DocumentDetailPage() {
       </div>
     );
   }
-  if (resource.error || !document) {
+  // Only when there is nothing to show. A failed REFRESH keeps the page
+  // (and any open dialog or upload) and says so below.
+  if (!document) {
     return (
       <div className="page">
         <ErrorState
@@ -283,6 +314,15 @@ export default function DocumentDetailPage() {
         <span aria-current="page">{document.title}</span>
       </nav>
 
+      {resource.error ? (
+        <Alert tone="warning" title="This document could not be refreshed">
+          What is shown may be out of date.{" "}
+          <button type="button" className="link-button" onClick={resource.reload}>
+            Try again
+          </button>
+        </Alert>
+      ) : null}
+
       <PageHeader
         title={document.title}
         description={
@@ -316,7 +356,16 @@ export default function DocumentDetailPage() {
             >
               Ask about this document
             </Button>
-            <Button onClick={download} loading={downloading} disabled={!version}>
+            <Button
+              onClick={download}
+              loading={downloading}
+              disabled={!version || quarantineBlocksDownload}
+              title={
+                quarantineBlocksDownload
+                  ? "Quarantined by the security scan - an administrator can review it"
+                  : undefined
+              }
+            >
               Download
             </Button>
             {document.can_manage ? (

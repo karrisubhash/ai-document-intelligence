@@ -12,7 +12,11 @@ import react from "@vitejs/plugin-react";
 // request's Origin header with its Host header; rewriting Host to the
 // target would make every unsafe request from the dev server look
 // cross-origin and fail with "Origin checking failed".
-const PROXIED = ["/api", "/health", "/ready", "/admin", "/static"];
+//
+// Matching is by prefix. "/admin" is NOT here: it is the app's own
+// administration screens, and proxying it once sent every reload of
+// /admin/users to Django's admin. Django's admin is at /django-admin/.
+const PROXIED = ["/api", "/health", "/ready", "/django-admin", "/static"];
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");

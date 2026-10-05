@@ -1868,6 +1868,18 @@ mark.evidence {
   font-weight: 650;
 }
 
+/* A quoted table: one row per line, columns kept apart by their tabs. */
+.prose-table {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  overflow-x: auto;
+  tab-size: 12;
+}
+
+.prose-table-row {
+  white-space: pre;
+}
+
 .citation {
   display: inline-grid;
   place-items: center;

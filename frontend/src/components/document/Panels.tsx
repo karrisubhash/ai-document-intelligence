@@ -381,15 +381,25 @@ export function PreviewPanel({ document }: { document: DocumentDetail }) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
+  // Keyed on primitives, never on the version OBJECT. The page polls the
+  // document every few seconds while it processes, and every poll returns a
+  // new current_version object; with that as a dependency the preview
+  // re-downloaded the whole file - and wrote a download audit row - on every
+  // poll, dropping back to a skeleton each time.
+  const versionId = version?.id;
+  const fileName = version?.file_name ?? "";
+  const quarantined = document.status === "QUARANTINED";
+
   useEffect(() => {
-    if (!version || !kind || document.status === "QUARANTINED") return;
+    if (!versionId || !kind || quarantined) return;
     let revoked: string | null = null;
     let cancelled = false;
+    const controller = new AbortController();
     setUrl(null);
     setText(null);
     setError(null);
     api
-      .fileBlob(document.id)
+      .fileBlob(document.id, undefined, controller.signal)
       .then(async (blob) => {
         if (cancelled) return;
         if (kind === "text") {
@@ -404,7 +414,7 @@ export function PreviewPanel({ document }: { document: DocumentDetail }) {
           type:
             kind === "pdf"
               ? "application/pdf"
-              : extensionOf(version.file_name) === ".png"
+              : extensionOf(fileName) === ".png"
                 ? "image/png"
                 : "image/jpeg",
         });
@@ -416,9 +426,10 @@ export function PreviewPanel({ document }: { document: DocumentDetail }) {
       });
     return () => {
       cancelled = true;
+      controller.abort();
       if (revoked) URL.revokeObjectURL(revoked);
     };
-  }, [document.id, document.status, version, kind]);
+  }, [document.id, versionId, fileName, kind, quarantined]);
 
   if (!version) return <EmptyState title="No file" />;
   if (document.status === "QUARANTINED") {

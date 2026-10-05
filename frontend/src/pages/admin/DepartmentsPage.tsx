@@ -13,6 +13,7 @@ import {
   ErrorState,
   Field,
   PageHeader,
+  Pagination,
   Skeleton,
   errorMessage,
   useDocumentTitle,
@@ -125,7 +126,9 @@ export default function DepartmentsPage() {
   const toast = useToast();
   const { can } = useAuth();
   const editable = can("administer_departments");
-  const departments = useResource(() => api.adminDepartments(), []);
+  // Paged like every other admin list; only the first 50 were ever loaded.
+  const [page, setPage] = useState(1);
+  const departments = useResource(() => api.adminDepartments(page), [page]);
   const [editing, setEditing] = useState<AdminDepartment | "new" | null>(null);
 
   return (
@@ -194,6 +197,9 @@ export default function DepartmentsPage() {
           </table>
         </div>
       )}
+      {departments.data ? (
+        <Pagination page={page} count={departments.data.count} onPage={setPage} />
+      ) : null}
       {editing ? (
         <DepartmentDialog
           department={editing === "new" ? null : editing}

@@ -50,7 +50,12 @@ test("no screen triggers a Content-Security-Policy violation", async ({ page }) 
     "/admin/audit",
     "/admin/system",
   ]) {
-    await page.goto(path);
+    // Loaded as a document, not through the router: each path must come
+    // back as the application shell, with the policy. /admin/* once went to
+    // Django's admin instead - a page with no CSP, so this loop "passed"
+    // without checking the screens at all.
+    const screen = await page.goto(path);
+    expect(screen?.headers()["content-security-policy"], `${path} did not return the app shell`).toBe(policy);
     await page.waitForLoadState("networkidle");
   }
 

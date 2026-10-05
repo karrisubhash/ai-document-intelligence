@@ -272,8 +272,8 @@ export function uploadWithProgress<T>(
 }
 
 /** Fetches a file as a Blob - for previews and downloads behind the session. */
-export async function fetchBlob(path: string): Promise<Blob> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: "same-origin" });
+export async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: "same-origin", signal });
   if (!response.ok) {
     if (response.status === 401) onUnauthorized?.();
     let parsed: unknown = null;
@@ -357,8 +357,8 @@ export const api = {
   figures: (id: number) => request<DocumentFigure[]>(doc(id, "figures/")),
   source: (id: number, chunk: number) =>
     request<SourcePassage>(doc(id, `source/${query({ chunk })}`)),
-  fileBlob: (id: number, version?: number) =>
-    fetchBlob(doc(id, `download/${query({ version })}`)),
+  fileBlob: (id: number, version?: number, signal?: AbortSignal) =>
+    fetchBlob(doc(id, `download/${query({ version })}`), signal),
 
   // --- search and chat -------------------------------------------------
   search: (input: SearchInput) =>
@@ -394,7 +394,8 @@ export const api = {
       body: { password },
     }),
   adminRoles: () => request<RoleOption[]>("/api/admin/users/roles/"),
-  adminDepartments: () => request<Paginated<AdminDepartment>>("/api/admin/departments/"),
+  adminDepartments: (page = 1) =>
+    request<Paginated<AdminDepartment>>(`/api/admin/departments/${query({ page })}`),
   adminCreateDepartment: (body: Partial<AdminDepartment>) =>
     request<AdminDepartment>("/api/admin/departments/", { method: "POST", body }),
   adminUpdateDepartment: (id: number, body: Partial<AdminDepartment>) =>

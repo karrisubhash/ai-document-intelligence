@@ -12,7 +12,13 @@ import {
 import { ApiError, api, setUnauthorizedHandler } from "../api/client";
 import type { Capabilities, Me } from "../api/types";
 
-type SessionState = "checking" | "signed-in" | "signed-out";
+/**
+ * "unreachable": the session check failed for a reason that says nothing
+ * about the session (network down, a 5xx). Not a sign-out - asking for a
+ * password the server cannot check would be wrong, and the session may be
+ * perfectly valid.
+ */
+type SessionState = "checking" | "signed-in" | "signed-out" | "unreachable";
 
 interface AuthState {
   me: Me | null;
@@ -45,10 +51,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       // Network failure or a 5xx: the session may be perfectly valid, so
-      // this is not a sign-out. The login screen says the server is
-      // unreachable rather than asking for a password it cannot check.
+      // this is not a sign-out. It used to be one - the comment above said
+      // otherwise while the code showed the login form.
       setMe(null);
-      setState("signed-out");
+      setState("unreachable");
       throw error;
     }
   }, []);
@@ -79,14 +85,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState("signed-in");
   }, []);
 
+  // Signed out only once the server says so. The session cookie is
+  // httpOnly - the page cannot remove it - so a sign-out request that
+  // failed (a network drop, a 5xx) used to LOOK signed out on a shared
+  // machine while the session stayed valid for hours. A 401 means it was
+  // already gone, which is the outcome asked for.
   const logout = useCallback(async () => {
     try {
       await api.logout();
-    } finally {
-      setMe(null);
-      setExpired(false);
-      setState("signed-out");
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 401)) throw error;
     }
+    setMe(null);
+    setExpired(false);
+    setState("signed-out");
   }, []);
 
   const can = useCallback(
