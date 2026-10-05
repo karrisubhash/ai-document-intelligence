@@ -1,0 +1,104 @@
+# Exact versions for every Python package in the production image.
+#
+# Generated with `pip freeze --all` from the backend image that passed the
+# full verification on 2026-10-05 (960 backend tests, the browser suite 8/8
+# over TLS, the AI regression gates) - built with INSTALL_ML, INSTALL_LLM and
+# INSTALL_LOCAL - plus django-storages for the optional S3 layer. Every
+# `pip install` in the Dockerfile and in CI runs with `-c` against this file, so
+# a rebuild installs what was tested instead of whatever is newest that day.
+# (Unpinned, a rebuild had already moved scikit-learn from 1.9.0 to 1.9.1 under
+# a classifier trained with 1.9.0.)
+#
+# To upgrade: change a version here, rebuild, run the full verification, commit.
+# Constraints only pin; they never add a package - the requirements files decide
+# what is installed.
+amqp==5.4.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anthropic==1.11.0
+anyio==4.15.1
+asgiref==3.12.1
+billiard==4.3.1
+boto3==1.43.108
+botocore==1.43.108
+celery==5.6.3
+certifi==2026.7.22
+click==8.5.0
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.4.1
+cloudpickle==3.1.2
+Django==6.1.1
+django-cors-headers==4.9.0
+djangorestframework==3.18.1
+docstring_parser==0.18.0
+filelock==4.0.11
+fsspec==2026.9.0
+gunicorn==26.2.0
+h11==0.16.0
+hf-xet==1.6.0
+httpcore==1.0.9
+httpcore2==2.13.1
+httpx==0.28.1
+httpx2==2.13.1
+huggingface_hub==1.33.0
+idna==3.20
+Jinja2==3.1.6
+jiter==0.17.0
+jmespath==1.1.0
+joblib==1.6.0
+kombu==5.6.2
+lxml==6.1.3
+markdown-it-py==4.2.0
+MarkupSafe==3.0.4
+mdurl==0.1.2
+mpmath==1.3.0
+narwhals==2.27.0
+networkx==3.7
+numpy==2.5.3
+openai==3.24.0
+packaging==26.3
+pdf2image==1.17.0
+pgvector==0.5.0
+pillow==12.3.0
+prometheus_client==0.26.0
+prompt_toolkit==3.0.53
+psycopg==3.3.6
+psycopg-binary==3.3.6
+pydantic==2.13.5
+pydantic_core==2.46.5
+Pygments==2.21.0
+pypdf==6.19.0
+pytesseract==0.3.13
+python-dateutil==2.9.0.post0
+python-docx==1.2.0
+python-dotenv==1.2.4
+PyYAML==6.0.3
+redis==8.1.0
+regex==2026.9.29
+rich==15.0.0
+s3transfer==0.19.2
+safetensors==0.8.0
+scikit-learn==1.9.1
+scipy==1.18.1
+sentence-transformers==6.1.0
+shellingham==1.5.4
+six==1.17.0
+sniffio==1.3.1
+sqlparse==0.6.0
+sympy==1.14.0
+threadpoolctl==3.7.0
+tokenizers==0.23.2
+torch==2.14.1+cpu
+tqdm==4.70.1
+transformers==5.18.0
+truststore==0.10.4
+typer==0.27.2
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.5
+tzlocal==5.4.4
+urllib3==2.8.0
+vine==5.1.0
+wcwidth==0.9.2
+django-storages==1.14.4

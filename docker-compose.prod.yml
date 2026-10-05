@@ -53,6 +53,7 @@ services:
         INSTALL_ML: "true"
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
+        INSTALL_S3: "${INSTALL_S3:-false}"
     command: python manage.py migrate --noinput
     env_file:
       - .env
@@ -74,6 +75,7 @@ services:
         INSTALL_ML: "true"
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
+        INSTALL_S3: "${INSTALL_S3:-false}"
     restart: unless-stopped
 
     # Every flag stays at the SAME indentation as `gunicorn`.
@@ -190,6 +192,7 @@ services:
         INSTALL_ML: "true"
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
+        INSTALL_S3: "${INSTALL_S3:-false}"
     restart: unless-stopped
 
     # --max-tasks-per-child recycles workers so a slow leak in a native
@@ -197,7 +200,9 @@ services:
     # thousands of documents.
     # Ingestion only. Low concurrency because OCR is CPU-bound: more
     # processes than cores makes every document slower, not the batch
-    # faster. Scale with `--scale worker=N` across machines instead.
+    # faster. `--scale worker=N` adds processes on THIS host only; workers on
+    # a second machine need shared Postgres, Redis and S3, which this overlay
+    # does not provide (docs/release/multi-host-validation.md).
     command: >
       celery -A config worker
       --loglevel=INFO
@@ -252,6 +257,7 @@ services:
         INSTALL_ML: "true"
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
+        INSTALL_S3: "${INSTALL_S3:-false}"
     restart: unless-stopped
 
     command: >

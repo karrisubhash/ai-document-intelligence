@@ -8,5 +8,10 @@
 # Kept out of requirements.txt for the same reason the ML layer is: a
 # single-node deployment needs neither, and a dependency that is always
 # installed is a dependency that always has to be patched.
-django-storages==1.14.4
-boto3==1.35.49
+#
+# Versions come from constraints.txt. boto3 was pinned here to 1.35.49 while
+# the LLM layer installed a newer one, so building both layers conflicted.
+#
+# In the image: build with INSTALL_S3=true (see the Dockerfile).
+django-storages
+boto3

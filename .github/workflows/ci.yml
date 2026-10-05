@@ -113,8 +113,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r backend/requirements.txt
-          pip install -r backend/requirements-ml.txt
+          pip install -r backend/requirements.txt -c backend/constraints.txt
+          pip install -r backend/requirements-ml.txt -c backend/constraints.txt
 
       - name: Migration check
         # A model change without a migration passes every test and then
@@ -250,7 +250,7 @@ jobs:
 
       - name: Install
         run: |
-          pip install -r backend/requirements.txt
+          pip install -r backend/requirements.txt -c backend/constraints.txt
           pip install bandit pip-audit
 
       - name: No document or database file can enter an image
@@ -317,8 +317,8 @@ jobs:
 
       - name: Install
         run: |
-          pip install -r backend/requirements.txt
-          pip install -r backend/requirements-ml.txt
+          pip install -r backend/requirements.txt -c backend/constraints.txt
+          pip install -r backend/requirements-ml.txt -c backend/constraints.txt
 
       - name: Migrate
         run: python backend/manage.py migrate --noinput

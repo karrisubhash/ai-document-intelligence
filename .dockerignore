@@ -36,6 +36,13 @@ frontend/node_modules/
 frontend/dist/
 frontend/e2e/.results/
 
+# Seeded benchmarks: generated from the committed templates against a local
+# database, so they carry that database's ids. The image ships the
+# templates; the gate seeds its own. Named exactly - a benchmark-*.json
+# glob would also drop the tracked *.template.json files.
+evaluation/benchmark.json
+evaluation/benchmark-v2.json
+
 # Model data: datasets and artifacts are mounted, never baked in
 ai/classification/data/
 ai/classification/runs/

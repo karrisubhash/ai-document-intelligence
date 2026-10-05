@@ -245,7 +245,7 @@ Requires Python 3.12, PostgreSQL, Redis, plus `poppler` and `tesseract` on `PATH
 ```bash
 python -m venv backend/venv
 source backend/venv/Scripts/activate      # Windows Git Bash
-pip install -r backend/requirements-lock.txt
+pip install -r backend/requirements.txt -c backend/constraints.txt
 
 cp .env.example .env                      # set POSTGRES_HOST=localhost, REDIS_HOST=localhost,
                                           # CELERY_BROKER_URL=redis://localhost:6379/0,
@@ -300,7 +300,7 @@ Pipeline limits, in `backend/config/settings.py`:
 Both are also readable from the environment. Enabling the trained classifier:
 
 ```bash
-pip install -r backend/requirements-ml.txt      # sklearn + joblib, optional
+pip install -r backend/requirements-ml.txt -c backend/constraints.txt   # sklearn + joblib, optional
 export DOCUMENT_CLASSIFIER=documents.processing.classification.text_classifier.TextDocumentClassifier
 ```
 
@@ -728,7 +728,7 @@ real provider is one setting (`RAG_ANSWERER`).
 ### Generative answers (optional)
 
 ```bash
-pip install -r backend/requirements-llm.txt
+pip install -r backend/requirements-llm.txt -c backend/constraints.txt
 
 # Either the first-party API...
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -1254,7 +1254,7 @@ build.
 ### Object storage (§15)
 
 ```bash
-pip install -r backend/requirements-s3.txt
+pip install -r backend/requirements-s3.txt -c backend/constraints.txt   # in the image: INSTALL_S3=true
 export AWS_STORAGE_BUCKET_NAME=adi-documents      # switches every FileField
 export AWS_S3_ENDPOINT_URL=https://minio.internal # for MinIO or Ceph; omit for AWS
 ```

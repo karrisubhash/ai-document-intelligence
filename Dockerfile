@@ -26,9 +26,13 @@ RUN apt-get update \
 # paths are created and handed to it at the end of this file.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app
 
+# Every install below runs against backend/constraints.txt: the exact versions
+# the tested image contained. Without it a rebuild installed whatever was
+# newest that day, so staging and production could run code nobody tested.
+COPY backend/constraints.txt /app/constraints.txt
 COPY backend/requirements.txt /app/requirements.txt
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -c /app/constraints.txt
 
 # Optional ML layer for running a trained classifier in-process. Off by
 # default so a deployment that does not classify carries none of the
@@ -41,7 +45,7 @@ ARG INSTALL_ML=false
 COPY backend/requirements-ml.txt /app/requirements-ml.txt
 
 RUN if [ "$INSTALL_ML" = "true" ]; then \
-        pip install --no-cache-dir -r /app/requirements-ml.txt; \
+        pip install --no-cache-dir -r /app/requirements-ml.txt -c /app/constraints.txt; \
     else \
         echo "Skipping ML dependencies (INSTALL_ML=$INSTALL_ML)"; \
     fi
@@ -63,7 +67,7 @@ ARG INSTALL_LLM=false
 COPY backend/requirements-llm.txt /app/requirements-llm.txt
 
 RUN if [ "$INSTALL_LLM" = "true" ]; then \
-        pip install --no-cache-dir -r /app/requirements-llm.txt; \
+        pip install --no-cache-dir -r /app/requirements-llm.txt -c /app/constraints.txt; \
     else \
         echo "Skipping LLM dependencies (INSTALL_LLM=$INSTALL_LLM)"; \
     fi
@@ -85,10 +89,31 @@ ARG INSTALL_LOCAL=false
 COPY backend/requirements-local.txt /app/requirements-local.txt
 
 RUN if [ "$INSTALL_LOCAL" = "true" ]; then \
-        pip install --no-cache-dir -r /app/requirements-local.txt; \
+        pip install --no-cache-dir -r /app/requirements-local.txt -c /app/constraints.txt; \
     else \
         echo "Skipping local model dependencies (INSTALL_LOCAL=$INSTALL_LOCAL)"; \
     fi
+
+# Optional S3 layer: django-storages, for AWS_STORAGE_BUCKET_NAME (S3 or any
+# S3-compatible store such as MinIO). Settings select the S3 backend whenever
+# a bucket is configured, and no image used to install it - so turning S3 on
+# failed at the first file operation.
+#
+#   INSTALL_S3=true docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+ARG INSTALL_S3=false
+
+COPY backend/requirements-s3.txt /app/requirements-s3.txt
+
+RUN if [ "$INSTALL_S3" = "true" ]; then \
+        pip install --no-cache-dir -r /app/requirements-s3.txt -c /app/constraints.txt; \
+    else \
+        echo "Skipping S3 dependencies (INSTALL_S3=$INSTALL_S3)"; \
+    fi
+
+# The base image's pip (25.0.1) carries published advisories, and a scanner
+# reads the final filesystem. Upgraded after the dependency layers so the
+# pinned installs above stay cached; nothing at runtime runs pip.
+RUN pip install --no-cache-dir "pip==26.2.1"
 
 # Where sentence-transformers caches downloaded weights. Named explicitly
 # so it can be a mounted volume: without one, every rebuilt container

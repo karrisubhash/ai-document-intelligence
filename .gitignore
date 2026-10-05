@@ -35,3 +35,6 @@ evaluation/benchmark-*.json
 # Written by `manage.py ingest_corpus`, keyed by database document id, for
 # the same reason.
 evaluation/corpus_manifest.json
+
+# Written by the rollback procedure (docs/release/staging-runbook.md, step 18)
+.release-previous
