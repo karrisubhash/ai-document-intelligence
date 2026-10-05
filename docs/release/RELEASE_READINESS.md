@@ -113,7 +113,7 @@ and 7.7 GiB VM.
 |---|---|
 | Branch | `platform-completion`, ahead of `master`. Nothing is pushed: **there is no remote** |
 | Working tree | clean after the release commits |
-| Tracked files | 357. The only binary is `frontend/e2e/fixtures/scanned-circular.png`, a synthetic OCR fixture. No documents, dumps, databases, certificates or keys in the tree or in history |
+| Tracked files | 364. The only binary is `frontend/e2e/fixtures/scanned-circular.png`, a synthetic OCR fixture. No documents, dumps, databases, certificates or keys in the tree or in history |
 | Secrets | none in tracked files (pattern scan: API keys, AWS keys, private keys, tokens). `.env` is gitignored and excluded from images. CI uses only labelled placeholders |
 | Generated data | seeded benchmarks, corpus manifests, media and backups are gitignored and excluded from images |
 | **Local Docker images** | `ai-document-intelligence-backend:latest` and `-worker:latest`, two weeks old, contain a real institutional PDF in `/app/backend/media/` and run as root. **They must never be pushed to any registry.** Recommended: delete them (`docker rmi`); that is the owner's call. The `adi-rc-*` images are the verified release candidate |
