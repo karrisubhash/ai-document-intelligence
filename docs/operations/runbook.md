@@ -162,6 +162,23 @@ Three production defects were found by this run and fixed (with regression check
    forwarding arrives from the (private) gateway address. It is no longer served at the
    edge at all.
 
+**Re-run (local, 2026-10-05)** on rebuilt images, after the second review round, with
+3,000 documents already loaded:
+
+| Check | Result |
+|---|---|
+| Browser suite + CSP probe over TLS | **8/8**. The suite now reloads an admin screen, and the probe requires every admin path to come back as the app shell carrying the policy |
+| Prometheus targets | backend `up`, and **both workers `up`** on :9100; `adi_pipeline_jobs_total` counts the suite's uploads (it was never collected before) |
+| `docker restart` of backend and worker | both healthy, no crash loop; the metrics tmpfs is owned by `app` |
+| `--scale backend=2` without touching nginx | both replicas served edge traffic (17 and 19 of the requests); the second was added after nginx started |
+
+This run found one more defect, in the new code: the document page now watches the
+processing timeline instead of polling the document, and treated its first sighting as
+the baseline. A document that finished before the first check stayed on "Processing" for
+good. It was fixed, with a test that fails without the fix. The host reboot between the
+two runs exposed the tmpfs restart defect described in
+[deployment](../deployment/production.md).
+
 The same checks, against a real host, are what the CI `smoke` job does once
 `STAGING_URL` is set.
 

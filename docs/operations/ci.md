@@ -32,8 +32,8 @@ job's commands have been executed locally, which proves the commands, not the YA
 | Job | Executed locally | Notes |
 |---|---|---|
 | lint | yes | clean |
-| tests | yes, in the backend image against pgvector/pg16 and Redis 7 | ≈890 tests, 0 failures |
-| frontend | yes | 32 tests; build and typecheck clean |
+| tests | yes, in the backend image against pgvector/pg16 and Redis 7 | 960 tests, 0 failures |
+| frontend | yes | 44 tests; build and typecheck clean |
 | e2e | yes, in an equivalent form | 7/7 against the dev stack and 7/7 plus the CSP probe against the production stack on a disposable database, with the **full** AI configuration (local models) rather than CI's offline baselines. The CI variant — hashing embeddings, bundled Chromium — has not been run |
 | security | partially | `check_deployment_config.py` and the `.dockerignore` check run; `check --deploy` and bandit are as before |
 | ai-regression | yes | see [evaluation/README.md](../evaluation/README.md) |

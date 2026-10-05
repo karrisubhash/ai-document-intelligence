@@ -224,7 +224,14 @@ export default function DocumentDetailPage() {
       api.processing(documentId).then(
         (jobs) => {
           const latest = jobs.length ? `${jobs[0].id}:${jobs[0].status}` : "";
-          if (lastRun.current !== null && latest !== lastRun.current) resource.reload();
+          // A run that has SETTLED always reloads the document, whatever was
+          // seen before: a fast document can finish before the first poll,
+          // and treating that first sighting as the baseline left the page
+          // on "Processing" for good (caught by the browser suite).
+          const settled = jobs.length > 0 && !["QUEUED", "PROCESSING"].includes(jobs[0].status);
+          if (settled || (lastRun.current !== null && latest !== lastRun.current)) {
+            resource.reload();
+          }
           lastRun.current = latest;
         },
         () => undefined, // a missed tick; the next one tries again

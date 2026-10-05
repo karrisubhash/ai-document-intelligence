@@ -25,9 +25,9 @@ design rationale; these pages are the working reference.
 
 | Claim | Status |
 |---|---|
-| Backend test suite (≈890 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly |
-| Frontend typecheck, 32 unit/component tests, production build | **Verified** locally, and inside the web image build |
-| Browser end-to-end suite against the live stack (real worker, real models) | **Verified** locally: 7/7 on the dev stack and 7/7 on the production stack over TLS, plus a CSP-violation probe |
+| Backend test suite (960 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly |
+| Frontend typecheck, 44 unit/component tests, production build | **Verified** locally, and inside the web image build |
+| Browser end-to-end suite against the live stack (real worker, real models) | **Verified** locally: 7/7 on the dev stack; on the production stack over TLS, 7/7 plus a CSP-violation probe (2026-10-05, after the second review round) |
 | Backup, restore into an empty database, and a working search on the restored copy | **Verified** locally on a disposable database |
 | Production compose stack boots behind nginx with TLS | **Verified locally** with a self-signed certificate: browser suite 7/7 over TLS, no CSP violations. **Real domain and Let's Encrypt: unverified** |
 | GitHub Actions pipeline | **Never executed** — the repository has no remote. Job commands were run locally; see [operations/ci.md](operations/ci.md) |
