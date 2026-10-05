@@ -325,10 +325,10 @@ jobs:
       # or LLM configuration is evaluated against a fixed benchmark, and the
       # result is compared to the previous one.
       #
-      # This step is a placeholder until a governed evaluation set exists.
-      # The harness, the metrics and --fail-on-regression are all built and
-      # tested; what is missing is a dataset, and inventing one here would
-      # produce a number that looks like a quality gate and is not.
+      # The governed dataset is institutional-seed v1 (evaluation/
+      # benchmark.template.json), scored with the offline baselines so the
+      # result is deterministic. Run locally the same way on 2026-10-05: no
+      # regression against evaluation/baseline.json.
       # The corpus is ingested through the REAL pipeline, so the benchmark
       # scores extraction, chunking, table detection and retrieval as they
       # are actually configured - not a fixture inserted straight into the

@@ -57,10 +57,10 @@
       "cases": 10
     },
     "generation": {
-      "groundedness": 0.9704,
+      "groundedness": 0.9709,
       "citation_accuracy": 0.9444,
       "source_coverage": 1.0,
-      "token_overlap": 0.7639,
+      "token_overlap": 0.9306,
       "abstention_accuracy": 0.9231,
       "coverage": 0.6923,
       "answered": 9,

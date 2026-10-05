@@ -42,9 +42,13 @@ evaluation/baseline.json --fail-on-regression`. Any quality metric below the com
 baseline (beyond `--tolerance`) fails the build; latency is reported but only gated with
 `--gate-latency`.
 
-**Measured 2026-09-30:** the offline configuration reproduces the committed v1 baseline
-exactly (Recall@1 1.000, coverage 0.692, abstention accuracy 0.923, citation accuracy
-0.944), so the gate passes on the current code.
+**Measured 2026-10-05**, run exactly as the CI job runs it (a fresh database, the corpus
+seeded through the real pipeline, offline baselines): no regression. Recall@1 1.000,
+coverage 0.692, abstention accuracy 0.923, citation accuracy 0.944, as committed. Two values
+rose - groundedness 0.9704 -> 0.9709 and token overlap 0.764 -> 0.931 (two answers now
+match their reference more closely) - and the committed baseline was raised to them, so a
+later change cannot quietly give the gain back. The offline pipeline is deterministic, so
+the higher bar costs no flakiness.
 
 ## Results — configurations compared
 
