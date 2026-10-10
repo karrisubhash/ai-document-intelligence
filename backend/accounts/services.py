@@ -68,13 +68,22 @@ def rename_department(department: Department, new_name: str) -> Department:
     # like "physics" beside "Physics" apart). Renaming onto that spelling
     # would merge the two and silently widen access between them - the
     # decision the migration left to an administrator, made by a typo.
-    for model in (UserProfile, Document, Conversation, EvaluationDataset):
-        if model.objects.filter(department=new_name).exists():
-            raise DepartmentNameInUse(
-                f"Records already use the department name {new_name!r}; renaming "
-                f"{old_name!r} onto it would merge two departments. Reassign "
-                f"those records first if they belong together."
-            )
+    # The audit trail of a deleted document keeps its department too, and
+    # is rewritten below, so a spelling that survives only there would
+    # merge that trail into the renamed department's view.
+    in_use = (
+        any(
+            model.objects.filter(department=new_name).exists()
+            for model in (UserProfile, Document, Conversation, EvaluationDataset)
+        )
+        or AuditLog.objects.filter(document_department=new_name).exists()
+    )
+    if in_use:
+        raise DepartmentNameInUse(
+            f"Records already use the department name {new_name!r}; renaming "
+            f"{old_name!r} onto it would merge two departments. Reassign "
+            f"those records first if they belong together."
+        )
 
     department.name = new_name
     department.save(update_fields=["name", "updated_at"])
