@@ -6,9 +6,11 @@ break, because the Kaggle RVL-CDIP mirrors are community re-uploads
 whose internal structure has not been verified from this machine.
 """
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ai.classification.training import submit_kaggle, train_vision
 from ai.common import kaggle
@@ -133,9 +135,10 @@ class CanonicalTreeTests(unittest.TestCase):
         self.assertEqual(train_vision.locate_canonical_images(self.root), base)
 
     def test_official_relative_paths_resolve_against_it(self):
-        base = self.build()
+        self.build()
         relative = "imagesa/a/a/a/aaa06d00/50486482-6482.tif"
-        self.assertTrue((base / relative).exists())
+        image_root = train_vision.locate_canonical_images(self.root)
+        self.assertTrue((image_root / relative).exists())
 
     def test_a_single_images_dir_is_not_mistaken_for_the_tree(self):
         # One "images" folder is an ImageFolder mirror, not the canonical
@@ -290,6 +293,15 @@ class KernelAssemblyTests(unittest.TestCase):
 
 
 class CredentialTests(unittest.TestCase):
+    def setUp(self):
+        # load_credentials prefers these over any file, and the README has
+        # the Kaggle user export them in the same shell that runs the tests.
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("KAGGLE_USERNAME", None)
+        os.environ.pop("KAGGLE_KEY", None)
+
     def test_missing_credentials_explain_where_to_get_them(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "kaggle.json"
@@ -312,6 +324,50 @@ class CredentialTests(unittest.TestCase):
 
             with self.assertRaises(kaggle.CredentialsMissing):
                 kaggle.load_credentials(path)
+
+
+class KernelOutputDownloadTests(unittest.TestCase):
+    """File names in the /kernels/output listing come from the remote side."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.destination = self.root / "artifacts"
+
+    def download(self, *names):
+        listing = {
+            "files": [
+                {"fileName": name, "url": f"https://x.invalid/{name}"} for name in names
+            ]
+        }
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b"payload"
+
+        with (
+            mock.patch.object(kaggle, "request", return_value=listing),
+            mock.patch.object(kaggle.urllib.request, "urlopen", return_value=response),
+        ):
+            return kaggle.download_output(
+                "owner", "slug", kaggle.Credentials("u", "k"), self.destination
+            )
+
+    def test_output_in_a_subdirectory_is_written_beneath_the_destination(self):
+        # train_vision.py writes the official split files to splits/ in the
+        # kernel's working directory, so they come back with that prefix.
+        written = self.download("model.pt", "splits/train.txt")
+
+        self.assertEqual(written, ["model.pt", "splits/train.txt"])
+        self.assertEqual(
+            (self.destination / "splits" / "train.txt").read_bytes(), b"payload"
+        )
+
+    def test_a_name_that_escapes_the_destination_is_refused(self):
+        with self.assertRaises(kaggle.KaggleError):
+            self.download("../escaped.txt")
+
+        self.assertFalse((self.root / "escaped.txt").exists())
 
 
 if __name__ == "__main__":

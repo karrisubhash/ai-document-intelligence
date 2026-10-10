@@ -27,6 +27,9 @@ VERSION = "aharley/rvl_cdip@main"
 BASE_URL = "https://huggingface.co/datasets/aharley/rvl_cdip/resolve/main/data"
 IMAGES_ARCHIVE = "rvl-cdip.tar.gz"
 IMAGES_BYTES = 38_760_000_000
+# The tarball's top-level directory. Split-file paths (imagesq/q/o/c/...)
+# are relative to it, not to the directory the tarball is unpacked into.
+IMAGES_DIR = "images"
 
 SPLIT_FILES = {"train": "train.txt", "validation": "val.txt", "test": "test.txt"}
 
@@ -45,7 +48,7 @@ def download_images(data_dir: Path) -> Path:
         f"RVL-CDIP has no partial-download option."
     )
     archive = download(f"{BASE_URL}/{IMAGES_ARCHIVE}", data_dir / IMAGES_ARCHIVE)
-    return extract_tar(archive, data_dir, marker="images")
+    return extract_tar(archive, data_dir, marker=IMAGES_DIR)
 
 
 def prepare(
@@ -68,7 +71,7 @@ def prepare(
         samples = parse_split_lines(
             (data_dir / filename).read_text(encoding="utf-8", errors="replace"),
             split,
-            data_dir,
+            data_dir / IMAGES_DIR,
             "image",
             source=filename,
         )
@@ -85,9 +88,13 @@ def prepare(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, default=Path("data/rvl_cdip"))
     parser.add_argument(
-        "--manifest-dir", type=Path, default=Path("data/manifests/rvl_cdip")
+        "--data-dir", type=Path, default=Path("ai/classification/data/rvl_cdip")
+    )
+    parser.add_argument(
+        "--manifest-dir",
+        type=Path,
+        default=Path("ai/classification/data/manifests/rvl_cdip"),
     )
     parser.add_argument("--per-class", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)

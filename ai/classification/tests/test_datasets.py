@@ -1,8 +1,12 @@
+import contextlib
+import io
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from ai.classification.datasets import integrity
+from ai.classification.datasets import integrity, rvl_cdip
 from ai.classification.datasets.base import (
     LABELS,
     DatasetSample,
@@ -12,6 +16,7 @@ from ai.classification.datasets.base import (
     sample_id_from_path,
     write_manifest,
 )
+from ai.common import download as downloader
 
 
 def sample(sample_id, split="train", label="invoice", input_type="text", path="/x.txt"):
@@ -74,6 +79,11 @@ class SplitFileParsingTests(unittest.TestCase):
     def test_rejects_non_numeric_label(self):
         with self.assertRaises(ValueError):
             parse_split_lines("a.tif invoice", "train", Path("/d"), "image")
+
+    def test_rejects_negative_label(self):
+        # Python indexing would otherwise read -1 as LABELS[15], "memo".
+        with self.assertRaises(ValueError):
+            parse_split_lines("a.tif -1", "train", Path("/d"), "image")
 
     def test_handles_spaces_in_filenames(self):
         samples = parse_split_lines("dir/a file.tif 3", "train", Path("/d"), "image")
@@ -240,6 +250,100 @@ class IntegrityTests(unittest.TestCase):
     def test_missing_manifest_is_an_error(self):
         report = integrity.check(self.manifests / "nope")
         self.assertFalse(report.ok)
+
+
+class RvlCdipLayoutTests(unittest.TestCase):
+    """The image tarball unpacks to images/imagesX/..., while the split
+    files list imagesX/... - so manifests must resolve against images/."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.data_dir = Path(self.tmp.name) / "rvl_cdip"
+        self.data_dir.mkdir()
+        self.manifests = Path(self.tmp.name) / "manifests"
+
+    def build_archive(self, relative_paths):
+        archive = self.data_dir / rvl_cdip.IMAGES_ARCHIVE
+        with tarfile.open(archive, "w:gz") as tar:
+            for relative in relative_paths:
+                info = tarfile.TarInfo(f"images/{relative}")
+                info.size = 4
+                tar.addfile(info, io.BytesIO(b"II*\x00"))
+        return archive
+
+    def test_manifests_point_at_the_extracted_images(self):
+        relative = {
+            "train": "imagesa/a/b/c/abc01a00/1.tif",
+            "validation": "imagesb/b/c/d/bcd02b00/2.tif",
+            "test": "imagesc/c/d/e/cde03c00/3.tif",
+        }
+        archive = self.build_archive(relative.values())
+        for split, filename in rvl_cdip.SPLIT_FILES.items():
+            (self.data_dir / filename).write_text(
+                f"{relative[split]} 11\n", encoding="utf-8"
+            )
+
+        with (
+            mock.patch.object(rvl_cdip, "download_split_files"),
+            mock.patch.object(rvl_cdip, "download", return_value=archive),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            rvl_cdip.prepare(self.data_dir, self.manifests, with_images=True)
+
+        for split in rvl_cdip.SPLIT_FILES:
+            rows = read_manifest(self.manifests / f"{split}.csv")
+            self.assertEqual(len(rows), 1)
+            self.assertTrue(Path(rows[0].input_path).is_file(), rows[0].input_path)
+
+    def test_default_paths_are_under_the_ignored_data_root(self):
+        # ai/classification/data/ is git-ignored; data/ at the repo root is
+        # not, and that is where 38.76 GB of images would otherwise land.
+        with (
+            mock.patch.object(rvl_cdip, "prepare", return_value={}) as prepare,
+            mock.patch("sys.argv", ["rvl_cdip"]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            rvl_cdip.main()
+
+        data_dir, manifest_dir = prepare.call_args.args
+        root = Path("ai/classification/data")
+        self.assertTrue(data_dir.is_relative_to(root), data_dir)
+        self.assertTrue(manifest_dir.is_relative_to(root), manifest_dir)
+
+
+class DownloadTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.destination = Path(self.tmp.name) / "archive.tar.gz"
+
+    def fetch(self, body, content_length):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Content-Length": str(content_length)}
+        # Ends in b"", which is also what http.client returns - rather than
+        # raising - when the server hangs up before Content-Length bytes.
+        response.read.side_effect = io.BytesIO(body).read
+
+        with (
+            mock.patch.object(
+                downloader.urllib.request, "urlopen", return_value=response
+            ),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            return downloader.download("https://example.invalid/a", self.destination)
+
+    def test_a_truncated_transfer_is_not_cached(self):
+        with self.assertRaises(OSError):
+            self.fetch(b"hello", content_length=10)
+
+        # Otherwise every later run reports it as cached and skips the fetch.
+        self.assertFalse(self.destination.exists())
+
+    def test_a_complete_transfer_lands_in_place(self):
+        self.fetch(b"hello", content_length=5)
+        self.assertEqual(self.destination.read_bytes(), b"hello")
 
 
 if __name__ == "__main__":

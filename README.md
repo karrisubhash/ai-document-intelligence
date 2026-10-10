@@ -1736,8 +1736,8 @@ claim about real institutional documents; those require a separate, governed eva
 Subset-trained numbers are also not comparable to published RVL-CDIP figures, which use the
 official 320k/40k/40k split. Published anchors for that split — 82.23% text
 bag-of-words, 90.24% VGG16, 92.69% DiT-large — are quoted here for orientation only.
-They are **not** recorded in any config in this repository, and nothing in the code
-compares against them.
+They are recorded under `reference:` in the two configs for sanity-checking, and nothing
+in the code compares against them.
 
 ---
 

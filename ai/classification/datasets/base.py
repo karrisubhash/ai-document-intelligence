@@ -90,7 +90,11 @@ def parse_split_lines(
             raise ValueError(f"{source}:{line_number}: cannot parse {line!r}")
 
         try:
-            label = LABELS[int(label_index)]
+            index = int(label_index)
+            if index < 0:
+                # LABELS[-1] would silently read as "memo".
+                raise IndexError(index)
+            label = LABELS[index]
         except (ValueError, IndexError) as exc:
             raise ValueError(
                 f"{source}:{line_number}: bad label index {label_index!r}"

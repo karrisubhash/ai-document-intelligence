@@ -120,6 +120,15 @@ class RenderingTests(unittest.TestCase):
         self.assertIn("macro-F1", render(report))
         self.assertIn("invoice", render_confusion(report))
 
+    def test_confusion_column_numbers_sit_over_their_columns(self):
+        # Every cell is right-aligned to the same width, so the header of
+        # column indices and each row must end at the same character.
+        report = evaluate(["invoice", "letter"], ["invoice", "memo"], LABELS)
+        header, rule, *rows = render_confusion(report).splitlines()
+
+        self.assertEqual({len(row) for row in rows}, {len(header)})
+        self.assertEqual(len(rule), len(header))
+
 
 if __name__ == "__main__":
     unittest.main()

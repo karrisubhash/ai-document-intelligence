@@ -189,6 +189,7 @@ def download_output(
         params={"userName": owner, "kernelSlug": slug},
     )
 
+    root = destination.resolve()
     written = []
     for entry in listing.get("files") or []:
         name = entry.get("fileName") or entry.get("fileNameNullable")
@@ -196,11 +197,22 @@ def download_output(
         if not name or not url:
             continue
 
+        # The name comes from the API. Output written to a subdirectory of
+        # /kaggle/working (train_vision.py's splits/) arrives as a relative
+        # path whose parent does not exist here yet, and nothing stops a
+        # name from climbing out of `destination` altogether.
+        target = (destination / name).resolve()
+        if not target.is_relative_to(root):
+            raise KaggleError(
+                f"refusing kernel output {name!r}: it resolves outside {destination}"
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+
         req = urllib.request.Request(
             url, headers={"User-Agent": "ai-document-intelligence/0.1"}
         )
         with urllib.request.urlopen(req, timeout=600) as response:
-            (destination / name).write_bytes(response.read())
+            target.write_bytes(response.read())
         written.append(name)
 
     return written

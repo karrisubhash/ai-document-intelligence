@@ -36,6 +36,13 @@ def download(url: str, destination: Path, *, force: bool = False) -> Path:
                     )
         print("", file=sys.stderr)
 
+    # urllib returns b"" rather than raising when the connection drops
+    # before Content-Length bytes arrive. Renaming that short file would
+    # cache a truncated archive as complete, and every later run would
+    # skip the download and fail inside tarfile instead.
+    if total and written != total:
+        raise OSError(f"incomplete download of {url}: {written} of {total} bytes")
+
     partial.replace(destination)
     return destination
 

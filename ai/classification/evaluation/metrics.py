@@ -209,6 +209,6 @@ def render_confusion(report: EvaluationReport, width: int = 5) -> str:
 
     for i, label in enumerate(report.labels):
         row = "".join(f"{value:>{width}}" for value in report.confusion[i])
-        lines.append(f"{i:>2} {label:<22}{row}")
+        lines.append(f"{i:>2} {label:<23}{row}")
 
     return "\n".join(lines)
