@@ -39,6 +39,11 @@ MAX_FIGURES_PER_PAGE = 50
 # something a reader would call a figure.
 MIN_DIMENSION = 32
 
+# Larger than this is a corrupt dictionary, not an image - and it is past
+# what the integer width/height columns hold, so recording it failed the
+# whole document at the final write instead of being skipped here.
+MAX_DIMENSION = 2**31 - 1
+
 
 @dataclass(frozen=True)
 class DetectedFigure:
@@ -66,6 +71,9 @@ def _image_xobjects(page):
         if xobjects is None:
             return []
         xobjects = xobjects.get_object()
+        # Inside the guard: an /XObject entry that is an array, a number or
+        # null has no keys(), and raised past it to fail the document.
+        names = list(xobjects.keys())[:MAX_FIGURES_PER_PAGE]
     except SoftTimeLimitExceeded:
         # Swallowed with the rest, the task would run on to the HARD limit,
         # be killed, and leave the job PROCESSING until someone noticed.
@@ -77,7 +85,7 @@ def _image_xobjects(page):
         return []
 
     found = []
-    for name in list(xobjects.keys())[:MAX_FIGURES_PER_PAGE]:
+    for name in names:
         try:
             obj = xobjects[name].get_object()
             if obj.get("/Subtype") != "/Image":
@@ -110,6 +118,8 @@ def detect_pdf_figures(file_path: str, open_reader) -> list:
         index = 0
         for width, height in _image_xobjects(page):
             if width < MIN_DIMENSION or height < MIN_DIMENSION:
+                continue
+            if width > MAX_DIMENSION or height > MAX_DIMENSION:
                 continue
             figures.append(
                 DetectedFigure(

@@ -6,9 +6,12 @@ each past mistake stays visible in one place.
 """
 
 import os
+from io import BytesIO
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
+from django.db.models import F
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
@@ -19,6 +22,7 @@ from documents import authorization
 from documents.models import (
     ClassificationResult,
     Document,
+    DocumentChunk,
     DocumentContent,
     ExtractionResult,
     PageContent,
@@ -31,7 +35,11 @@ from documents.processing.field_extraction.matching import FOUND, INVALID, find_
 from documents.processing.field_extraction.rule_extractor import DEFAULT_PACK
 from documents.processing.field_extraction.schemas import load_pack_data
 from documents.processing.pipeline import run_pipeline
+from documents.processing.scanning import DocumentInfected
+from documents.processing.scanning import service as scanning_service
+from documents.processing.scanning.heuristic import EICAR
 from documents.tests import MEDIA_ROOT, make_user
+from documents.tests_ingestion import make_pdf_bytes
 
 RULE_EXTRACTOR = (
     "documents.processing.field_extraction.rule_extractor.RuleFieldExtractor"
@@ -561,3 +569,197 @@ class AdminIsDepartmentScopedTests(TestCase):
                 document.id in visible,
                 authorization.can_view_document(self.cs, document),
             )
+
+
+def encrypted_pdf_bytes(user_password="secret"):
+    """A real password-protected PDF. RC4, which pypdf writes and reads
+    without the optional cryptography package."""
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    for page in PdfReader(BytesIO(make_pdf_bytes(["Salary statement"]))).pages:
+        writer.add_page(page)
+    writer.encrypt(
+        user_password=user_password, owner_password="owner", algorithm="RC4-128"
+    )
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class PipelineInputRegressionTests(TestCase):
+    """Inputs the pipeline mishandled: each one either escaped as
+    UNEXPECTED_ERROR, or completed with content that was not there."""
+
+    def setUp(self):
+        self.user = make_user("regress_inputs")
+
+    def job_for(self, payload, name):
+        document = Document.objects.create(title=name, owner=self.user)
+        version = document.versions.create(
+            version_number=1,
+            file=ContentFile(payload, name=name),
+            file_name=name,
+            file_size=len(payload),
+            uploaded_by=self.user,
+        )
+        document.current_version = version
+        document.save(update_fields=["current_version"])
+        return ProcessingJob.objects.create(document_version=version)
+
+    def failed_job(self, payload, name):
+        job = self.job_for(payload, name)
+        with self.assertRaises(StageError):
+            run_pipeline(job.id)
+        job.refresh_from_db()
+        return job
+
+    def stored_page(self, payload, name):
+        job = self.job_for(payload, name)
+        run_pipeline(job.id)
+        return PageContent.objects.get(content__processing_job=job)
+
+    def test_a_password_protected_pdf_is_a_document_fault_not_a_bug(self):
+        """pypdf builds a reader for an encrypted file without complaint and
+        fails only when the page tree is first read - which VALIDATION did
+        unguarded, so the job said UNEXPECTED_ERROR, "File has not been
+        decrypted", for what is a property of the upload."""
+        job = self.failed_job(encrypted_pdf_bytes(), "statement.pdf")
+
+        self.assertEqual(job.error_code, ErrorCode.CORRUPT_DOCUMENT)
+        self.assertEqual(job.current_stage, ProcessingJob.Stage.VALIDATION)
+        self.assertIn("password", job.error_message)
+
+    def test_an_unreadable_page_tree_is_corrupt_not_unexpected(self):
+        # Same length, so every xref offset still holds: only the catalog's
+        # /Pages reference now points at an object that does not exist.
+        broken = make_pdf_bytes(["Body"]).replace(b"/Pages 2 0 R", b"/Pages 9 0 R", 1)
+
+        job = self.failed_job(broken, "tree.pdf")
+
+        self.assertEqual(job.error_code, ErrorCode.CORRUPT_DOCUMENT)
+        self.assertEqual(job.current_stage, ProcessingJob.Stage.VALIDATION)
+
+    def test_a_nul_only_text_layer_is_sent_to_ocr_not_stored_blank(self):
+        """has_text was judged before NULs were stripped: a page whose text
+        layer was nothing but NUL bytes skipped OCR, passed the "some text
+        must exist" check, and the document COMPLETED with a blank page."""
+        with mock.patch(
+            "documents.processing.extractors.ocr.ocr_pdf_page",
+            return_value="Notice recovered by OCR",
+        ) as ocr:
+            page = self.stored_page(make_pdf_bytes(["\x00\x00\x00\x00"]), "nul.pdf")
+
+        ocr.assert_called_once()
+        self.assertEqual(page.extraction_method, PageContent.ExtractionMethod.OCR)
+        self.assertEqual(page.text, "Notice recovered by OCR")
+
+    def test_a_text_file_of_nul_bytes_is_empty_not_completed(self):
+        """The same check, where nothing can be OCR'd: it has to fail."""
+        job = self.failed_job(b"\x00\x00 \x00\n", "zeroed.txt")
+
+        self.assertEqual(job.error_code, ErrorCode.EMPTY_EXTRACTION)
+
+    def test_character_count_describes_the_stored_text(self):
+        """Counted before the NULs were stripped, so it disagreed with the
+        very row it was stored on."""
+        page = self.stored_page(b"Attendance\x00 minimum is 75 percent.\n", "n.txt")
+
+        self.assertNotIn("\x00", page.text)
+        self.assertEqual(page.character_count, len(page.text))
+
+    def test_a_utf8_byte_order_mark_is_not_stored_as_text(self):
+        """Decoded as plain utf-8, the BOM survived as U+FEFF at the start of
+        page 1 - where the shipped issuing_authority rule, anchored with ^,
+        then failed to match the document's first line."""
+        page = self.stored_page(
+            b"\xef\xbb\xbfFrom: Office of the Registrar\n", "bom.txt"
+        )
+
+        self.assertTrue(page.text.startswith("From: Office of the Registrar"))
+
+    def test_a_quarantine_is_malware_on_the_stage_event_too(self):
+        """DocumentInfected is a scanner exception and carries no code, and
+        the pipeline mapped it only when writing the job: the job said
+        MALWARE_DETECTED while the SCANNING event (and the failure metric)
+        said UNEXPECTED_ERROR."""
+        scanning_service.reset_scanner_cache()
+        self.addCleanup(scanning_service.reset_scanner_cache)
+        job = self.job_for(EICAR, "eicar.txt")
+
+        scanner = "documents.processing.scanning.heuristic.HeuristicScanner"
+        with override_settings(DOCUMENT_SCANNER=scanner):
+            with self.assertRaises(DocumentInfected):
+                run_pipeline(job.id)
+
+        job.refresh_from_db()
+        event = job.events.get(stage=ProcessingJob.Stage.SCANNING)
+        self.assertEqual(job.error_code, ErrorCode.MALWARE_DETECTED)
+        self.assertEqual(event.metadata["error_code"], ErrorCode.MALWARE_DETECTED)
+
+    def test_a_later_quarantine_withdraws_the_live_text(self):
+        """A version that completed before a scanner was configured, then
+        quarantined on a rerun, kept current_content - so search and chat,
+        which filter on it, went on answering from the flagged file."""
+        scanning_service.reset_scanner_cache()
+        self.addCleanup(scanning_service.reset_scanner_cache)
+        first = self.job_for(EICAR, "eicar.txt")
+        version = first.document_version
+
+        run_pipeline(first.id)  # no scanner configured: processed as text
+        version.refresh_from_db()
+        self.assertIsNotNone(version.current_content_id)
+
+        rerun = ProcessingJob.objects.create(document_version=version)
+        scanner = "documents.processing.scanning.heuristic.HeuristicScanner"
+        with override_settings(DOCUMENT_SCANNER=scanner):
+            with self.assertRaises(DocumentInfected):
+                run_pipeline(rerun.id)
+
+        version.refresh_from_db()
+        self.assertIsNone(version.current_content_id)
+        self.assertEqual(version.extracted_text, "")
+        # Withdrawn, not destroyed: the earlier pass is still on record.
+        self.assertEqual(version.contents.count(), 1)
+        self.assertFalse(
+            DocumentChunk.objects.filter(
+                document_version=version,
+                document_content=F("document_version__current_content"),
+            ).exists()
+        )
+
+    def test_a_later_quarantine_withdraws_the_text_from_the_api_too(self):
+        """With the pointer cleared, the API fell back to the version's
+        newest pass - the condemned one - for content, chunks and tables,
+        and served any of its passages by id through `source`."""
+        scanning_service.reset_scanner_cache()
+        self.addCleanup(scanning_service.reset_scanner_cache)
+        first = self.job_for(EICAR, "eicar.txt")
+        version = first.document_version
+        document = version.document
+        document.department = self.user.profile.department
+        document.save(update_fields=["department"])
+
+        run_pipeline(first.id)
+        chunk = DocumentChunk.objects.filter(document_version=version).first()
+        self.assertIsNotNone(chunk)
+
+        rerun = ProcessingJob.objects.create(document_version=version)
+        scanner = "documents.processing.scanning.heuristic.HeuristicScanner"
+        with override_settings(DOCUMENT_SCANNER=scanner):
+            with self.assertRaises(DocumentInfected):
+                run_pipeline(rerun.id)
+
+        client = APIClient()
+        client.force_authenticate(self.user)
+        content = client.get(reverse("document-content", args=[document.id]))
+        self.assertEqual(content.status_code, status.HTTP_404_NOT_FOUND)
+        chunks = client.get(reverse("document-chunks", args=[document.id]))
+        self.assertEqual(chunks.status_code, status.HTTP_404_NOT_FOUND)
+        tables = client.get(reverse("document-tables", args=[document.id]))
+        self.assertEqual(tables.json(), [])
+        source = client.get(
+            reverse("document-source", args=[document.id]), {"chunk": chunk.id}
+        )
+        self.assertEqual(source.status_code, status.HTTP_404_NOT_FOUND)

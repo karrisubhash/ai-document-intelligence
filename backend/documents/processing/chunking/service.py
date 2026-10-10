@@ -54,7 +54,12 @@ def get_provider():
 
     try:
         provider = _load_provider(path)
-    except ImportError as exc:
+    except Exception as exc:
+        # Not only ImportError. A provider may refuse to construct - Bedrock
+        # does over a column Titan cannot fill - and every caller handles
+        # exactly NotConfigured and Unavailable. Anything else escaped raw:
+        # search answered 500 instead of falling back to its lexical half,
+        # and indexing failed as UNEXPECTED_ERROR.
         raise EmbeddingProviderUnavailable(
             f"Could not load embedding provider {path!r}: {exc}"
         ) from exc

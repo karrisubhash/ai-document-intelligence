@@ -538,3 +538,28 @@ class TableAnsweringTests(TestCase):
                 page.text[chunk.character_start : chunk.character_end],
                 "a cited chunk no longer re-slices out of its page",
             )
+
+    def test_a_provider_that_refuses_to_load_leaves_the_lexical_half(self):
+        """The Bedrock provider refuses to construct over the shipped 384
+        column, and get_provider let that RuntimeError through: every search
+        answered 500 while the lexical half could have served it."""
+        from documents.search import service as search_service
+
+        with override_settings(
+            DOCUMENT_EMBEDDING_PROVIDER=f"{__name__}.RefusingProvider"
+        ):
+            response = search_service.search(self.user, "tuition")
+
+        self.assertTrue(response.hits)
+        self.assertTrue(
+            any("embedding provider unavailable" in note for note in response.notes),
+            response.notes,
+        )
+
+
+class RefusingProvider:
+    """Refuses to construct, as the Bedrock provider does over a column
+    width Titan cannot produce."""
+
+    def __init__(self):
+        raise RuntimeError("Titan cannot produce 384 dimensions")

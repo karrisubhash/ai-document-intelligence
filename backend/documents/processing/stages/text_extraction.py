@@ -1,6 +1,7 @@
 from documents.models import PageContent
 from documents.processing.context import ExtractedPage, FileType, StageResult
 from documents.processing.extractors import docx, pdf, plain_text
+from documents.processing.normalize import strip_nul
 
 
 def run(context) -> StageResult:
@@ -44,7 +45,9 @@ def _extract_pdf_text(context) -> StageResult:
     page_texts = pdf.extract_pages(context.file_path)
 
     for index, text in enumerate(page_texts, start=1):
-        has_text = bool(text.strip())
+        # Decided on the text that will be stored: a text layer of nothing
+        # but NUL bytes is no text layer, and the page belongs to OCR.
+        has_text = bool(strip_nul(text).strip())
         context.pages.append(
             ExtractedPage(
                 page_number=index,

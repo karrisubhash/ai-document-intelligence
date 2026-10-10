@@ -12,12 +12,12 @@ from documents.processing.scanning import (
 def run(context) -> StageResult:
     """Scan the stored file before anything parses it.
 
-    Placed after VALIDATION and before TEXT_EXTRACTION deliberately.
-    Validation has already established the file is a supported type of a
-    sane size, which is cheap; extraction is the step that hands bytes to
-    pypdf, python-docx and Tesseract, which is where a malicious file would
-    get its chance. "Malware scanning before trusted processing" in section
-    13 means exactly this boundary.
+    Placed after INGESTION and BEFORE VALIDATION deliberately - see the
+    ordering note on pipeline.CONTENT_STAGES. Ingestion has already bounded
+    the file's size; validation is where pypdf first parses it, and
+    extraction then hands the bytes to python-docx and Tesseract, which is
+    where a malicious file would get its chance. "Malware scanning before
+    trusted processing" in section 13 means exactly this boundary.
     """
     try:
         result = scan_file(context.file_path)

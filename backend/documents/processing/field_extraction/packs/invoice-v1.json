@@ -1,6 +1,6 @@
 {
   "name": "invoice",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "The specification's section 11.2 worked example, shipped as a pack rather than as code. It is NOT the default: this platform's document types are institutional and there is no INVOICE type. It exists to prove the schema mechanism satisfies the spec's example without inventing a document type the platform does not ingest, and to give the tests a second pack to exercise.",
   "schemas": {
     "OTHER": [
@@ -16,7 +16,7 @@
         "name": "invoice_number",
         "description": "Invoice identifier.",
         "patterns": [
-          "invoice\\s*(?:no\\.?|number|#)\\s*[:\\-]?\\s*(?P<value>[A-Z0-9][A-Z0-9./\\-]{1,40})"
+          "invoice\\s*(?:no\\.?|number|#)\\s*(?:[:\\-]\\s*)?(?P<value>(?=[A-Z./\\-]*\\d)[A-Z0-9][A-Z0-9./\\-]{1,40})"
         ],
         "max_length": 60
       },
@@ -24,7 +24,7 @@
         "name": "invoice_date",
         "description": "Date of issue.",
         "patterns": [
-          "(?:invoice\\s+)?date\\s*[:\\-]?\\s*(?P<value>\\d{1,2}[/\\-.]\\d{1,2}[/\\-.]\\d{2,4})"
+          "(?:invoice\\s+)?date\\s*(?:[:\\-]\\s*)?(?P<value>\\d{1,2}[/\\-.]\\d{1,2}[/\\-.]\\d{2,4})"
         ],
         "max_length": 40
       },
@@ -32,7 +32,7 @@
         "name": "total",
         "description": "Invoice total.",
         "patterns": [
-          "(?:total|amount\\s+due|grand\\s+total)\\s*[:\\-]?\\s*(?:[A-Z]{3}\\s*|[$\\u20ac\\u00a3\\u20b9]\\s*)?(?P<value>\\d[\\d,]*(?:\\.\\d{2})?)"
+          "(?:\\btotal|amount\\s+due|grand\\s+total)\\s*(?:[:\\-]\\s*)?(?:[A-Z]{3}\\s*|[$\\u20ac\\u00a3\\u20b9]\\s*)?(?P<value>\\d[\\d,]*(?:\\.\\d{2})?)"
         ],
         "value_pattern": "\\d[\\d,]*(?:\\.\\d{2})?",
         "max_length": 24
@@ -41,8 +41,8 @@
         "name": "currency",
         "description": "Currency the total is denominated in.",
         "patterns": [
-          "currency\\s*[:\\-]?\\s*(?P<value>[A-Z]{3})\\b",
-          "(?:total|amount\\s+due)\\s*[:\\-]?\\s*(?P<value>[A-Z]{3})\\s*\\d"
+          "currency\\s*(?:[:\\-]\\s*)?(?P<value>[A-Z]{3})\\b",
+          "(?:total|amount\\s+due)\\s*(?:[:\\-]\\s*)?(?P<value>[A-Z]{3})\\s*\\d"
         ],
         "value_pattern": "[A-Z]{3}",
         "max_length": 3

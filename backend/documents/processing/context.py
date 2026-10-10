@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from documents.processing.normalize import strip_nul
+
 
 class FileType:
     PDF = "PDF"
@@ -18,7 +20,10 @@ class ExtractedPage:
 
     @property
     def has_text(self) -> bool:
-        return bool(self.text.strip())
+        # Judged on the text as it will be stored. A page of nothing but NUL
+        # bytes counted as text, and was then written out blank once the
+        # pipeline stripped them.
+        return bool(strip_nul(self.text).strip())
 
 
 @dataclass

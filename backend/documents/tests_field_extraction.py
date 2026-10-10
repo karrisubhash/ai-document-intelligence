@@ -312,7 +312,7 @@ class RuleExtractorTests(TestCase):
             document_content_id=7, document_type="CIRCULAR", pages=[(1, "")]
         )
         self.assertEqual(prediction.schema_name, "institutional")
-        self.assertEqual(prediction.schema_version, "1.0.0")
+        self.assertEqual(prediction.schema_version, "1.0.1")
         self.assertEqual(prediction.input_reference, "document_content:7")
 
     def test_document_type_without_a_schema_raises_no_schema(self):
@@ -362,6 +362,110 @@ class RuleExtractorTests(TestCase):
         for value in prediction.values:
             expected = 1.0 if value.status == ExtractedField.Status.FOUND else 0.0
             self.assertEqual(value.confidence, expected)
+
+
+def shipped(document_type, text, pack=DEFAULT_PACK):
+    """{field: FieldMatch} for one page under a shipped pack."""
+    schema = load_pack(pack).for_document_type(document_type)
+    return {match.field_name: match for match in find_fields(schema, [(1, text)])}
+
+
+class ShippedPackPatternTests(TestCase):
+    """The shipped rules against ordinary prose, not just tidy headers.
+
+    Under IGNORECASE an identifier class like [A-Z0-9][A-Z0-9./-]{1,40}
+    accepts any word, and a keyword without a boundary matches inside a
+    longer word - so body text produced confident values that are not on
+    the page as values at all.
+    """
+
+    def test_an_identifier_field_does_not_capture_an_ordinary_word(self):
+        cases = [
+            (
+                "REGULATION",
+                "This regulation shall come into force.",
+                "regulation_number",
+            ),
+            ("CIRCULAR", "This circular notifies all students.", "circular_number"),
+            (
+                "POLICY",
+                "This policy notes that leave is advance-only.",
+                "policy_number",
+            ),
+            ("FORM", "The application form number is printed above.", "form_number"),
+        ]
+        for document_type, text, name in cases:
+            with self.subTest(name):
+                # Previously "shall", "tifies", "tes" and "is".
+                self.assertEqual(shipped(document_type, text)[name].status, NOT_FOUND)
+
+    def test_real_identifiers_are_still_found(self):
+        cases = [
+            (
+                "REGULATION",
+                "Regulation No: REG-2024-07",
+                "regulation_number",
+                "REG-2024-07",
+            ),
+            ("CIRCULAR", "Circular No. 12/2024", "circular_number", "12/2024"),
+            ("CIRCULAR", "Ref: ACAD/77/2024", "circular_number", "ACAD/77/2024"),
+            ("POLICY", "Policy Number: POL-12", "policy_number", "POL-12"),
+            ("FORM", "Form No: F-12", "form_number", "F-12"),
+        ]
+        for document_type, text, name, value in cases:
+            with self.subTest(name):
+                match = shipped(document_type, text)[name]
+                self.assertEqual((match.status, match.value), (FOUND, value))
+
+    def test_form_title_needs_the_whole_word_for(self):
+        """'Application for' matched the start of 'Application Form' and
+        reported a title beginning mid-word: 'm for Hostel Admission'."""
+        match = shipped("FORM", "Application Form for Hostel Admission")["form_title"]
+        self.assertEqual((match.status, match.value), (FOUND, "Hostel Admission"))
+
+    def test_credits_are_not_truncated(self):
+        """'Total credits 120' was stored as credits 12."""
+        self.assertEqual(
+            shipped("SYLLABUS", "Total credits 120 are required.")["credits"].status,
+            NOT_FOUND,
+        )
+        self.assertEqual(shipped("SYLLABUS", "Credits: 3.5")["credits"].value, "3.5")
+
+    def test_a_date_inside_another_word_is_not_the_issue_date(self):
+        match = shipped(
+            "CIRCULAR",
+            "Circular No: REG/2024/117\nDate: 14/03/2024\n"
+            "This supersedes the notice updated 02/01/2024.\n",
+        )["issue_date"]
+        self.assertEqual((match.status, match.value), (FOUND, "14/03/2024"))
+
+    def test_a_subtotal_is_not_the_invoice_total(self):
+        match = shipped(
+            "OTHER",
+            "Subtotal: 1,000.00\nTotal: 1,180.00\n",
+            pack=DEFAULT_PACK.parent / "invoice-v1.json",
+        )["total"]
+        self.assertEqual((match.status, match.value), (FOUND, "1,180.00"))
+
+    def test_long_whitespace_after_a_keyword_does_not_stall_matching(self):
+        """Catastrophic backtracking. `\\s*[:\\-]?\\s*` can split a blank run
+        between its two halves in every possible way, `regulation`'s three
+        such halves made it cubic, and `^\\s*` re-scanned every following
+        blank line from every line start: a few thousand blanks cost the
+        worker minutes per page. Each now has one way to match, so this
+        page is milliseconds of work."""
+        import time
+
+        blanks = " " * 1500 + "~\n"
+        page = "regulation" + blanks + "circular no" + blanks + "\n" * 5000
+        packs = [DEFAULT_PACK, DEFAULT_PACK.parent / "invoice-v1.json"]
+
+        started = time.monotonic()
+        for path in packs:
+            pack = load_pack(path)
+            for schema in pack.schemas.values():
+                find_fields(schema, [(1, page)])
+        self.assertLess(time.monotonic() - started, 5.0)
 
 
 # --- The service boundary ---------------------------------------------------

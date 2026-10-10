@@ -276,7 +276,9 @@ def _persist_content(job, context) -> DocumentContent:
                     page_number=page.page_number,
                     text=strip_nul(page.text),
                     extraction_method=page.extraction_method,
-                    character_count=len(page.text),
+                    # Counted on the stored text, NULs gone, or the count
+                    # disagrees with the very row it describes.
+                    character_count=len(strip_nul(page.text)),
                     metadata=page.metadata,
                 )
                 for page in context.pages
@@ -433,7 +435,7 @@ def _mark_failed(job: ProcessingJob, document: Document, exc: Exception) -> None
     quarantined = isinstance(exc, DocumentInfected)
 
     job.status = ProcessingJob.Status.FAILED
-    job.error_code = ErrorCode.MALWARE_DETECTED if quarantined else _error_code(exc)
+    job.error_code = _error_code(exc)
     job.error_message = str(exc)
     job.completed_at = timezone.now()
     job.save(
@@ -445,6 +447,17 @@ def _mark_failed(job: ProcessingJob, document: Document, exc: Exception) -> None
             "updated_at",
         ]
     )
+
+    if quarantined:
+        # Quarantine withdraws the version's text, not only its file. A
+        # version that completed once and was flagged on a later run kept
+        # its live pass, so search and chat - which filter on this pointer -
+        # went on answering from a file now judged hostile while only the
+        # download was refused. A later run that passes the scan publishes
+        # again - the same rule is_quarantined applies.
+        DocumentVersion.objects.filter(pk=job.document_version_id).update(
+            current_content=None, extracted_text=""
+        )
 
     # A quarantined document is not a failed one. FAILED invites a retry;
     # QUARANTINED is a decision not to touch the file, and collapsing the
@@ -465,6 +478,12 @@ def _is_terminal(job: ProcessingJob) -> bool:
 
 
 def _error_code(exc: Exception) -> str:
+    # A scanner verdict, not a StageError, so it carries no code of its
+    # own. Mapped here rather than only on the job: the SCANNING event and
+    # the failure metric both read this, and recorded every quarantine as
+    # UNEXPECTED_ERROR while the job itself said MALWARE_DETECTED.
+    if isinstance(exc, DocumentInfected):
+        return ErrorCode.MALWARE_DETECTED
     # Celery raises this INSIDE the task when the soft time limit passes,
     # so it arrives here like any other exception. Named, because
     # UNEXPECTED_ERROR on a job that simply took too long sends whoever

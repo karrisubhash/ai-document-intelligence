@@ -51,6 +51,47 @@ class FakeReader:
         self.pages = pages
 
 
+def text_pdf(resources: bytes, *extra_objects: bytes) -> bytes:
+    """A one-page PDF with a real text layer and extra page resources.
+
+    Built by hand, like tests_ingestion.make_pdf_bytes, so a test can put
+    exactly the malformed image dictionary it needs on the page - which no
+    authoring library will write. `extra_objects` are numbered from 6.
+    """
+    stream = b"BT /F1 24 Tf 72 700 Td (Notice text) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 3 0 R >> " + resources + b" >> "
+        b"/Contents 5 0 R >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+        *extra_objects,
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return bytes(out)
+
+
+def image_object(width: int, height: int = 100) -> bytes:
+    return (
+        b"<< /Type /XObject /Subtype /Image /Width %d /Height %d "
+        b"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\n"
+        b"stream\n\x00\nendstream" % (width, height)
+    )
+
+
 class PdfFigureDetectionTests(TestCase):
     def reader_for(self, *pages):
         return lambda _path: FakeReader(list(pages))
@@ -134,6 +175,23 @@ class PdfFigureDetectionTests(TestCase):
         figures = detector.detect_pdf_figures("ignored.pdf", self.reader_for(many))
 
         self.assertLessEqual(len(figures), detector.MAX_FIGURES_PER_PAGE)
+
+    def test_an_xobject_entry_that_is_not_a_dictionary_is_not_an_error(self):
+        page = FakePage({"/Resources": FakePage({"/XObject": FakeIndirect([1, 2])})})
+
+        self.assertEqual(
+            detector.detect_pdf_figures("ignored.pdf", self.reader_for(page)), []
+        )
+
+    def test_a_dimension_the_column_cannot_hold_is_not_a_figure(self):
+        figures = detector.detect_pdf_figures(
+            "ignored.pdf",
+            self.reader_for(
+                page_with(image_xobject(2**31, 480), image_xobject(640, 2**31 - 1))
+            ),
+        )
+
+        self.assertEqual([(f.width, f.height) for f in figures], [(640, 2**31 - 1)])
 
 
 class DetectorDispatchTests(TestCase):
@@ -219,6 +277,31 @@ class PipelineFigureTests(TestCase):
         )
         event = job.events.get(stage=ProcessingJob.Stage.LAYOUT_ANALYSIS)
         self.assertIn("figure", event.message.lower())
+
+    def test_a_malformed_xobject_entry_does_not_fail_the_document(self):
+        """An /XObject entry holding an array instead of a dictionary raised
+        AttributeError outside the detector's guard and failed the whole
+        job - after the text layer had been read perfectly well."""
+        _, version, job = self.process(text_pdf(b"/XObject [3 0 R]"), "notice.pdf")
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, ProcessingJob.Status.COMPLETED)
+        self.assertEqual(
+            DocumentFigure.objects.filter(document_version=version).count(), 0
+        )
+
+    def test_a_width_too_large_to_store_does_not_fail_the_document(self):
+        """A declared /Width of three billion passed every check, then
+        overflowed the integer column at the final write and failed a
+        document whose text had extracted cleanly."""
+        body = text_pdf(b"/XObject << /Im0 6 0 R >>", image_object(3_000_000_000))
+        _, version, job = self.process(body, "notice.pdf")
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, ProcessingJob.Status.COMPLETED)
+        self.assertEqual(
+            DocumentFigure.objects.filter(document_version=version).count(), 0
+        )
 
 
 @override_settings(MEDIA_ROOT=MEDIA_ROOT)
