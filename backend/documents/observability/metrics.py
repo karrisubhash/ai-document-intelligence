@@ -43,7 +43,28 @@ REGISTRY = CollectorRegistry()
 # API calls, multi-second OCR, and a long tail for big scanned PDFs. The
 # default Prometheus buckets top out at 10s and would put every slow OCR in
 # one +Inf bucket, which hides exactly the latency worth seeing.
-FAST_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+#
+# FAST covers the request path, whose ceiling is 120 s (gunicorn --timeout,
+# nginx proxy_read_timeout), not 10 s: a hosted answerer call alone may take
+# RAG_ANSWERER_TIMEOUT x (RETRIES + 1). It used to stop at 10, and
+# histogram_quantile never reports above the highest finite bucket, so a
+# chat P95 alert "above 10 s" could not fire however slow answers became.
+FAST_BUCKETS = (
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    30.0,
+    60.0,
+    120.0,
+)
 SLOW_BUCKETS = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0)
 RATIO_BUCKETS = (0.0, 0.1, 0.25, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0)
 

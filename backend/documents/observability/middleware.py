@@ -22,6 +22,18 @@ _NAMED_GROUP = re.compile(r"\(\?P<(\w+)>[^)]*\)")
 # counting them buries the traffic anyone actually cares about.
 UNMEASURED = ("/metrics", "/health/")
 
+# `request.method` is whatever token the client sent - nginx and gunicorn
+# both pass an unknown method through, and the view answers 405 - so as a
+# raw label it is caller-controlled: one new series per invented method,
+# the same unbounded growth `_route` exists to prevent.
+KNOWN_METHODS = frozenset(
+    {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"}
+)
+
+
+def _method(request) -> str:
+    return request.method if request.method in KNOWN_METHODS else "OTHER"
+
 
 def _route(request) -> str:
     """The URL PATTERN, not the resolved path.
@@ -97,10 +109,10 @@ class ObservabilityMiddleware:
             duration = time.monotonic() - started
             if not self._skip(request):
                 metrics.http_requests.labels(
-                    method=request.method, route=_route(request), status="500"
+                    method=_method(request), route=_route(request), status="500"
                 ).inc()
                 metrics.http_duration.labels(
-                    method=request.method, route=_route(request)
+                    method=_method(request), route=_route(request)
                 ).observe(duration)
             log_event(
                 logger,
@@ -119,13 +131,12 @@ class ObservabilityMiddleware:
         if not self._skip(request):
             route = _route(request)
             status = str(response.status_code)
+            method = _method(request)
 
             metrics.http_requests.labels(
-                method=request.method, route=route, status=status
+                method=method, route=route, status=status
             ).inc()
-            metrics.http_duration.labels(method=request.method, route=route).observe(
-                duration
-            )
+            metrics.http_duration.labels(method=method, route=route).observe(duration)
 
             if response.status_code == 429:
                 metrics.throttled_requests.labels(route=route).inc()

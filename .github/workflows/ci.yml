@@ -112,9 +112,14 @@ jobs:
             poppler-utils tesseract-ocr postgresql-client
 
       - name: Install dependencies
+        # PyYAML for the AI suite: the training code reads its config with
+        # it, and neither file above pulls it in (in the image it arrives
+        # with the local-model layer). Without it test_text_baseline failed
+        # to import and the step - and every job behind `tests` - failed.
         run: |
           pip install -r backend/requirements.txt -c backend/constraints.txt
           pip install -r backend/requirements-ml.txt -c backend/constraints.txt
+          pip install PyYAML -c backend/constraints.txt
 
       - name: Migration check
         # A model change without a migration passes every test and then
@@ -132,7 +137,7 @@ jobs:
       - name: AI suite
         # No Django and no database, but it does need scikit-learn, joblib and
         # PyYAML (test_text_baseline imports the training code), which the
-        # requirements-ml install above provides.
+        # install step above provides.
         run: python -m unittest discover -s ai/classification/tests -t .
         env:
           PYTHONPATH: .

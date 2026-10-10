@@ -212,6 +212,21 @@ class MiddlewareTests(TestCase):
 
         self.assertEqual(_route(Request()), "/api/documents/{pk}/")
 
+    def test_an_invented_http_method_cannot_mint_a_series(self):
+        """The method is client-chosen: nginx and gunicorn pass an unknown
+        token through, so as a raw label every invented one was a new
+        series - unbounded cardinality for an anonymous caller."""
+        self.client.generic("BREWCOFFEE", reverse("document-list"))
+
+        methods = {
+            sample.labels.get("method")
+            for collector in (metrics.http_requests, metrics.http_duration)
+            for metric in collector.collect()
+            for sample in metric.samples
+        }
+        self.assertNotIn("BREWCOFFEE", methods)
+        self.assertIn("OTHER", methods)
+
     def test_metrics_and_health_are_not_counted(self):
         """Scrape and probe traffic would bury the traffic anyone cares
         about."""
@@ -244,6 +259,47 @@ class MetricsEndpointTests(TestCase):
     @override_settings(METRICS_ALLOWED_IPS=["127.0.0.1"])
     def test_an_allowed_address_still_gets_through(self):
         self.assertEqual(self.client.get("/metrics").status_code, 200)
+
+
+class LatencyBucketTests(TestCase):
+    """histogram_quantile never reports above the highest finite bucket, so
+    a request-path latency must be able to land in one. With 10 s as the
+    top, a chat P95 alert "above 10 s" could never fire."""
+
+    @staticmethod
+    def finite_buckets(collector, **labels):
+        return {
+            sample.labels["le"]: sample.value
+            for metric in collector.collect()
+            for sample in metric.samples
+            if sample.name.endswith("_bucket")
+            and sample.labels["le"] != "+Inf"
+            and all(sample.labels.get(k) == v for k, v in labels.items())
+        }
+
+    def test_a_slow_answer_is_counted_by_a_finite_bucket(self):
+        probes = (
+            ("rag", metrics.rag_duration, {}),
+            ("llm", metrics.llm_duration, {"model": "bucket-probe"}),
+            ("rag_stage", metrics.rag_stage_duration, {"stage": "bucket-probe"}),
+            (
+                "http",
+                metrics.http_duration,
+                {"method": "GET", "route": "/bucket-probe"},
+            ),
+        )
+        for name, collector, labels in probes:
+            with self.subTest(name):
+                target = collector.labels(**labels) if labels else collector
+                before = self.finite_buckets(collector, **labels)
+                # A hosted answerer well inside its 60 s timeout.
+                target.observe(45.0)
+                after = self.finite_buckets(collector, **labels)
+
+                self.assertTrue(
+                    any(after[le] > before.get(le, 0.0) for le in after),
+                    f"45 s fell only into +Inf: {sorted(after, key=float)}",
+                )
 
 
 # --- Telemetry wired into the system ----------------------------------------
