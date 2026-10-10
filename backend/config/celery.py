@@ -1,7 +1,12 @@
 import os
 
 from celery import Celery
-from celery.signals import worker_init, worker_process_init, worker_process_shutdown
+from celery.signals import (
+    setup_logging,
+    worker_init,
+    worker_process_init,
+    worker_process_shutdown,
+)
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
@@ -35,6 +40,24 @@ app.autodiscover_tasks()
 # of line someone tidies away later, and this is where a reader already
 # looks to find out which modules the worker knows about.
 app.autodiscover_tasks(related_name="tasks_reindex")
+
+
+@setup_logging.connect
+def keep_django_logging(**kwargs):
+    """Workers log through settings.LOGGING, like every other process.
+
+    With no receiver here, Celery hijacks the root logger at worker start:
+    it drops the StructuredFormatter handler and installs its own plain
+    one, so every record outside `adi.*` - task failures with their
+    exception text and tracebacks, Django, libraries - left the worker as
+    uncapped prose instead of capped JSON. Any receiver stops the hijack.
+    The level is LOG_LEVEL's; the worker's --loglevel no longer applies.
+    """
+    from logging.config import dictConfig
+
+    from django.conf import settings
+
+    dictConfig(settings.LOGGING)
 
 
 @worker_process_init.connect

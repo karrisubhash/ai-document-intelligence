@@ -332,3 +332,39 @@ class DepartmentDisclosureTests(AdminTestCase):
             UserProfile.objects.filter(department="Physics").count(),
             2,  # phy_admin and phy_student, untouched
         )
+
+
+class DjangoAdminUserCreationTests(TestCase):
+    def test_adding_a_user_with_profile_fields_filled_in_does_not_crash(self):
+        """Saving the new user creates its profile (accounts.signals), and
+        the profile inline on the add page then inserted a second one for
+        the same user: an IntegrityError, and a 500, whenever a role or
+        department was filled in there."""
+        self.client.force_login(User.objects.create_superuser("owner", password=STRONG))
+
+        response = self.client.post(
+            reverse("admin:auth_user_add"),
+            {
+                "username": "via_django_admin",
+                "usable_password": "true",
+                "password1": STRONG,
+                "password2": STRONG,
+                "profile-TOTAL_FORMS": "1",
+                "profile-INITIAL_FORMS": "0",
+                "profile-MIN_NUM_FORMS": "0",
+                "profile-MAX_NUM_FORMS": "1",
+                "profile-0-role": Role.FACULTY,
+                "profile-0-department": "Physics",
+                "_save": "Save",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        created = User.objects.get(username="via_django_admin")
+        self.assertEqual(UserProfile.objects.filter(user=created).count(), 1)
+        # Django's add flow continues on the change page, where the inline
+        # edits the profile the signal made.
+        self.assertContains(
+            self.client.get(reverse("admin:auth_user_change", args=[created.pk])),
+            'name="profile-0-role"',
+        )

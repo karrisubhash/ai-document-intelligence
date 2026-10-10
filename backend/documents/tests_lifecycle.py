@@ -762,6 +762,41 @@ class VersionDownloadTests(APITestCase):
             self.download(version="one").status_code, status.HTTP_400_BAD_REQUEST
         )
 
+    def test_a_padded_version_is_audited_as_the_version_served(self):
+        """The view strips the parameter before choosing the version; the
+        audit row read it unstripped, so it recorded no version for a
+        download of version 1 - as if the current version had been served."""
+        response = self.download(version=" 1")
+
+        self.assertEqual(b"".join(response.streaming_content), b"first edition")
+        entry = AuditLog.objects.filter(
+            action=AuditLog.Action.DOCUMENT_DOWNLOAD, document=self.document
+        ).latest("id")
+        self.assertEqual(entry.metadata.get("version_number"), 1)
+
+    def test_a_digit_int_cannot_parse_does_not_crash_the_access_policy(self):
+        """The superscript two is a digit to str.isdigit() and not to int():
+        the policy turned ?version=² into an unhandled ValueError - a 500."""
+        from types import SimpleNamespace
+
+        from rest_framework.request import Request
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        from documents.permissions import DocumentAccessPolicy
+
+        raw = APIRequestFactory().get("/", {"version": "²"})
+        force_authenticate(raw, user=self.owner)
+
+        allowed = DocumentAccessPolicy().has_object_permission(
+            Request(raw), SimpleNamespace(action="download"), self.document
+        )
+
+        self.assertTrue(allowed)
+        entry = AuditLog.objects.filter(
+            action=AuditLog.Action.DOCUMENT_DOWNLOAD, document=self.document
+        ).latest("id")
+        self.assertNotIn("version_number", entry.metadata)
+
 
 @override_settings(**EAGER)
 class StructureEndpointTests(APITestCase):

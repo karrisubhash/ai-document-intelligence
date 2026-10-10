@@ -136,6 +136,22 @@ class UploadAdmissionTests(APITestCase):
         self.assertEqual(Document.objects.count(), 1)
         self.assertEqual(DocumentVersion.objects.count(), 1)
 
+    def test_an_overlong_client_content_type_does_not_fail_the_upload(self):
+        """The part's Content-Type is the client's to write, at any length,
+        and past mime_type's 100 characters the insert raised DataError."""
+        upload = SimpleUploadedFile(
+            "regulations.pdf", PDF, content_type="application/" + "x" * 150
+        )
+        with self.captureOnCommitCallbacks(execute=False):
+            response = self.client.post(
+                reverse("document-list"),
+                {"title": "Admission Fixture", "file": upload},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(len(DocumentVersion.objects.get().mime_type), 100)
+
     # --- The other door ---------------------------------------------------
 
     def test_the_version_endpoint_enforces_the_same_rule(self):

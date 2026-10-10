@@ -16,7 +16,7 @@ import os
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from documents import storage
 from documents.models import (
@@ -261,3 +261,47 @@ class BackendReportingTests(TestCase):
 
     def test_a_filesystem_backend_is_not_reported_as_remote(self):
         self.assertFalse(storage.is_remote())
+
+
+class S3SettingsTests(SimpleTestCase):
+    """The S3 options settings.py builds when a bucket is configured.
+
+    Settings are read once per process, so each case loads them in a fresh
+    interpreter, exactly as a deployment would.
+    """
+
+    def region_option(self, region):
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        env = {**os.environ, "AWS_STORAGE_BUCKET_NAME": "adi-documents"}
+        env.pop("AWS_S3_REGION_NAME", None)
+        if region is not None:
+            env["AWS_S3_REGION_NAME"] = region
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import config.settings as s; "
+                "print(repr(s.STORAGES['default']['OPTIONS']['region_name']))",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        return result.stdout.strip()
+
+    def test_an_unset_region_is_left_to_the_aws_chain(self):
+        """boto3 given region_name="" builds https://s3..amazonaws.com and
+        raises "Invalid endpoint" - every upload failed against AWS itself.
+        None lets it read AWS_DEFAULT_REGION or the instance's region."""
+        for region in (None, ""):
+            with self.subTest(region=region):
+                self.assertEqual(self.region_option(region), "None")
+
+    def test_a_configured_region_is_passed_through(self):
+        self.assertEqual(self.region_option("eu-west-1"), "'eu-west-1'")

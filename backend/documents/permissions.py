@@ -97,8 +97,10 @@ class DocumentAccessPolicy(permissions.BasePermission):
             # Which version was fetched is part of what happened. Only a
             # well-formed number is recorded - the raw parameter is caller
             # input and has no business in the audit trail unvalidated.
-            requested = request.query_params.get("version", "")
-            if view.action == "download" and requested.isdigit():
+            # Stripped as the download view strips it, and isdecimal() rather
+            # than isdigit(): "²" is a digit that int() refuses - a 500.
+            requested = request.query_params.get("version", "").strip()
+            if view.action == "download" and requested.isdecimal():
                 metadata["version_number"] = int(requested[:9])
             # After a delete nothing else records what the document was.
             if view.action == "destroy" and allowed:

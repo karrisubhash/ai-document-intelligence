@@ -685,6 +685,35 @@ class SecretKeyGuardTests(SimpleTestCase):
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
 
+class WorkerLoggingTests(SimpleTestCase):
+    def test_a_worker_keeps_the_structured_formatter(self):
+        """Celery hijacked the root logger at worker start and replaced the
+        StructuredFormatter handler with its own plain one, so every record
+        outside `adi.*` left the worker uncapped. Run in a fresh interpreter:
+        the logging setup is process-wide and done once."""
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script = (
+            "import logging, django; django.setup(); "
+            "from config.celery import app; app.log.setup(loglevel='INFO'); "
+            "print([type(h.formatter).__name__ for h in logging.getLogger().handlers])"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "DJANGO_SETTINGS_MODULE": "config.settings"},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        self.assertEqual(result.stdout.strip(), "['StructuredFormatter']")
+
+
 class TransportSecurityTests(SimpleTestCase):
     """The production transport settings, asserted from inside the suite.
 

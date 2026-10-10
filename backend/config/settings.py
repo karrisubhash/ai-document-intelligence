@@ -325,7 +325,10 @@ if AWS_STORAGE_BUCKET_NAME:
             "BACKEND": "storages.backends.s3.S3Storage",
             "OPTIONS": {
                 "bucket_name": AWS_STORAGE_BUCKET_NAME,
-                "region_name": os.getenv("AWS_S3_REGION_NAME", ""),
+                # None, never "", when unset: boto3 builds the endpoint
+                # https://s3..amazonaws.com from an empty region and every
+                # call raises, where None falls back to the AWS chain.
+                "region_name": os.getenv("AWS_S3_REGION_NAME", "") or None,
                 # Set for MinIO, Ceph or any other S3-compatible service;
                 # left empty for AWS itself.
                 "endpoint_url": os.getenv("AWS_S3_ENDPOINT_URL", "") or None,

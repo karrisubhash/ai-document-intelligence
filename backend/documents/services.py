@@ -121,7 +121,9 @@ def create_document_version(
             file=file_obj,
             file_name=file_obj.name,
             file_size=file_obj.size,
-            mime_type=getattr(file_obj, "content_type", "") or "",
+            # The client's claim, of any length; past the column's 100 it
+            # raised DataError and the upload answered 500.
+            mime_type=(getattr(file_obj, "content_type", "") or "")[:100],
             checksum=checksum,
             uploaded_by=uploaded_by,
         )
