@@ -93,6 +93,35 @@ describe("request", () => {
     expect(error.message).toMatch(/could not be reached/);
   });
 
+  it("reports an unreachable server as status 0 even before there is a CSRF cookie", async () => {
+    // No csrftoken cookie, so the CSRF fetch is the first request - and it fails.
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const error = (await api.login("asha", "secret").catch((e) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(0);
+    expect(error.message).toMatch(/could not be reached/);
+  });
+
+  it("never shows an HTML error page as the message, but keeps a plain-text one", async () => {
+    // Django's built-in 500 page: no 500.html and no custom handler here.
+    const page =
+      '\n<!doctype html>\n<html lang="en">\n<head>\n  <title>Server Error (500)</title>\n</head>\n<body>\n  <h1>Server Error (500)</h1><p></p>\n</body>\n</html>\n';
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(page, { status: 500, headers: { "Content-Type": "text/html" } }))
+        .mockResolvedValueOnce(new Response("Down for maintenance until 18:00.", { status: 503 })),
+    );
+
+    const html = (await request("/api/chat/conversations/").catch((e) => e)) as ApiError;
+    expect(html.status).toBe(500);
+    expect(html.message).toBe("The server had a problem handling this request.");
+
+    const text = (await request("/api/chat/conversations/").catch((e) => e)) as ApiError;
+    expect(text.message).toBe("Down for maintenance until 18:00.");
+  });
+
   it("keeps search queries out of the URL", async () => {
     document.cookie = "csrftoken=t; path=/";
     const fetchMock = vi.fn().mockResolvedValue(respond(200, { results: [] }));
@@ -104,5 +133,21 @@ describe("request", () => {
     expect(url).toBe("/api/search/");
     expect(init.method).toBe("POST");
     expect(url).not.toContain("salary");
+  });
+});
+
+describe("fetchBlob", () => {
+  it("turns a network failure into a status-0 error, as request() does", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const error = (await api.fileBlob(7).catch((e) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(0);
+    expect(error.message).toMatch(/could not be reached/);
+  });
+
+  it("leaves an aborted download an abort", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError")));
+    const error = (await api.fileBlob(7).catch((e) => e)) as DOMException;
+    expect(error.name).toBe("AbortError");
   });
 });

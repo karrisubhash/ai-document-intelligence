@@ -295,18 +295,25 @@ function PasswordDialog({
         </>
       }
     >
-      <Field label="New password" error={errors.password}>
-        {(props) => (
-          <input
-            {...props}
-            type="password"
-            className="input"
-            autoComplete="new-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        )}
-      </Field>
+      <div className="stack">
+        <Field label="New password" error={errors.password}>
+          {(props) => (
+            <input
+              {...props}
+              type="password"
+              className="input"
+              autoComplete="new-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          )}
+        </Field>
+        {/* Anything that is not about the password field - a 403, a throttle,
+            an unreachable server - used to show nothing at all. */}
+        {reset.error && !errors.password ? (
+          <Alert tone="danger">{errorMessage(reset.error)}</Alert>
+        ) : null}
+      </div>
     </Dialog>
   );
 }

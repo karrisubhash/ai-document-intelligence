@@ -16,7 +16,7 @@ import {
   StatusBadge,
   useDocumentTitle,
 } from "../components/ui";
-import { displayName, formatRelative } from "../lib/format";
+import { displayName, formatRelative, pluralize } from "../lib/format";
 import { TYPE_LABEL } from "../lib/labels";
 
 function DocumentRows({ rows }: { rows: DashboardDocument[] }) {
@@ -171,8 +171,7 @@ export default function DashboardPage() {
                         {conversation.title || "Untitled conversation"}
                       </span>
                       <span className="row-meta">
-                        {Math.ceil(conversation.message_count / 2)} question
-                        {conversation.message_count > 2 ? "s" : ""} ·{" "}
+                        {pluralize(Math.ceil(conversation.message_count / 2), "question")} ·{" "}
                         {formatRelative(conversation.updated_at)}
                       </span>
                     </Link>

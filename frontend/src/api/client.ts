@@ -101,7 +101,14 @@ export function ensureCsrf(): Promise<void> {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
-      .then(() => undefined)
+      .then(
+        () => undefined,
+        // The status-0 error every other unreachable call raises. A bare
+        // TypeError reached the sign-in screen as "Failed to fetch".
+        () => {
+          throw new ApiError(0, describe(0, null), null);
+        },
+      )
       .finally(() => {
         csrfPromise = null;
       });
@@ -110,7 +117,15 @@ export function ensureCsrf(): Promise<void> {
 }
 
 export function describe(status: number, payload: unknown): string {
-  if (typeof payload === "string" && payload.trim() && payload.length < 300) {
+  // A short plain-text body is a message for a person; an error PAGE is
+  // not. Django's default 500 page and nginx's 413/502/503/504 pages are
+  // each under 300 characters of markup, and were shown tag by tag.
+  if (
+    typeof payload === "string" &&
+    payload.trim() &&
+    payload.length < 300 &&
+    !payload.trimStart().startsWith("<")
+  ) {
     return payload;
   }
   if (payload && typeof payload === "object") {
@@ -273,7 +288,15 @@ export function uploadWithProgress<T>(
 
 /** Fetches a file as a Blob - for previews and downloads behind the session. */
 export async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: "same-origin", signal });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { credentials: "same-origin", signal });
+  } catch (caught) {
+    // As in request(): a download that cannot reach the server said
+    // "Failed to fetch".
+    if (caught instanceof DOMException && caught.name === "AbortError") throw caught;
+    throw new ApiError(0, describe(0, null), null);
+  }
   if (!response.ok) {
     if (response.status === 401) onUnauthorized?.();
     let parsed: unknown = null;

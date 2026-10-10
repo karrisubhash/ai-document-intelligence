@@ -25,7 +25,9 @@ function renderInline(text: string, renderCitation: CitationRenderer | undefined
     if (!piece) continue;
     const key = `${keyBase}-${index++}`;
     if (piece.startsWith("**") && piece.endsWith("**") && piece.length > 4) {
-      parts.push(<strong key={key}>{piece.slice(2, -2)}</strong>);
+      // Rendered inline in turn, so a marker inside bold is still a button.
+      // Bold's inner text holds no `*`, so this recurses at most once.
+      parts.push(<strong key={key}>{renderInline(piece.slice(2, -2), renderCitation, key)}</strong>);
     } else if (piece.startsWith("`") && piece.endsWith("`") && piece.length > 2) {
       parts.push(<code key={key}>{piece.slice(1, -1)}</code>);
     } else if (/^\[\d{1,3}\]$/.test(piece) && renderCitation) {

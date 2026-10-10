@@ -51,6 +51,18 @@ describe("Markdown", () => {
     expect(screen.getByRole("button", { name: "cite 2" })).toBeInTheDocument();
   });
 
+  it("keeps a citation inside bold text a citation", () => {
+    render(
+      <Markdown
+        source="**Fees are due in July [1].**"
+        renderCitation={(marker, key) => <button key={key}>{`cite ${marker}`}</button>}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "cite 1" });
+    expect(button.closest("strong")).not.toBeNull();
+    expect(screen.queryByText(/\[1\]/)).toBeNull();
+  });
+
   it("continues a wrapped list item rather than starting a paragraph", () => {
     const blocks = parseBlocks("- a long item that\n  wraps onto a second line\n- next");
     expect(blocks).toHaveLength(1);
