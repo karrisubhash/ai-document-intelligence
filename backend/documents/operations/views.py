@@ -78,9 +78,16 @@ class AuditLogView(ListAPIView):
         for name, field in (("user", "user_id"), ("document", "document_ref")):
             value = params.get(name, "")
             if value:
-                if not value.isdigit():
+                # isdecimal(), and int() guarded: "²" passed the old isdigit()
+                # check and then crashed int(), as does anything past
+                # Python's 4,300-digit int() limit - each a 500, not a 400.
+                try:
+                    number = int(value) if value.isdecimal() else None
+                except ValueError:
+                    number = None
+                if number is None:
                     raise exceptions.ValidationError({name: ["Must be an id."]})
-                queryset = queryset.filter(**{field: int(value)})
+                queryset = queryset.filter(**{field: number})
         if params.get("document") and department is not None:
             # Filtering by another department's document id would answer
             # "does it exist?" through whether any row comes back, which the

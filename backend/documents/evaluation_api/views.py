@@ -99,7 +99,10 @@ class FeedbackView(APIView):
             conversation__in=Conversation.objects.filter(owner=request.user),
         )
 
-        serializer = FeedbackSerializer(data={**request.data, "message": message.id})
+        # The body goes to the serializer as it arrived. Spreading it into a
+        # dict - to add the message id - was a 500 for a JSON array or
+        # string, and turned every form-encoded value into a list.
+        serializer = FeedbackSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         feedback, created = Feedback.objects.update_or_create(

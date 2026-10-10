@@ -235,24 +235,32 @@ def search(
 
     # --- Authorization first, always -------------------------------------
     queryset, documents = authorized_chunks(user)
+    # The same narrowing, applied to the documents, for the empty-result
+    # note alone. Judged against every authorized document, a filter that
+    # matched nothing was reported as a stale index ("re-process the
+    # documents") instead of as the filter it was.
+    in_scope = documents
 
     if document_type:
         queryset = queryset.filter(
             document_version__document__document_type=document_type
         )
+        in_scope = in_scope.filter(document_type=document_type)
     if department:
         queryset = queryset.filter(document_version__document__department=department)
+        in_scope = in_scope.filter(department=department)
     if document_id:
         # Scoped questions ("ask about this document"). Applied AFTER the
         # authorization filter like every other narrowing, so naming a
         # document you cannot read returns nothing - not an error that
         # would confirm the id exists.
         queryset = queryset.filter(document_version__document_id=document_id)
+        in_scope = in_scope.filter(id=document_id)
 
     response = SearchResponse(query=query, authorized_documents=documents.count())
 
     if not queryset.exists():
-        response.notes.append(_why_nothing_is_searchable(user, documents))
+        response.notes.append(_why_nothing_is_searchable(user, in_scope))
         return response
 
     # --- Lexical half -----------------------------------------------------
@@ -312,10 +320,21 @@ def search(
                 },
             )
         else:
-            vector_hits = _vector(
-                queryset, batch.vectors[0], provider.name, provider.version, candidates
-            )
-            response.vector_candidates = len(vector_hits)
+            # A query with no word characters ("???", "§") embeds to all
+            # zeros - the providers return zeros rather than invent a
+            # direction, and promise that search skips them - and the cosine
+            # distance from a zero vector is NaN for every chunk. "Nearest"
+            # then meant the first chunks by id, returned as hits for a
+            # query that matched nothing.
+            if any(batch.vectors[0]):
+                vector_hits = _vector(
+                    queryset,
+                    batch.vectors[0],
+                    provider.name,
+                    provider.version,
+                    candidates,
+                )
+                response.vector_candidates = len(vector_hits)
 
     # --- Fusion -----------------------------------------------------------
     response.hits = _fuse(lexical, vector_hits, limit)

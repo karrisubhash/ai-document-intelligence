@@ -388,6 +388,16 @@ class OwnerFilterTests(DiscoveryTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["count"], 0)
 
+    def test_an_owner_value_int_cannot_parse_is_a_400_not_a_500(self):
+        """Each of these passed the old `lstrip("-").isdigit()` check and
+        then crashed int(): a doubled sign, a superscript digit, and a
+        number past Python's 4,300-digit conversion limit."""
+        for value in ("--5", "²", "9" * 4301):
+            with self.subTest(value=value[:10]):
+                response = self.get(owner=value)
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("owner", response.data)
+
 
 class DateRangeFilterTests(DiscoveryTestCase):
     def setUp(self):
@@ -449,6 +459,19 @@ class DateRangeFilterTests(DiscoveryTestCase):
         response = self.get(created_after="not-a-date")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("created_after", response.data)
+
+    def test_a_well_formed_but_impossible_date_is_a_400_not_a_500(self):
+        """Django's parsers return None for a malformed value but RAISE for
+        a well-formed impossible one - the 30th of February, hour 25."""
+        for field, value in (
+            ("created_after", "2025-02-30"),
+            ("created_before", "2025-01-31T25:00:00"),
+            ("updated_after", "0000-01-01"),
+        ):
+            with self.subTest(field=field, value=value):
+                response = self.get(**{field: value})
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(field, response.data)
 
     def test_created_before_earlier_than_created_after_is_a_400(self):
         """A reversed range cannot be satisfied and is caught here, rather
@@ -558,7 +581,16 @@ class OrderingTests(DiscoveryTestCase):
             (document["title"], document["status"])
             for document in response.data["results"]
         ]
-        self.assertEqual(titles_and_status[0][0], "Alpha")
+        # The two Alphas are ordered by the SECOND key, status descending.
+        # Asserting only the first title could not fail if that key were
+        # dropped: the id tiebreak alone puts the older, COMPLETED one first.
+        self.assertEqual(
+            titles_and_status[:2],
+            [
+                ("Alpha", Document.Status.FAILED),
+                ("Alpha", Document.Status.COMPLETED),
+            ],
+        )
 
     def test_too_many_ordering_fields_is_a_400(self):
         response = self.get(ordering="title,status,document_type,created_at")

@@ -51,32 +51,41 @@ class ChatView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        created = not data.get("conversation_id")
         conversation = self._conversation(request, data.get("conversation_id"))
 
-        # A follow-up is resolved against the caller's own earlier turns
-        # before retrieval sees it. "What about MECH?" carries one content
-        # term and retrieves nothing useful on its own; the conversation is
-        # where the rest of that question already lives. Independent
-        # questions are returned untouched - see documents.rag.followup.
-        resolved = followup.contextualize(
-            data["question"],
-            conversation.messages.order_by("created_at"),
-        )
+        try:
+            # A follow-up is resolved against the caller's own earlier turns
+            # before retrieval sees it. "What about MECH?" carries one
+            # content term and retrieves nothing useful on its own; the
+            # conversation is where the rest of that question already lives.
+            # Independent questions are returned untouched - see
+            # documents.rag.followup.
+            resolved = followup.contextualize(
+                data["question"],
+                conversation.messages.order_by("created_at"),
+            )
 
-        # Planned when the question asks for several things, and a plain
-        # single retrieval otherwise - which is the overwhelmingly common
-        # case and behaves exactly as it did before planning existed.
-        answer = agents.answer(
-            request.user,
-            resolved.question,
-            document_type=data.get("document_type", ""),
-            department=data.get("department", ""),
-            document_id=data.get("document_id"),
-            # The user's own words, when the question was widened as a
-            # follow-up: retrieval searched on the widened form, the answer
-            # must still be about what was actually asked.
-            focus=resolved.original if resolved.rewritten else "",
-        )
+            # Planned when the question asks for several things, and a plain
+            # single retrieval otherwise - which is the overwhelmingly common
+            # case and behaves exactly as it did before planning existed.
+            answer = agents.answer(
+                request.user,
+                resolved.question,
+                document_type=data.get("document_type", ""),
+                department=data.get("department", ""),
+                document_id=data.get("document_id"),
+                # The user's own words, when the question was widened as a
+                # follow-up: retrieval searched on the widened form, the
+                # answer must still be about what was actually asked.
+                focus=resolved.original if resolved.rewritten else "",
+            )
+        except Exception:
+            # Created for this question, which was never answered: left in
+            # place it was an empty "Untitled conversation" in the list.
+            if created:
+                conversation.delete()
+            raise
 
         with transaction.atomic():
             Message.objects.create(

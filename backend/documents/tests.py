@@ -1,18 +1,24 @@
 import shutil
 import tempfile
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework.throttling import SimpleRateThrottle
 
 from accounts.models import Department, UserProfile
 from documents.models import (
     AuditLog,
+    Conversation,
     Document,
     DocumentVersion,
+    Feedback,
+    Message,
     ProcessingEvent,
     ProcessingJob,
 )
@@ -779,3 +785,138 @@ class AuditLogTests(APITestCase):
                 result=AuditLog.Result.DENIED,
             ).exists()
         )
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class UploadAtomicityTests(AuthenticatedAPITestCase):
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(MEDIA_ROOT, ignore_errors=True)
+
+    def test_a_failed_version_write_leaves_no_document_behind(self):
+        """The document row used to be committed before its first version
+        was stored, so a failure storing the version - storage unreachable,
+        a value its column refuses - left a versionless document, listed to
+        the whole department, behind the 500."""
+        with patch(
+            "documents.api.views.create_document_version",
+            side_effect=OSError("storage unavailable"),
+        ):
+            with self.assertRaises(OSError):
+                self.client.post(
+                    reverse("document-list"),
+                    {"title": "Half-stored Upload", "file": make_txt_file()},
+                    format="multipart",
+                )
+
+        self.assertFalse(Document.objects.filter(title="Half-stored Upload").exists())
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class UploadThrottleScopeTests(AuthenticatedAPITestCase):
+    """The upload budget is spent by writes alone - and `versions` is a read
+    and a write behind one action name: GET lists, POST uploads."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(MEDIA_ROOT, ignore_errors=True)
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.addCleanup(cache.clear)
+        # Through the ORM, so creating it spends none of the budget.
+        self.document = Document.objects.create(
+            title="Departmental Policy", owner=self.user, department="Computer Science"
+        )
+
+    def test_listing_versions_does_not_spend_the_upload_budget(self):
+        url = reverse("document-versions", args=[self.document.id])
+
+        # SimpleRateThrottle binds THROTTLE_RATES at import time, so the
+        # dict itself is patched - override_settings cannot reach it.
+        with patch.dict(SimpleRateThrottle.THROTTLE_RATES, {"upload": "1/hour"}):
+            for _ in range(3):
+                self.assertEqual(self.client.get(url).status_code, status.HTTP_200_OK)
+
+            first = self.client.post(url, {"file": make_txt_file()}, format="multipart")
+            self.assertEqual(first.status_code, status.HTTP_202_ACCEPTED)
+
+            second = self.client.post(
+                url, {"file": make_txt_file(name="v2.txt")}, format="multipart"
+            )
+            self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class NumericQueryParameterTests(AuthenticatedAPITestCase):
+    """`?chunk=` and `?version=` are numbers. A value int() cannot parse is
+    the caller's mistake - a 400 - never a 500. Both passed the old
+    `isdigit()` check: a superscript digit, and 4,301 digits, past Python's
+    int() conversion limit."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(MEDIA_ROOT, ignore_errors=True)
+
+    def setUp(self):
+        super().setUp()
+        response = self.client.post(
+            reverse("document-list"),
+            {"title": "Academic Regulations", "file": make_txt_file()},
+            format="multipart",
+        )
+        self.document_id = response.data["id"]
+
+    def test_source_refuses_a_chunk_id_int_cannot_parse(self):
+        url = reverse("document-source", args=[self.document_id])
+
+        for value in ("²", "9" * 4301):
+            with self.subTest(value=value[:10]):
+                response = self.client.get(url, {"chunk": value})
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("chunk", response.data)
+
+    def test_download_refuses_a_version_int_cannot_parse(self):
+        url = reverse("document-download", args=[self.document_id])
+
+        for value in ("²", "9" * 4301):
+            with self.subTest(value=value[:10]):
+                response = self.client.get(url, {"version": value})
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("version", response.data)
+
+
+class FeedbackRequestBodyTests(APITestCase):
+    """What a client may send to /api/messages/<id>/feedback/. The body was
+    spread into a dict to add the message id, which a JSON array or string
+    cannot be, and which turned every form-encoded value into a list."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = make_user("feedback_body")
+        self.client.force_authenticate(user=self.user)
+        conversation = Conversation.objects.create(owner=self.user)
+        message = Message.objects.create(
+            conversation=conversation,
+            role=Message.Role.ASSISTANT,
+            content="Minimum attendance is 75 percent. [1]",
+        )
+        self.url = reverse("message-feedback", args=[message.id])
+
+    def test_a_body_that_is_not_an_object_is_a_400_not_a_500(self):
+        for body in ([], "HELPFUL"):
+            with self.subTest(body=body):
+                response = self.client.post(self.url, body, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.assertFalse(Feedback.objects.exists())
+
+    def test_a_form_encoded_rating_is_recorded(self):
+        response = self.client.post(self.url, {"rating": "HELPFUL"})
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Feedback.objects.get().rating, "HELPFUL")

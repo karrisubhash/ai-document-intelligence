@@ -344,6 +344,15 @@ class HybridSearchTests(TestCase):
         self.assertEqual(response.vector_candidates, 0)
         self.assertTrue(any("lexical results only" in n for n in response.notes))
 
+    def test_a_query_with_no_searchable_terms_returns_nothing(self):
+        """A query of "???" embeds to a zero vector, and the cosine distance
+        from one is NaN for every chunk - so the vector half returned the
+        first chunks by id as hits for a query that matched nothing at all."""
+        response = search_service.search(self.user, "???", limit=5)
+
+        self.assertEqual(response.hits, [])
+        self.assertEqual(response.vector_candidates, 0)
+
 
 # --- Authorization: the security property ------------------------------------
 
@@ -701,3 +710,34 @@ class EmptySearchDiagnosticTests(TestCase):
         response = search_service.search(self.user, "attendance")
 
         self.assertTrue(response.hits)
+
+    def test_a_filter_that_matches_nothing_is_named_as_such(self):
+        """The diagnosis used to ignore the filters, so a filter that excluded
+        every document was reported as a stale index - "re-process the
+        documents" - for documents that were indexed and healthy."""
+        document, version = self.make_document()
+        run_pipeline(ProcessingJob.objects.create(document_version=version).id)
+
+        response = search_service.search(
+            self.user, "attendance", document_type="CIRCULAR"
+        )
+
+        self.assertEqual(response.hits, [])
+        note = " ".join(response.notes)
+        self.assertIn("no authorized documents match the filters", note)
+        self.assertNotIn("current extraction pass", note)
+
+    def test_a_question_scoped_to_an_unindexed_document_says_so(self):
+        """Asking about one document while it is still processing: the note
+        described the OTHER, indexed documents instead of this one."""
+        document, version = self.make_document("Indexed")
+        run_pipeline(ProcessingJob.objects.create(document_version=version).id)
+        pending, _ = self.make_document("Still processing")
+
+        response = search_service.search(
+            self.user, "attendance", document_id=pending.id
+        )
+
+        self.assertEqual(response.hits, [])
+        note = " ".join(response.notes)
+        self.assertIn("1 authorized document(s), but none of them has been", note)

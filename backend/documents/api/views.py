@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.http import FileResponse
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -45,7 +46,11 @@ def _live_content(version):
     The `current_content` pointer, the same one search filters on - so the
     text a reader inspects here is the text a citation was built from.
     Data written before the pointer existed falls back to the newest pass.
+    A quarantined version has none: quarantine withdraws its text from
+    search and chat, and the fallback handed back the condemned pass here.
     """
+    if is_quarantined(version):
+        return None
     if version.current_content_id:
         return version.current_content
     return version.contents.first()
@@ -53,6 +58,22 @@ def _live_content(version):
 
 def _conflict(message):
     return Response({"detail": message}, status=status.HTTP_409_CONFLICT)
+
+
+def _query_number(raw):
+    """A non-negative integer query parameter, or None if it is not one.
+
+    `str.isdigit()` is not a parse check: "²" is a digit int() refuses, and
+    int() refuses any string past 4,300 digits - so testing isdigit() and
+    then calling int() turned both into a 500 instead of a 400.
+    """
+    raw = raw.strip()
+    if not raw.isdecimal():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
@@ -65,8 +86,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def get_throttles(self):
         # Only the write paths carry the upload budget. Throttling a
         # listing at the same rate as an upload would make the UI
-        # unusable without making abuse meaningfully harder.
-        if self.action in ("create", "versions", "reprocess"):
+        # unusable without making abuse meaningfully harder. "versions"
+        # is both - GET lists, POST uploads - and matching the action name
+        # alone spent the upload budget on every visit to the Versions tab.
+        if self.action in ("create", "reprocess") or (
+            self.action == "versions" and self.request.method == "POST"
+        ):
             self.throttle_scope = "upload"
         else:
             self.throttle_scope = None
@@ -140,13 +165,18 @@ class DocumentViewSet(viewsets.ModelViewSet):
         else:
             department = profile.department
 
-        document = Document.objects.create(
-            title=data["title"],
-            document_type=data["document_type"],
-            department=department,
-            owner=request.user,
-        )
-        create_document_version(document, data["file"], uploaded_by=request.user)
+        # One transaction: a document is only meaningful with its first
+        # version. Committed separately, a failure storing the version left
+        # a document with no version behind a 500 - listed to the whole
+        # department, UPLOADED forever, and refused by reprocess.
+        with transaction.atomic():
+            document = Document.objects.create(
+                title=data["title"],
+                document_type=data["document_type"],
+                department=department,
+                owner=request.user,
+            )
+            create_document_version(document, data["file"], uploaded_by=request.user)
         document.refresh_from_db()
 
         record_event(
@@ -349,8 +379,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
         `is_current` says whether the reader is looking at the live text.
         """
         document = self.get_object()
-        chunk_id = request.query_params.get("chunk", "").strip()
-        if not chunk_id.isdigit():
+        chunk_id = _query_number(request.query_params.get("chunk", ""))
+        if chunk_id is None:
             return Response(
                 {"chunk": ["A chunk id is required."]},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -358,10 +388,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         chunk = (
             DocumentChunk.objects.select_related("document_version", "document_content")
-            .filter(pk=int(chunk_id), document_version__document=document)
+            .filter(pk=chunk_id, document_version__document=document)
             .first()
         )
-        if chunk is None:
+        if chunk is None or is_quarantined(chunk.document_version):
+            # A quarantined version's passages are withdrawn with its text,
+            # including those an older answer still cites.
             return Response(
                 {"detail": "That passage is not part of this document."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -414,12 +446,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
         requested = request.query_params.get("version", "").strip()
 
         if requested:
-            if not requested.isdigit():
+            number = _query_number(requested)
+            if number is None:
                 return Response(
                     {"version": ["Must be a positive version number."]},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            version = document.versions.filter(version_number=int(requested)).first()
+            version = document.versions.filter(version_number=number).first()
         else:
             version = document.current_version
 

@@ -280,11 +280,17 @@ class DocumentListQuerySerializer(serializers.Serializer):
         if value == "me":
             request = self.context.get("request")
             return request.user.id
-        if not value.lstrip("-").isdigit() or int(value) < 0:
-            raise serializers.ValidationError(
-                "Must be a non-negative integer user id, or 'me'."
-            )
-        return int(value)
+        # isdecimal() rather than isdigit(), and int() guarded: "--5" and
+        # "²" passed the old isdigit() test and then crashed int(), as does
+        # anything past Python's 4,300-digit int() limit - each a 500.
+        if value.isdecimal():
+            try:
+                return int(value)
+            except ValueError:
+                pass
+        raise serializers.ValidationError(
+            "Must be a non-negative integer user id, or 'me'."
+        )
 
     def validate_created_after(self, value):
         return (

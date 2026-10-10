@@ -190,6 +190,23 @@ class AuditTrailTests(ScopedTestCase):
         self.assertEqual(len(self.rows(chemistry_admin, action="DOCUMENT_DELETE")), 1)
 
 
+class AuditIdFilterParsingTests(ScopedTestCase):
+    """`?user=` and `?document=` are ids. A value int() cannot parse is the
+    caller's mistake - a 400 - never a 500. Each of these passed the old
+    isdigit() check: a superscript digit, and 4,301 digits, past Python's
+    int() conversion limit."""
+
+    def test_an_id_int_cannot_parse_is_a_400_not_a_500(self):
+        for name in ("user", "document"):
+            for value in ("²", "9" * 4301):
+                with self.subTest(name=name, value=value[:10]):
+                    response = client_for(self.root).get(
+                        reverse("admin-audit"), {name: value}
+                    )
+                    self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                    self.assertIn(name, response.data)
+
+
 @override_settings(**EAGER)
 class ProcessingMonitorTests(ScopedTestCase):
     def setUp(self):

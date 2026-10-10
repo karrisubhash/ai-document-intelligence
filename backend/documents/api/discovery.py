@@ -147,16 +147,22 @@ def parse_boundary(value: str, field_name: str, *, end_of_day: bool) -> datetime
     it. Caught by
     DateRangeFilterTests.test_created_before_a_bare_date_is_inclusive_of_the_named_day.
     """
-    parsed_date = parse_date(value)
-    if parsed_date is not None:
-        naive = datetime.combine(parsed_date, time.max if end_of_day else time.min)
-        return timezone.make_aware(naive)
+    # Both parsers return None for a malformed value but RAISE ValueError
+    # for a well-formed impossible one - 2025-02-30, hour 25 - which escaped
+    # the serializer as a 500 instead of the 400 below.
+    try:
+        parsed_date = parse_date(value)
+        if parsed_date is not None:
+            naive = datetime.combine(parsed_date, time.max if end_of_day else time.min)
+            return timezone.make_aware(naive)
 
-    parsed_datetime = parse_datetime(value)
-    if parsed_datetime is not None:
-        if timezone.is_naive(parsed_datetime):
-            parsed_datetime = timezone.make_aware(parsed_datetime)
-        return parsed_datetime
+        parsed_datetime = parse_datetime(value)
+        if parsed_datetime is not None:
+            if timezone.is_naive(parsed_datetime):
+                parsed_datetime = timezone.make_aware(parsed_datetime)
+            return parsed_datetime
+    except ValueError:
+        pass
 
     raise ValidationError(
         {

@@ -94,6 +94,8 @@ class FeedbackSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            # Taken from the URL by FeedbackView, never from the body.
+            "message",
             "answer_abstained",
             "answer_citations",
             "created_at",
