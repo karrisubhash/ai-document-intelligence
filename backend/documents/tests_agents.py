@@ -5,8 +5,11 @@ The runner tests go through the real engine over a real corpus, because the
 only claim worth making about planning is a measured one.
 """
 
+import re
+from unittest import mock
+
 from django.core.files.base import ContentFile
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -14,6 +17,7 @@ from documents import agents
 from documents.agents import planner
 from documents.models import Document, ProcessingJob
 from documents.processing.pipeline import run_pipeline
+from documents.rag.engine import RagAnswer
 from documents.tests import MEDIA_ROOT, make_user
 
 CORPUS = {
@@ -105,6 +109,49 @@ class PlannerTests(TestCase):
     def test_an_empty_question_plans_nothing(self):
         self.assertEqual(planner.plan(""), [])
         self.assertEqual(planner.plan("   "), [])
+
+
+class MarkerOffsetTests(SimpleTestCase):
+    """Renumbering when a step does not cite its passages from [1] up."""
+
+    @staticmethod
+    def step(text, cited):
+        """A grounded step's answer, citing {marker: chunk_id}."""
+        return RagAnswer(
+            question="q",
+            answer=text,
+            abstained=False,
+            citations=[
+                {"marker": marker, "chunk_id": chunk_id}
+                for marker, chunk_id in cited.items()
+            ],
+            support_ratio=1.0,
+            model_name="extractive-answerer",
+        )
+
+    def test_a_step_citing_a_later_passage_does_not_share_a_marker(self):
+        """Offsetting by the number of citations so far: a first step that
+        cited only its [2] moved the second step's [1] to [2] as well, so
+        one marker named two passages and the reader was sent to one of
+        them for both claims."""
+        steps = [
+            self.step("Attendance minimum is 75 percent. [2]", {2: 12}),
+            self.step("A student may borrow up to four books. [1]", {1: 21}),
+            self.step("The curfew is 10 pm [1] on weekdays [3].", {1: 31, 3: 33}),
+        ]
+
+        with mock.patch("documents.agents.runner.ask", side_effect=steps):
+            planned = agents.answer(None, THREE_PART)
+
+        resolves_to = {c["marker"]: c["chunk_id"] for c in planned.citations}
+        self.assertEqual(len(resolves_to), len(planned.citations), planned.citations)
+
+        # Each part's markers resolve to the chunks that part's own step cited.
+        for paragraph, expected in zip(
+            planned.answer.split("\n\n"), ({12}, {21}, {31, 33}), strict=True
+        ):
+            markers = {int(value) for value in re.findall(r"\[(\d+)\]", paragraph)}
+            self.assertEqual({resolves_to[m] for m in markers}, expected, paragraph)
 
 
 @override_settings(MEDIA_ROOT=MEDIA_ROOT)

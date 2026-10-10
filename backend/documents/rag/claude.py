@@ -311,6 +311,7 @@ class ClaudeAnswerer:
         client = self._get_client()
 
         message = client.beta.messages.create(**self._request_kwargs(prompt))
+        usage = message.usage
 
         if message.stop_reason == "refusal":
             details = getattr(message, "stop_details", None)
@@ -319,7 +320,30 @@ class ClaudeAnswerer:
                 extra={"category": getattr(details, "category", None)},
             )
             return self._abstained(
-                prompt, reason="the model declined to answer this question"
+                prompt, reason="the model declined to answer this question", usage=usage
+            )
+
+        if message.stop_reason == "max_tokens":
+            # Cut off at MAX_TOKENS, and not returned. Grounding checks that
+            # the markers resolve and the figures are in the cited passages,
+            # not that the last sentence was finished, so a cut that drops
+            # the condition a sentence depends on - "you may still sit the
+            # examination", where the passage goes on "only if the Principal
+            # grants condonation" - passes it. Checked before the text
+            # because thinking counts toward the cap: a cap spent thinking
+            # leaves no text, which is not a model that would not answer.
+            logger.warning(
+                "llm.truncated",
+                extra={
+                    "backend": self.backend,
+                    "model": self.model,
+                    "max_tokens": MAX_TOKENS,
+                },
+            )
+            return self._abstained(
+                prompt,
+                reason="the model's answer was cut off at the output token limit",
+                usage=usage,
             )
 
         text = "".join(
@@ -327,9 +351,9 @@ class ClaudeAnswerer:
         ).strip()
 
         if not text:
-            return self._abstained(prompt, reason="the model returned no text")
-
-        usage = message.usage
+            return self._abstained(
+                prompt, reason="the model returned no text", usage=usage
+            )
 
         return LLMResponse(
             text=text,
@@ -354,7 +378,7 @@ class ClaudeAnswerer:
             },
         )
 
-    def _abstained(self, prompt: str, *, reason: str) -> LLMResponse:
+    def _abstained(self, prompt: str, *, reason: str, usage=None) -> LLMResponse:
         return LLMResponse(
             text=ABSTENTION_TEXT,
             abstained=True,
@@ -364,6 +388,12 @@ class ClaudeAnswerer:
             generative=True,
             prompt_characters=len(prompt),
             completion_characters=len(ABSTENTION_TEXT),
+            # The call was made and billed even though its reply is unusable,
+            # and a cap spent thinking is the costliest reply there is. The
+            # engine records usage for every response so cost is not counted
+            # only on success; a zero here would undo that.
+            prompt_tokens=getattr(usage, "input_tokens", 0) or 0,
+            completion_tokens=getattr(usage, "output_tokens", 0) or 0,
             metadata={
                 "reason": reason,
                 "model": self.model,

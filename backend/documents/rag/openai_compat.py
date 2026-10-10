@@ -484,6 +484,13 @@ class OpenAICompatibleAnswerer:
         choice = choices[0]
         finish_reason = getattr(choice, "finish_reason", "") or ""
 
+        # Read defensively. Every backend in PRESETS reports usage on a
+        # non-streaming completion, so a missing block means something was
+        # already wrong - and guessing a token count would put an invented
+        # number into the cost reporting, which is worse than a zero that
+        # is visibly a zero.
+        usage = getattr(completion, "usage", None)
+
         if finish_reason == "content_filter":
             # Institutional documents are dull, but a disciplinary
             # circular or a safety incident report is exactly the kind of
@@ -494,23 +501,19 @@ class OpenAICompatibleAnswerer:
                 extra={"provider": self.provider, "model": self.model},
             )
             return self._abstained(
-                prompt, reason="the model declined to answer this question"
+                prompt, reason="the model declined to answer this question", usage=usage
             )
 
-        message = getattr(choice, "message", None)
-        # Typed `str | None`, and genuinely None when the model emitted
-        # only tool calls or was cut off by a filter.
-        text = (getattr(message, "content", None) or "").strip()
-
-        if not text:
-            return self._abstained(prompt, reason="the model returned no text")
-
         if finish_reason == "length":
-            # Truncation, and the citations are what a cut takes first -
-            # they trail the claims they support. So grounding.validate
-            # will very likely downgrade this answer to an abstention, and
-            # without this line that downgrade looks like a model which
-            # would not answer rather than one that was not given room to.
+            # Truncation, and not left to grounding.validate to catch: it
+            # checks that the markers resolve and the figures are in the
+            # cited passages, not that the last sentence was finished. An
+            # answer that cites as it goes - which SYSTEM asks for - keeps
+            # its earlier markers, so a cut that drops a condition passes.
+            # Checked before the text because a reasoning model's thinking
+            # counts toward the cap, and one that spent all of it thinking
+            # returns no content: without this line that reads as a model
+            # which would not answer rather than one not given room to.
             logger.warning(
                 "llm.truncated",
                 extra={
@@ -519,13 +522,21 @@ class OpenAICompatibleAnswerer:
                     "max_tokens": MAX_TOKENS,
                 },
             )
+            return self._abstained(
+                prompt,
+                reason="the model's answer was cut off at the output token limit",
+                usage=usage,
+            )
 
-        # Read defensively. Every backend in PRESETS reports usage on a
-        # non-streaming completion, so a missing block means something was
-        # already wrong - and guessing a token count would put an invented
-        # number into the cost reporting, which is worse than a zero that
-        # is visibly a zero.
-        usage = getattr(completion, "usage", None)
+        message = getattr(choice, "message", None)
+        # Typed `str | None`, and genuinely None when the model emitted
+        # only tool calls or was cut off by a filter.
+        text = (getattr(message, "content", None) or "").strip()
+
+        if not text:
+            return self._abstained(
+                prompt, reason="the model returned no text", usage=usage
+            )
 
         metadata = {
             "provider": self.provider,
@@ -536,7 +547,6 @@ class OpenAICompatibleAnswerer:
             "model": self.model,
             "temperature": self.temperature,
             "finish_reason": finish_reason,
-            "truncated": finish_reason == "length",
             # Which model actually served it, which is not always the one
             # requested: a free-model router picks per request, and some
             # gateways substitute without saying so anywhere else.
@@ -565,7 +575,7 @@ class OpenAICompatibleAnswerer:
             metadata=metadata,
         )
 
-    def _abstained(self, prompt: str, *, reason: str) -> LLMResponse:
+    def _abstained(self, prompt: str, *, reason: str, usage=None) -> LLMResponse:
         return LLMResponse(
             text=ABSTENTION_TEXT,
             abstained=True,
@@ -575,6 +585,11 @@ class OpenAICompatibleAnswerer:
             generative=True,
             prompt_characters=len(prompt),
             completion_characters=len(ABSTENTION_TEXT),
+            # The call was made and billed even though its reply is unusable;
+            # the engine records usage for every response so cost is not
+            # counted only on success, and a zero here would undo that.
+            prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+            completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
             metadata={
                 "reason": reason,
                 "provider": self.provider,
@@ -598,7 +613,10 @@ def _warn_if_base_url_looks_wrong(base_url: str) -> None:
     logger.warning(
         "llm.suspect_base_url",
         extra={
-            "base_url": base_url,
+            # Stripped for the reason the answer metadata strips it: an
+            # internal gateway's URL can carry `user:password@`, and the
+            # formatter does not redact a field with this name.
+            "base_url": _without_credentials(base_url),
             "expected_suffix": GEMINI_PATH,
             "reason": "Gemini's OpenAI-compatible API answers 404 on any "
             "other path, and a 404 reads as a model that does not exist",

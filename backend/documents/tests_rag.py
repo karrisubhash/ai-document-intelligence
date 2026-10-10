@@ -6,6 +6,7 @@ is what lets the guardrails be tested exhaustively rather than sampled.
 """
 
 from dataclasses import dataclass
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
@@ -25,10 +26,11 @@ from documents.models import (
 from documents.processing.chunking import service as chunking_service
 from documents.processing.pipeline import run_pipeline
 from documents.rag import context as ctx
-from documents.rag import grounding
+from documents.rag import engine, grounding
 from documents.rag.engine import Abstention
 from documents.rag.llm import ABSTENTION_TEXT, ExtractiveAnswerer
-from documents.rag.reranking import LexicalReranker, stem
+from documents.rag.reranking import LexicalReranker, RerankedChunk, stem
+from documents.search.service import SearchResponse
 from documents.tests import MEDIA_ROOT, make_user
 
 EMBEDDER = "documents.processing.embedding.hashing.HashingEmbeddingProvider"
@@ -160,6 +162,9 @@ class RerankingTests(TestCase):
         first = [r.chunk.id for r in self.reranker.rerank("same words", candidates)]
         second = [r.chunk.id for r in self.reranker.rerank("same words", candidates)]
         self.assertEqual(first, second)
+        # Two runs over the same input agree under any stable sort; the
+        # tie-break itself is what puts chunk 1 ahead of the input order.
+        self.assertEqual(first, [1, 2])
 
     def test_reports_itself_as_not_semantic(self):
         self.assertFalse(self.reranker.semantic)
@@ -755,6 +760,43 @@ class RagEngineTests(TestCase):
         self.assertEqual(answer.abstention_reason, Abstention.NO_RELEVANT_PASSAGES)
 
 
+class DegradedRerankReportingTests(TestCase):
+    """Every abstention reached after reranking says how it was reranked."""
+
+    class FallenBackReranker:
+        """A cross-encoder whose model was unavailable: lexical scores,
+        marked as such, exactly as the real ones return them."""
+
+        name = "fallen-back-cross-encoder"
+
+        def rerank(self, query, candidates):
+            return [
+                RerankedChunk(
+                    chunk=candidate.chunk,
+                    score=1.0,
+                    retrieval_score=candidate.score,
+                    signals={"reranker_degraded": "model unavailable"},
+                )
+                for candidate in candidates
+            ]
+
+    def test_an_empty_context_abstention_reports_the_degraded_reranker(self):
+        """EMPTY_CONTEXT dropped the flag, so evaluation counted no degraded
+        rerank for a case that ran on the fallback scores."""
+        retrieval = SearchResponse(hits=hits((chunk(1, "too short"), 0.5)))
+
+        with (
+            mock.patch.object(engine.search_service, "search", return_value=retrieval),
+            mock.patch.object(
+                engine, "get_reranker", return_value=self.FallenBackReranker()
+            ),
+        ):
+            answer = engine.ask(None, "What is the minimum attendance?")
+
+        self.assertEqual(answer.abstention_reason, Abstention.EMPTY_CONTEXT)
+        self.assertTrue(answer.reranker_degraded)
+
+
 # --- Chat API ---------------------------------------------------------------
 
 
@@ -818,6 +860,31 @@ class ChatAPITests(TestCase):
         self.assertEqual(second.data["conversation_id"], conversation_id)
         self.assertEqual(Conversation.objects.count(), 1)
         self.assertEqual(Message.objects.count(), 4)
+
+    def test_a_question_that_fails_leaves_no_empty_conversation(self):
+        """The conversation was created before the answer, outside its
+        transaction, so a failed answer left an empty "Untitled
+        conversation" in the list and on the dashboard."""
+        with mock.patch(
+            "documents.chat.views.agents.answer", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                self.ask(question="How many books can a student borrow?")
+
+        self.assertFalse(Conversation.objects.exists())
+
+    def test_a_failed_follow_up_keeps_the_conversation_it_belongs_to(self):
+        first = self.ask(question="How many books can a student borrow?")
+        conversation_id = first.data["conversation_id"]
+
+        with mock.patch(
+            "documents.chat.views.agents.answer", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                self.ask(question="And for staff?", conversation_id=conversation_id)
+
+        self.assertTrue(Conversation.objects.filter(id=conversation_id).exists())
+        self.assertEqual(Message.objects.count(), 2)
 
     def test_cannot_post_into_someone_elses_conversation(self):
         other = make_user("chat_other", department="Registry")

@@ -17,7 +17,7 @@ from django.test import TestCase, override_settings
 
 from documents.rag import context as ctx
 from documents.rag import grounding
-from documents.rag.claude import ClaudeAnswerer
+from documents.rag.claude import ClaudeAnswerer, ClaudeNotConfigured
 from documents.rag.llm import ABSTENTION_TEXT
 from documents.tests_rag import FakeChunk, FakeDocument, FakeVersion
 
@@ -52,6 +52,14 @@ class StubBlock:
 
     def __init__(self, text):
         self.text = text
+
+
+class StubThinkingBlock:
+    """Adaptive thinking's block, with the default "omitted" display: no
+    `.text`, so reading it as one would raise."""
+
+    type = "thinking"
+    thinking = ""
 
 
 class StubUsage:
@@ -153,6 +161,45 @@ class GenerationTests(TestCase):
         self.assertTrue(response.abstained)
         self.assertIn("no text", response.metadata["reason"])
 
+    def test_a_truncated_answer_is_an_abstention_not_an_answer(self):
+        """Cut at max_tokens after its first cited sentence, this passes
+        grounding - the markers resolve and 75 is in the passage - while
+        stating, without its condition, something the passage does not."""
+        cut = (
+            "You need at least 75 percent attendance to sit the examination [1]. "
+            "If you fall short, you may still sit the examination"
+        )
+        response = self.answer_with(
+            stub_client(StubMessage(cut, stop_reason="max_tokens"))
+        )
+
+        self.assertTrue(response.abstained)
+        self.assertEqual(response.text, ABSTENTION_TEXT)
+        self.assertIn("cut off", response.metadata["reason"])
+
+    def test_a_cap_spent_on_thinking_is_reported_as_truncation(self):
+        """Thinking counts toward max_tokens. A reply that is all thinking
+        has no text, and "returned no text" would blame the model."""
+        message = StubMessage(None, stop_reason="max_tokens")
+        message.content = [StubThinkingBlock()]
+
+        with self.assertLogs("adi.llm", level="WARNING") as logs:
+            response = self.answer_with(stub_client(message))
+
+        self.assertTrue(response.abstained)
+        self.assertIn("cut off", response.metadata["reason"])
+        self.assertIn("llm.truncated", [record.getMessage() for record in logs.records])
+        self.assertEqual(response.completion_tokens, StubUsage.output_tokens)
+
+    def test_tokens_spent_on_an_unusable_reply_are_still_reported(self):
+        """The engine records usage for every response so cost is not
+        counted only on success; an abstention reporting zero undid that."""
+        response = self.answer_with(stub_client(StubMessage("", stop_reason="refusal")))
+
+        self.assertTrue(response.abstained)
+        self.assertEqual(response.prompt_tokens, StubUsage.input_tokens)
+        self.assertEqual(response.completion_tokens, StubUsage.output_tokens)
+
     def test_the_served_model_is_recorded_not_the_requested_one(self):
         """With fallbacks enabled the model that answers is not always the
         one asked for, and the run record should say which did."""
@@ -211,10 +258,14 @@ class GatewayFailureTests(TestCase):
         self.assertTrue(response.abstained)
 
     def test_a_missing_sdk_is_reported_clearly(self):
+        # Named, and the message checked: with assertRaises(Exception) any
+        # crash on this path - an AttributeError included - passed as clear.
         answerer = ClaudeAnswerer()
         with mock.patch.dict("sys.modules", {"anthropic": None}):
-            with self.assertRaises(Exception):
+            with self.assertRaises(ClaudeNotConfigured) as caught:
                 answerer._get_client()
+
+        self.assertIn("SDK is not installed", str(caught.exception))
 
 
 class PromptContractTests(TestCase):

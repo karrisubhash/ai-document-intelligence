@@ -172,7 +172,14 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             unanswered.append(part)
             continue
 
-        offset = len(citations)
+        # Past the highest marker already composed, not the number of
+        # citations so far: a step that cited only its [2] holds one
+        # citation, and offsetting the next step by one turned that step's
+        # [1] into a second [2] - one marker naming two passages.
+        offset = max(
+            (int(value) for text in composed for value in MARKER.findall(text)),
+            default=0,
+        )
         composed.append(f"{part} {_renumber(result.answer, offset)}")
         for citation in result.citations:
             shifted = dict(citation)

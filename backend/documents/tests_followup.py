@@ -84,6 +84,18 @@ class DependenceDetectionTests(SimpleTestCase):
                 dependent, _ = followup.looks_dependent(question)
                 self.assertFalse(dependent, f"{question!r} should stand alone")
 
+    def test_a_question_opening_on_the_it_department_stands_alone(self):
+        """The pronoun rule already reads capital "IT" as the department, but
+        "Is it ..." matched case-insensitively, so these were rewritten with
+        the previous turn's vocabulary."""
+        for question in (
+            "Can IT reset my portal password?",
+            "Is IT support available on weekends?",
+        ):
+            with self.subTest(question=question):
+                dependent, _ = followup.looks_dependent(question)
+                self.assertFalse(dependent, f"{question!r} should stand alone")
+
     def test_a_pronoun_with_nothing_to_refer_to_is_a_follow_up(self):
         for question in (
             "When is it due?",

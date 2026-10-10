@@ -382,6 +382,7 @@ def ask(
             semantic_retrieval=retrieval.semantic,
             notes=notes,
             timings=timings,
+            reranker_degraded=degraded,
         )
 
     built.focus = (focus or "").strip()
@@ -425,6 +426,12 @@ def ask(
     }
 
     if response.abstained:
+        # A model that refused, or whose reply was cut off at the token
+        # limit or came back empty, is a different fact from one that found
+        # nothing in the passages - and MODEL_ABSTAINED says only the last.
+        reason = (response.metadata or {}).get("reason")
+        if response.generative and reason:
+            notes.append(f"the model did not answer: {reason}")
         return _abstain(
             question, Abstention.MODEL_ABSTAINED, started, notes=notes, **common
         )

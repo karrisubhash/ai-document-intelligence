@@ -87,10 +87,11 @@ REFERRING = re.compile(
   | ^\s*what\s+about\b
   | ^\s*how\s+about\b
   | ^\s*what\s+if\b
-    # "Does that apply...", "Is it included...", "Can those be..."
+    # "Does that apply...", "Is it included...", "Can those be..." - but
+    # not "Can IT reset...": capital IT is the department (see PRONOUN).
   | ^\s*(?:does|do|did|is|are|was|were|can|could|would|will|shall
         |should|has|have|had|must)\s+
-      (?:that|this|it|they|those|these|he|she)\b
+      (?:that|this|(?-i:[Ii]t)|they|those|these|he|she)\b
   | \bthat\s+(?:one|policy|rule|figure|amount|document|case)\b
   | \bas\s+well\b                           # "...as well?" continues a turn
   | ^\s*why\b(?!\s+(?:is|are|do|does)\s+\w+\s+\w+)   # bare "why?"

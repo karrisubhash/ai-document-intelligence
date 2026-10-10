@@ -194,6 +194,24 @@ class OpenAICompatibleConfigurationTests(SimpleTestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(OpenAICompatibleAnswerer()._api_key(), "ollama")
 
+    @override_settings(
+        RAG_ANSWERER_PROVIDER="gemini",
+        RAG_ANSWERER_BASE_URL=(
+            "https://svc:s3cret@egress.internal"
+            "/generativelanguage.googleapis.com/v1beta/openai"
+        ),
+    )
+    def test_the_suspect_url_warning_carries_no_credentials(self):
+        """The missing trailing slash is the typo this warning exists for,
+        and it logged the URL whole - password included, since the formatter
+        redacts by field name and `base_url` is not one it knows."""
+        with self.assertLogs("adi.llm", level="WARNING") as logs:
+            OpenAICompatibleAnswerer()
+
+        [record] = [r for r in logs.records if r.getMessage() == "llm.suspect_base_url"]
+        self.assertNotIn("s3cret", record.base_url)
+        self.assertIn("egress.internal", record.base_url)
+
     def test_credentials_are_stripped_from_a_stored_url(self):
         self.assertEqual(
             _without_credentials("https://user:pw@gateway.internal/v1"),
@@ -254,10 +272,56 @@ class OpenAICompatibleAnsweringTests(SimpleTestCase):
         )
         self.assertTrue(response.abstained)
         self.assertEqual(response.text, ABSTENTION_TEXT)
+        # Without this the test passed with the content_filter branch gone:
+        # its empty content abstains on the "no text" path all the same.
+        self.assertIn("declined", response.metadata["reason"])
 
     def test_an_empty_completion_is_an_abstention(self):
         response = self.ask(answerer_with(StubChatClient(completion("   "))))
         self.assertTrue(response.abstained)
+
+    def test_a_truncated_answer_is_an_abstention_not_an_answer(self):
+        """Cut at max_tokens after its first cited sentence, this passes
+        grounding - the marker resolves and 75 is in the passage - while
+        stating, without its condition, something the passage does not."""
+        cut = (
+            "You need at least 75 percent attendance to sit the examination [1]. "
+            "If you fall short, you may still sit the examination"
+        )
+        response = self.ask(
+            answerer_with(StubChatClient(completion(cut, finish_reason="length")))
+        )
+
+        self.assertTrue(response.abstained)
+        self.assertEqual(response.text, ABSTENTION_TEXT)
+        self.assertIn("cut off", response.metadata["reason"])
+
+    def test_a_cap_spent_on_reasoning_is_reported_as_truncation(self):
+        """A reasoning model's thinking counts toward max_tokens; one that
+        spent all of it returns no content. The truncation warning was
+        skipped there and the abstention blamed the model for no text."""
+        client = StubChatClient(completion(None, finish_reason="length"))
+
+        with self.assertLogs("adi.llm", level="WARNING") as logs:
+            response = self.ask(answerer_with(client))
+
+        self.assertTrue(response.abstained)
+        self.assertIn("cut off", response.metadata["reason"])
+        self.assertIn("llm.truncated", [record.getMessage() for record in logs.records])
+
+    def test_tokens_spent_on_an_unusable_completion_are_still_reported(self):
+        """The engine records usage for every response so cost is not
+        counted only on success; an abstention reporting zero undid that."""
+        for finish_reason, text in (("content_filter", ""), ("length", None)):
+            with self.subTest(finish_reason=finish_reason):
+                response = self.ask(
+                    answerer_with(
+                        StubChatClient(completion(text, finish_reason=finish_reason))
+                    )
+                )
+                self.assertTrue(response.abstained)
+                self.assertEqual(response.prompt_tokens, 120)
+                self.assertEqual(response.completion_tokens, 18)
 
     def test_a_200_with_no_choices_falls_back_and_says_so(self):
         """OpenRouter's error-wearing-a-success. Must not IndexError."""
@@ -366,6 +430,20 @@ class GuardrailsApplyToEveryAnswererTests(TestCase):
         self.assertTrue(
             any("was unavailable" in note for note in answer.notes), answer.notes
         )
+
+    @override_settings(RAG_ANSWERER_PROVIDER="groq")
+    def test_a_reply_cut_off_at_the_token_limit_says_so(self):
+        """MODEL_ABSTAINED reads "found nothing in the passages". A reply
+        the provider cut off is a different fact, and the provider's reason
+        reached only the log."""
+        answerer = answerer_with(
+            StubChatClient(completion("You need 75 percent", finish_reason="length"))
+        )
+        answer = self.run_engine(answerer)
+
+        self.assertTrue(answer.abstained)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.MODEL_ABSTAINED)
+        self.assertTrue(any("cut off" in note for note in answer.notes), answer.notes)
 
     @override_settings(RAG_RERANKER_LOCAL_MODEL="cross-encoder/ms-marco-MiniLM-L6-v2")
     def test_a_degraded_reranker_is_held_to_the_lexical_floor(self):
