@@ -215,7 +215,9 @@ class Command(BaseCommand):
         return Path(archive)
 
     def _prune(self, destination: Path):
-        keep = getattr(settings, "BACKUP_RETENTION", 7)
+        # At least one: the newest is the backup this run just wrote, and
+        # BACKUP_RETENTION=0 deleted it along with every other.
+        keep = max(1, getattr(settings, "BACKUP_RETENTION", 7))
         dumps = sorted(destination.glob("db-*.dump"), reverse=True)
 
         for stale in dumps[keep:]:

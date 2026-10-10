@@ -202,6 +202,20 @@ class ComparisonTests(TestCase):
         )
         self.assertIn("generation.missed_abstentions", report["regressions"])
 
+    def test_more_degraded_cases_is_a_regression_not_an_improvement(self):
+        """A run whose cross-encoder or generative answerer fell back on
+        more cases was reported as improved - and one that fixed the
+        fallbacks as regressed, failing the gate."""
+        report = metrics.compare(
+            {"system": {"degraded_reranks": 0, "answerer_fallbacks": 0}},
+            {"system": {"degraded_reranks": 3, "answerer_fallbacks": 2}},
+        )
+        self.assertEqual(
+            report["regressions"],
+            ["system.answerer_fallbacks", "system.degraded_reranks"],
+        )
+        self.assertEqual(report["improvements"], [])
+
     def test_case_counts_are_neither_better_nor_worse(self):
         """A run over more cases is not a quality improvement."""
         report = metrics.compare(

@@ -129,7 +129,15 @@ class Command(BaseCommand):
             baseline = EvaluationRun.objects.filter(id=options["compare_to"]).first()
             if baseline is None:
                 raise CommandError(f"No run with id {options['compare_to']}")
-            report = evaluation.compare_runs(baseline, run)
+            # The same rules as --baseline. Without them this compared every
+            # timing with no tolerance, so an unchanged system failed
+            # --fail-on-regression on wall-clock jitter alone.
+            report = evaluation.compare_runs(
+                baseline,
+                run,
+                include_system=options["gate_latency"],
+                tolerance=options["tolerance"],
+            )
             self._print_comparison(report)
 
             if options["fail_on_regression"] and report["regressions"]:

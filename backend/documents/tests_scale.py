@@ -260,3 +260,60 @@ class ReindexTests(TestCase):
         call_command("reindex", dry_run=True, stdout=out)
 
         self.assertIn("Dry run", out.getvalue())
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class IngestCorpusTests(TestCase):
+    """`ingest_corpus` resumes by skipping what it already ingested, so the
+    gold manifest is the one thing a resumed run cannot rebuild."""
+
+    def test_an_interrupted_run_still_writes_the_labels_it_ingested(self):
+        """The manifest was written only at the end, so an interrupted run
+        lost the labels of every document it had ingested - and the resume
+        skipped those documents, never writing them."""
+        import json
+        import shutil
+        import tempfile
+        from io import StringIO
+        from pathlib import Path
+        from unittest import mock
+
+        from django.core.management import call_command
+
+        from documents.management.commands.ingest_corpus import Command
+
+        make_user("corpus_owner")
+        source = Path(tempfile.mkdtemp())
+        output = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, source, True)
+        self.addCleanup(shutil.rmtree, output, True)
+        for name in ("a", "b", "c"):
+            (source / f"{name}.txt").write_text(f"{name} " * 150, encoding="utf-8")
+        manifest = output / "manifest.json"
+
+        real = Command._version_without_processing
+
+        def interrupted_on_the_second(document, upload, owner):
+            if document.title == "b":
+                raise KeyboardInterrupt
+            return real(document, upload, owner)
+
+        with (
+            mock.patch.object(
+                Command,
+                "_version_without_processing",
+                side_effect=interrupted_on_the_second,
+            ),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            call_command(
+                "ingest_corpus",
+                source=str(source),
+                owner="corpus_owner",
+                no_process=True,
+                manifest_out=str(manifest),
+                stdout=StringIO(),
+            )
+
+        written = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["external_id"] for entry in written.values()], ["a"])

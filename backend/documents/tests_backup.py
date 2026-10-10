@@ -140,6 +140,24 @@ class BackupTests(TestCase):
             ["media-20260102T000000Z.tar.gz", "media-20260103T000000Z.tar.gz"],
         )
 
+    @override_settings(BACKUP_RETENTION=0)
+    def test_prune_never_deletes_the_newest_backup(self):
+        """dumps[0:] is every dump, so a retention of 0 left no backup at
+        all - including the one the run had just verified."""
+        from io import StringIO
+
+        from documents.management.commands.backup import Command
+
+        for stamp in ("20260101T000000Z", "20260102T000000Z"):
+            (self.tmp / f"db-{stamp}.dump").write_bytes(b"dump")
+
+        Command(stdout=StringIO())._prune(self.tmp)
+
+        self.assertEqual(
+            [path.name for path in self.tmp.glob("db-*.dump")],
+            ["db-20260102T000000Z.dump"],
+        )
+
     @skip_without_pg_dump
     def test_media_is_archived_only_when_asked(self):
         self.run_backup()

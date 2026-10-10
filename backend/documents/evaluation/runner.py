@@ -269,9 +269,23 @@ def _system_metrics(latencies) -> dict:
     }
 
 
-def compare_runs(baseline: EvaluationRun, candidate: EvaluationRun, **kwargs) -> dict:
-    """Regression check between two runs (spec §19.2)."""
-    result = metrics.compare(baseline.metrics, candidate.metrics, **kwargs)
+def compare_runs(
+    baseline: EvaluationRun,
+    candidate: EvaluationRun,
+    *,
+    include_system: bool = True,
+    **kwargs,
+) -> dict:
+    """Regression check between two runs (spec §19.2).
+
+    `include_system=False` leaves out the environment-dependent timings,
+    which differ on every run - see the evaluate command's --gate-latency.
+    """
+    before, after = baseline.metrics, candidate.metrics
+    if not include_system:
+        before = {key: value for key, value in before.items() if key != "system"}
+        after = {key: value for key, value in after.items() if key != "system"}
+    result = metrics.compare(before, after, **kwargs)
     result["baseline"] = {
         "id": baseline.id,
         "label": baseline.label,

@@ -356,6 +356,44 @@ class BaselineGateTests(TestCase):
                 gate_latency=True,
             )
 
+    def earlier_run(self):
+        """A finished run of the same dataset, for --compare-to."""
+        from documents.models import EvaluationRun
+
+        self.run_evaluation(label="earlier")
+        return EvaluationRun.objects.get(label="earlier")
+
+    def test_compare_to_leaves_latency_out_unless_asked(self):
+        """--compare-to compared every timing regardless of --gate-latency,
+        so an unchanged system failed on wall-clock jitter - the failure
+        latency was taken out of the gate for."""
+        earlier = self.earlier_run()
+        # A latency no run can match.
+        earlier.metrics["system"]["latency_ms_mean"] = -1
+        earlier.save(update_fields=["metrics"])
+
+        self.run_evaluation(compare_to=earlier.id, fail_on_regression=True)
+
+        with self.assertRaises(CommandError) as caught:
+            self.run_evaluation(
+                compare_to=earlier.id, fail_on_regression=True, gate_latency=True
+            )
+        self.assertIn("regressed", str(caught.exception))
+
+    def test_compare_to_honours_the_tolerance(self):
+        """--tolerance was ignored by --compare-to."""
+        earlier = self.earlier_run()
+        # A quality drift inside the tolerance.
+        earlier.metrics["generation"]["groundedness"] += 0.001
+        earlier.save(update_fields=["metrics"])
+
+        self.run_evaluation(
+            compare_to=earlier.id, fail_on_regression=True, tolerance=0.01
+        )
+
+        with self.assertRaises(CommandError):
+            self.run_evaluation(compare_to=earlier.id, fail_on_regression=True)
+
     def test_a_baseline_for_another_dataset_is_refused(self):
         """Comparing scores from different benchmarks is comparing
         different exams."""

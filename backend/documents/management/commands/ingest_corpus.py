@@ -277,91 +277,84 @@ class Command(BaseCommand):
         started = time.monotonic()
         target = limit if limit > 0 else len(entries)
 
-        for external_id, path, label in entries:
-            if ingested >= target:
-                break
+        try:
+            for external_id, path, label in entries:
+                if ingested >= target:
+                    break
 
-            title = self._title(external_id, label)
+                title = self._title(external_id, label)
 
-            if title in existing:
-                skipped_existing += 1
-                continue
+                if title in existing:
+                    skipped_existing += 1
+                    continue
 
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                # A missing or unreadable file is counted, not fatal: a
-                # vendored corpus can be partially checked out, and losing
-                # the whole run to one bad path would be worse than
-                # reporting it.
-                skipped_unreadable += 1
-                continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    # A missing or unreadable file is counted, not fatal: a
+                    # vendored corpus can be partially checked out, and
+                    # losing the whole run to one bad path would be worse
+                    # than reporting it.
+                    skipped_unreadable += 1
+                    continue
 
-            if len(text.strip()) < MIN_CHARACTERS:
-                skipped_short += 1
-                continue
+                if len(text.strip()) < MIN_CHARACTERS:
+                    skipped_short += 1
+                    continue
 
-            department = forced_department or LABEL_TO_DEPARTMENT.get(
-                label, DEFAULT_DEPARTMENT
-            )
-            document_type = LABEL_TO_TYPE.get(label, Document.DocumentType.GENERAL)
+                department = forced_department or LABEL_TO_DEPARTMENT.get(
+                    label, DEFAULT_DEPARTMENT
+                )
+                document_type = LABEL_TO_TYPE.get(label, Document.DocumentType.GENERAL)
 
-            if dry_run:
+                if dry_run:
+                    ingested += 1
+                    continue
+
+                document = Document.objects.create(
+                    title=title,
+                    document_type=document_type,
+                    department=department,
+                    owner=owner,
+                    status=Document.Status.UPLOADED,
+                )
+
+                upload = SimpleUploadedFile(
+                    name=f"{Path(external_id).name}.txt",
+                    content=text.encode("utf-8"),
+                    content_type="text/plain",
+                )
+
+                if options["no_process"]:
+                    # Still a real version with a real checksum - only the
+                    # queueing is skipped, so `reprocess` can pick it up later.
+                    self._version_without_processing(document, upload, owner)
+                else:
+                    services.create_document_version(
+                        document, upload, uploaded_by=owner
+                    )
+
+                manifest[str(document.id)] = {
+                    "external_id": external_id,
+                    "label": label,
+                    "document_type": document_type,
+                    "department": department,
+                    "characters": len(text),
+                }
                 ingested += 1
-                continue
 
-            document = Document.objects.create(
-                title=title,
-                document_type=document_type,
-                department=department,
-                owner=owner,
-                status=Document.Status.UPLOADED,
-            )
-
-            upload = SimpleUploadedFile(
-                name=f"{Path(external_id).name}.txt",
-                content=text.encode("utf-8"),
-                content_type="text/plain",
-            )
-
-            if options["no_process"]:
-                # Still a real version with a real checksum - only the
-                # queueing is skipped, so `reprocess` can pick it up later.
-                self._version_without_processing(document, upload, owner)
-            else:
-                services.create_document_version(document, upload, uploaded_by=owner)
-
-            manifest[str(document.id)] = {
-                "external_id": external_id,
-                "label": label,
-                "document_type": document_type,
-                "department": department,
-                "characters": len(text),
-            }
-            ingested += 1
-
-            if ingested % 250 == 0:
-                rate = ingested / max(time.monotonic() - started, 1e-6)
-                self.stdout.write(f"  {ingested}/{target} ingested ({rate:.1f}/s)")
+                if ingested % 250 == 0:
+                    rate = ingested / max(time.monotonic() - started, 1e-6)
+                    self.stdout.write(f"  {ingested}/{target} ingested ({rate:.1f}/s)")
+        finally:
+            # Written even when the run is cut short. A resumed run skips
+            # every document already ingested, so a label not written now is
+            # never written: written only at the end, an interrupted run left
+            # everything it had ingested out of the manifest for good.
+            if not dry_run and manifest:
+                self._write_manifest(manifest, options["manifest_out"])
 
         elapsed = time.monotonic() - started
-
-        if not dry_run and manifest:
-            out = self._repo_root() / options["manifest_out"]
-            out.parent.mkdir(parents=True, exist_ok=True)
-            # Merged rather than overwritten, so ingesting a second batch
-            # does not erase the gold labels of the first.
-            previous = {}
-            if out.is_file():
-                try:
-                    previous = json.loads(out.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    previous = {}
-            previous.update(manifest)
-            out.write_text(
-                json.dumps(previous, indent=2, sort_keys=True), encoding="utf-8"
-            )
-            self.stdout.write(f"Gold manifest: {out} ({len(previous)} documents)")
 
         verb = "Would ingest" if dry_run else "Ingested"
         self.stdout.write(
@@ -383,6 +376,21 @@ class Command(BaseCommand):
             )
 
     # --- helpers ----------------------------------------------------------
+
+    def _write_manifest(self, manifest: dict, manifest_out: str) -> None:
+        out = self._repo_root() / manifest_out
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Merged rather than overwritten, so ingesting a second batch
+        # does not erase the gold labels of the first.
+        previous = {}
+        if out.is_file():
+            try:
+                previous = json.loads(out.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                previous = {}
+        previous.update(manifest)
+        out.write_text(json.dumps(previous, indent=2, sort_keys=True), encoding="utf-8")
+        self.stdout.write(f"Gold manifest: {out} ({len(previous)} documents)")
 
     @staticmethod
     def _title(external_id: str, label: str) -> str:

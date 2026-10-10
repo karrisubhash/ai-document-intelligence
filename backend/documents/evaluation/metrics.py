@@ -324,6 +324,10 @@ LOWER_IS_BETTER = (
     "duration",
     "false_abstentions",
     "missed_abstentions",
+    # Cases the configured reranker or answerer did not actually run on
+    # (system.degraded_reranks, system.answerer_fallbacks).
+    "degraded",
+    "fallback",
 )
 
 # Metrics that describe the shape of a run rather than its quality. A run
