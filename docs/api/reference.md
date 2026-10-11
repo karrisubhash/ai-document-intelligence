@@ -1,7 +1,19 @@
 # API reference
 
-JSON over HTTPS, same origin as the web application. Unversioned paths (a `/api/v1/`
-prefix is planned when the public surface is frozen).
+JSON over HTTPS, same origin as the web application.
+
+**Versioning (spec 16).** `/api/v1/` is the canonical prefix and what the web
+application calls. Every path below is also served without the version (`/api/...`)
+as a permanent alias for existing scripts and tokens; the tables use the short form.
+When a `v2` ships, `v1` stays mounted until its clients have moved.
+
+**Idempotency (spec 16).** `POST /api/v1/documents/` and
+`POST /api/v1/documents/{id}/versions/` accept an `Idempotency-Key` header (1-255
+printable ASCII characters). A retry with the same key within 24 hours returns the first
+result (**202**, header `Idempotent-Replayed: true`) instead of creating a duplicate. The
+same key with a different file or title is **422**; a retry while the first request is
+still running is **409**. Keys are per user. A request that fails releases its key.
+Without the header, behaviour is unchanged.
 
 ## Authentication
 
@@ -66,8 +78,8 @@ the caller is refused.
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/search/` | `{query, limit≤50, document_type?, department?, document_id?}`. POST so queries stay out of URLs and logs. Only authorized, current, non-archived content is searched |
-| POST | `/api/chat/` | `{question, conversation_id?, document_type?, department?, document_id?}` → answer, citations, abstention reason, grounding, retrieval counts, model, plan, `timings`, notes, `resolved_question` for follow-ups |
+| POST | `/api/search/` | `{query, limit≤50, document_type?, department?, document_id?, collection_id?}`. POST so queries stay out of URLs and logs. Only authorized, current, non-archived content is searched |
+| POST | `/api/chat/` | `{question, conversation_id?, document_type?, department?, document_id?, collection_id?}` → answer, citations, abstention reason, grounding, retrieval counts, model, plan, `timings`, notes, `resolved_question` for follow-ups |
 | GET | `/api/chat/conversations/` | The caller's conversations, newest first |
 | GET · PATCH · DELETE | `/api/chat/conversations/{id}/` | Owner only; PATCH `{title}` |
 | POST | `/api/messages/{id}/feedback/` | `{rating: HELPFUL \| NOT_HELPFUL \| INCORRECT, comment?}`; owner of the conversation only |
@@ -75,6 +87,20 @@ the caller is refused.
 
 The question text is never written to the audit log; only that a search or question
 happened, and counts.
+
+## Collections
+
+Named sets of documents (spec 14, 15.2). A collection **narrows, never grants**: search
+and chat apply the caller's document permissions first and `collection_id` after, and a
+collection the caller cannot see narrows to nothing. A collection belongs to one
+department and holds only that department's documents.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/collections/` | signed in | Own department's collections, plus any the caller created; system admins see all. Each has `documents` (`{id, title}`, only those the caller may read), `document_count`, `can_manage` |
+| POST | `/api/collections/` | system admin, department admin, faculty (`capabilities.create_collections`) | `{name, description?}`; `department` honoured for system admins only. **201**; duplicate name in the department **400**. Audited |
+| GET · PATCH · DELETE | `/api/collections/{id}/` | read · manage | PATCH `{name?, description?}`. DELETE keeps the documents. Manage = creator, the department's admin, or a system admin. Invisible ids are **404** |
+| POST · DELETE | `/api/collections/{id}/documents/` | manage | `{document_ids: [...]}` (≤500). Adding a document the caller cannot read, or from another department, is **404** naming the ids. Audited |
 
 ## Administration
 

@@ -8,6 +8,7 @@ design rationale; these pages are the working reference.
 | Area | Page | What it answers |
 |---|---|---|
 | Architecture | [architecture/overview.md](architecture/overview.md) | Components, data flow, boundaries, and why it is one Django service |
+| Spec traceability | [architecture/spec-traceability.md](architecture/spec-traceability.md) | Every FR/NFR of the specification mapped to code and tests; adaptations and role mapping |
 | Development | [development/setup.md](development/setup.md) | Running the stack locally |
 | | [development/testing.md](development/testing.md) | The four test layers and how to run each, including the browser suite |
 | API | [api/reference.md](api/reference.md) | Every endpoint, who may call it, and what it returns |

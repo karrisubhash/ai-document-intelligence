@@ -49,7 +49,13 @@ for** and **what is actually built today**, and never conflates the two.
 | Object storage (S3-compatible) | 15 | ✅ Built — opt-in; the pipeline is storage-agnostic either way |
 | Prometheus + Grafana, multiprocess metrics | 20 | ✅ Built — `/metrics` now aggregates across gunicorn workers |
 | Governed evaluation dataset + regression gate | 19 | ✅ Built — 13 cases, a committed baseline, and it can fail |
+| Versioned API (`/api/v1/`), idempotent uploads | 16 | ✅ Built — `/api/` kept as an alias; `Idempotency-Key` on document and version uploads |
+| Collections | 14, 15.2 | ✅ Built — department-scoped document sets that narrow search and chat, never widen them |
+| Distributed tracing, alert rules, dashboards as code | 20 | ✅ Built — OpenTelemetry opt-in (`INSTALL_OTEL`), 11 Prometheus alerts, provisioned Grafana overview |
 | Separate FastAPI AI services | 26 | ⬜ Deliberately not built — see [docs/architecture](docs/architecture/overview.md#why-one-service) |
+
+Every requirement of the specification, mapped to code and tests:
+[docs/architecture/spec-traceability.md](docs/architecture/spec-traceability.md).
 
 **Start with [docs/](docs/README.md)** — the working reference for architecture, API,
 deployment, operations, security, AI and evaluation, with a single table of what is
