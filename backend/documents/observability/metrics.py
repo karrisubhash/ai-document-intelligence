@@ -186,6 +186,14 @@ rag_passages_used = Histogram(
     registry=REGISTRY,
 )
 
+chat_stream_failures = Counter(
+    "adi_chat_stream_failures_total",
+    "Streamed chat turns that failed after the 200 and its headers were"
+    " sent. The HTTP metrics see those as successes - the error travels as"
+    " an SSE `error` event - so this is the only count of them.",
+    registry=REGISTRY,
+)
+
 rag_abstentions = Counter(
     "adi_rag_abstentions_total",
     "Abstentions by reason. The reasons are a fixed vocabulary, so this is"

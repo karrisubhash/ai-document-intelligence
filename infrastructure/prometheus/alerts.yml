@@ -72,6 +72,14 @@ groups:
         annotations:
           summary: "Chat declined over 80% of questions in the last hour - retrieval or index may be broken"
 
+      - alert: ChatStreamFailures
+        # A failed streamed answer is an HTTP 200 whose error arrives inside
+        # the stream, so the 5xx alert cannot see it.
+        expr: sum(increase(adi_chat_stream_failures_total[15m])) > 2
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 2 streamed chat answers failed in 15 minutes"
+
       - alert: RerankerDegraded
         expr: sum(increase(adi_rerank_degraded_total[15m])) > 0
         for: 15m

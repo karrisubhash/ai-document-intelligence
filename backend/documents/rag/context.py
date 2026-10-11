@@ -24,8 +24,19 @@ from dataclasses import dataclass, field
 DEFAULT_CONTEXT_BUDGET = 8000
 
 # Below this a passage is not worth a slot - it costs a marker and adds
-# almost nothing an answer can be built from.
+# almost nothing an answer can be built from. Applied only when relevance was
+# scored LEXICALLY (the lexical reranker, or a cross-encoder that degraded to
+# it): lexical density inflates the score of a tiny passage, so length is the
+# only guard there. A cross-encoder reads the question and the passage
+# together, and a short passage it scored above the floor is evidence:
+# "Attendance policy: minimum 75 percent." is 38 characters, a whole
+# document, and the answer. Dropping it made that document uncitable under
+# every reranker (found live, 2026-10-11).
 MIN_PASSAGE_CHARS = 40
+
+# With semantic scores, only a passage with no letters at all is dropped:
+# page numbers, rules, OCR debris made of digits and punctuation.
+_HAS_LETTER = re.compile(r"[^\W\d_]")
 
 # Phrases that try to talk to the model rather than inform it. Retrieved
 # text containing these is still included - dropping it would let an
@@ -129,12 +140,22 @@ def detect_injection(text: str) -> tuple:
     )
 
 
-def build(reranked, *, budget: int = DEFAULT_CONTEXT_BUDGET, max_passages: int = 8):
+def build(
+    reranked,
+    *,
+    budget: int = DEFAULT_CONTEXT_BUDGET,
+    max_passages: int = 8,
+    semantic_scores: bool = False,
+):
     """Select passages for the prompt, in relevance order.
 
     Returns a BuiltContext whose counters explain what was left out. A
     context that silently dropped half its evidence would make an abstention
     look like an absence of evidence.
+
+    `semantic_scores` says the candidates were scored by a working
+    cross-encoder, whose relevance floor already judged them; see
+    MIN_PASSAGE_CHARS for why that changes what counts as too small.
     """
     context = BuiltContext()
     seen = set()
@@ -147,7 +168,12 @@ def build(reranked, *, budget: int = DEFAULT_CONTEXT_BUDGET, max_passages: int =
 
         text = candidate.chunk.text.strip()
 
-        if len(text) < MIN_PASSAGE_CHARS:
+        too_small = (
+            not _HAS_LETTER.search(text)
+            if semantic_scores
+            else len(text) < MIN_PASSAGE_CHARS
+        )
+        if too_small:
             context.dropped_as_tiny += 1
             continue
 

@@ -30,6 +30,12 @@ class Command(BaseCommand):
         for component, outcome in loaded.items():
             if isinstance(outcome, float):
                 self.stdout.write(f"  {component}: loaded in {outcome:.2f}s")
+            elif component == "answerer":
+                # A hosted answerer's client, not a model: often no key on
+                # the machine that runs this. The answer path falls back.
+                self.stdout.write(
+                    self.style.WARNING(f"  answerer: client not ready ({outcome})")
+                )
             else:
                 failed = True
                 self.stdout.write(

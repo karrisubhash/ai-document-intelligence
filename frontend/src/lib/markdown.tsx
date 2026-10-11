@@ -16,7 +16,12 @@ import { Fragment, type ReactNode } from "react";
 
 type CitationRenderer = (marker: number, key: string) => ReactNode;
 
-const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\[\d{1,3}\])/g;
+// Bold may contain italics ("**only *on* medical grounds**"). Italics need
+// a non-space just inside each `*` and no word character just outside, so
+// arithmetic such as "5 * 3" or "2*3*4" stays literal. Underscore italics
+// are deliberately not supported: identifiers like file_name_v2 would break.
+const INLINE =
+  /(\*\*(?:[^*]|\*(?!\*))+\*\*|(?<![\w*])\*(?![\s*])[^*\n]+?(?<!\s)\*(?![\w*])|`[^`]+`|\[\d{1,3}\])/g;
 
 function renderInline(text: string, renderCitation: CitationRenderer | undefined, keyBase: string) {
   const parts: ReactNode[] = [];
@@ -26,8 +31,10 @@ function renderInline(text: string, renderCitation: CitationRenderer | undefined
     const key = `${keyBase}-${index++}`;
     if (piece.startsWith("**") && piece.endsWith("**") && piece.length > 4) {
       // Rendered inline in turn, so a marker inside bold is still a button.
-      // Bold's inner text holds no `*`, so this recurses at most once.
+      // Each level strips a pair of `*`, so the recursion terminates.
       parts.push(<strong key={key}>{renderInline(piece.slice(2, -2), renderCitation, key)}</strong>);
+    } else if (piece.startsWith("*") && piece.endsWith("*") && piece.length > 2) {
+      parts.push(<em key={key}>{renderInline(piece.slice(1, -1), renderCitation, key)}</em>);
     } else if (piece.startsWith("`") && piece.endsWith("`") && piece.length > 2) {
       parts.push(<code key={key}>{piece.slice(1, -1)}</code>);
     } else if (/^\[\d{1,3}\]$/.test(piece) && renderCitation) {
@@ -50,6 +57,9 @@ const NUMBERED = /^\s*(\d{1,2})[.)]\s+(.*)$/;
 // row, as the extractive answerer quotes one.
 const TABULAR = /\t| {2,}/;
 const HEADING = /^\s*#{1,6}\s+(.*)$/;
+// "---", "***", "___" or "* * *": a generative answer's section break. Shown
+// as text it read as stray punctuation; it ends the current block instead.
+const RULE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
 
 export function parseBlocks(source: string): Block[] {
   const blocks: Block[] = [];
@@ -63,6 +73,11 @@ export function parseBlocks(source: string): Block[] {
   for (const raw of source.replace(/\r\n/g, "\n").split("\n")) {
     const line = raw.trimEnd();
     if (!line.trim()) {
+      flush();
+      continue;
+    }
+
+    if (RULE.test(line)) {
       flush();
       continue;
     }

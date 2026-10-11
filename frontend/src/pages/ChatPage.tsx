@@ -13,6 +13,7 @@ import {
 } from "../components/chat/Answer";
 import {
   Alert,
+  Badge,
   Button,
   ConfirmDialog,
   Dialog,
@@ -33,6 +34,8 @@ interface Turn {
   error?: unknown;
   /** The answer as it is being written; replaced by `answer` when done. */
   streaming?: string;
+  /** Where the answer being written comes from, when the server said. */
+  streamingSource?: string;
 }
 
 const SUGGESTIONS = [
@@ -316,7 +319,8 @@ export default function ChatPage() {
         },
         {
           onDelta: (piece) => patch((turn) => ({ ...turn, streaming: (turn.streaming ?? "") + piece })),
-          onReset: () => patch((turn) => ({ ...turn, streaming: "" })),
+          onReset: (source) =>
+            patch((turn) => ({ ...turn, streaming: "", streamingSource: source })),
         },
       );
       if (view.current !== askedIn) {
@@ -440,6 +444,11 @@ export default function ChatPage() {
                         source={turn.streaming}
                         renderCitation={(marker, key) => <sup key={key}>[{marker}]</sup>}
                       />
+                      {turn.streamingSource === "general" ? (
+                        <div className="answer-meta">
+                          <Badge tone="warning">General knowledge · not from your documents</Badge>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="thinking">

@@ -86,6 +86,9 @@ first real call as the test.
 
 import logging
 import os
+import re
+import threading
+import time
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -173,7 +176,17 @@ PRESETS = {
         # reasoning_effort "none" with a 400. These two accepted it, first
         # streamed token 1.5 s and 5.8 s. Re-check before relying on them:
         # Google rotates this catalogue.
-        fallback_models=("gemini-3-flash-preview", "gemini-3.7-flash"),
+        # The free tier also caps each model at 20 requests PER DAY (measured
+        # 2026-10-11: GenerateRequestsPerDayPerProjectPerModel-FreeTier), so
+        # every model in the chain adds a day's allowance of its own.
+        # gemini-3.1-flash-lite and -3.8-flash answered 503 at times that day;
+        # a 503 benches a model for 30 s rather than removing it.
+        fallback_models=(
+            "gemini-3-flash-preview",
+            "gemini-3.7-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-3.8-flash",
+        ),
         # Gemini 3 Flash "thinks" by default, and its hidden reasoning is
         # billed against max_tokens: at 200 tokens even "say hello" came
         # back cut off (finish_reason "length"). "none" also halved the
@@ -632,6 +645,12 @@ class OpenAICompatibleAnswerer:
         models = [request["model"]]
         if request["model"] == self.model:
             models += list(self.fallback_models)
+            # A model that answered 429 a moment ago will answer 429 again:
+            # try it last, not first. Never skipped outright - if every model
+            # is cooling, the original order stands.
+            models.sort(
+                key=lambda m: _cooling_until(self.base_url, m) > time.monotonic()
+            )
 
         for index, model in enumerate(models):
             last = index == len(models) - 1
@@ -642,6 +661,8 @@ class OpenAICompatibleAnswerer:
                 attempt_client = client if last else _without_retries(client)
                 return self._complete_once(attempt_client, {**request, "model": model})
             except Exception as exc:
+                if _status(exc) in (429, 503):
+                    _cool(self.base_url, model, exc)
                 if last or _status(exc) not in MODEL_SPECIFIC_FAILURES:
                     raise
                 logger.warning(
@@ -738,6 +759,59 @@ class OpenAICompatibleAnswerer:
 # limited (429), retired (404), overloaded (503) or erroring (500/502/504).
 # A bad key (401/403) or a bad request (400) fails every model alike.
 MODEL_SPECIFIC_FAILURES = frozenset({404, 429, 500, 502, 503, 504})
+
+
+# Rate-limited models, remembered across calls and threads: (base_url,
+# model) -> time.monotonic() deadline. Without it every question paid a
+# doomed 429 on the throttled model before switching (seen live: 3 of 7
+# calls in one session).
+_cooling = {}
+_cooling_lock = threading.Lock()
+DEFAULT_COOLDOWN_SECONDS = 60.0
+DAILY_COOLDOWN_SECONDS = 3600.0
+OVERLOAD_COOLDOWN_SECONDS = 30.0
+_RETRY_IN = re.compile(r"retry in ([0-9]+(?:\.[0-9]+)?)\s*s", re.I)
+
+
+def _cooldown_seconds(exc) -> float:
+    """How long a 429 should bench its model. Never raises.
+
+    Gemini sends no Retry-After header; it puts "Please retry in 14.5s" and
+    a quota id in the body. A per-DAY quota will not lift in a minute.
+    """
+    try:
+        if _status(exc) == 503:
+            # Overloaded, not rate-limited: usually seconds, so a short bench.
+            return OVERLOAD_COOLDOWN_SECONDS
+        text = str(exc)
+        if "PerDay" in text:
+            return DAILY_COOLDOWN_SECONDS
+        match = _RETRY_IN.search(text)
+        if match:
+            return max(1.0, float(match.group(1)))
+        header = _retry_after(exc)
+        if header:
+            # Seconds, or an HTTP date (RFC 9110) - which float() refuses.
+            return max(1.0, float(header))
+    except (TypeError, ValueError):
+        pass
+    return DEFAULT_COOLDOWN_SECONDS
+
+
+def _cool(base_url, model, exc) -> None:
+    with _cooling_lock:
+        _cooling[(base_url, model)] = time.monotonic() + _cooldown_seconds(exc)
+
+
+def _cooling_until(base_url, model) -> float:
+    with _cooling_lock:
+        return _cooling.get((base_url, model), 0.0)
+
+
+def reset_cooldowns() -> None:
+    """For tests: forget every remembered 429."""
+    with _cooling_lock:
+        _cooling.clear()
 
 
 def _status(exc) -> int | None:

@@ -201,6 +201,8 @@ class LocalCrossEncoderReranker:
     """Reorders retrieved candidates with a cross-encoder, in this process."""
 
     name = "local-cross-encoder"
+    # Scores read query and passage together (see context.build).
+    semantic_scores = True
     semantic = True
 
     default_relevance_floor = DEFAULT_RELEVANCE_FLOOR

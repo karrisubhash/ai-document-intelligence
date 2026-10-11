@@ -129,6 +129,9 @@ open in front of them - not the way a search engine returns results.
   to look thorough, and never compress to look efficient.
 - Do not restate the question, do not open with a preamble about what you
   are going to do, and do not add caveats the documents do not support.
+- Formatting: paragraphs, "-" or numbered lists, **bold** and *italics*.
+  No tables or horizontal rules - the reader's screen shows them as raw
+  symbols.
 
 Being well written is not in tension with being grounded here. Cite as you
 go and state only what the passages state, and you can write as clearly as

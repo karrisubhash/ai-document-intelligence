@@ -26,7 +26,7 @@ def enabled() -> bool:
     )
 
 
-ALL = ("embedding", "reranker")
+ALL = ("embedding", "reranker", "answerer")
 
 
 def warm(*, reason: str = "startup", components=ALL) -> dict:
@@ -86,6 +86,14 @@ def warm(*, reason: str = "startup", components=ALL) -> dict:
         reranker = lookup("reranker", engine.get_reranker)
         if hasattr(reranker, "_get_model"):
             attempt("reranker", reranker._get_model)
+
+    # A hosted answerer has no weights, but importing its SDK (~2 s for
+    # openai, measured) and building its client would otherwise land on each
+    # process's first answer. Building the client sends no request.
+    if "answerer" in components:
+        answerer = lookup("answerer", engine.get_answerer)
+        if hasattr(answerer, "_get_client"):
+            attempt("answerer", answerer._get_client)
 
     logger.info("model.warmup", extra={"reason": reason, "loaded": loaded})
     return loaded

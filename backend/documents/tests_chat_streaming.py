@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from documents.models import Message
-from documents.rag import followup, general, streaming
+from documents.rag import followup, general, openai_compat, streaming
 from documents.rag.engine import Abstention
 from documents.tests import make_user
 from documents.tests_providers import StubChatClient, answerer_with, completion
@@ -252,6 +252,10 @@ class PerModelClient(StubChatClient):
 
 @mock.patch.dict("os.environ", {"GEMINI_API_KEY": "k"})
 class GeminiModelChainTests(SimpleTestCase):
+    def setUp(self):
+        openai_compat.reset_cooldowns()
+        self.addCleanup(openai_compat.reset_cooldowns)
+
     def gemini(self, client, **overrides):
         settings = {
             "RAG_ANSWERER_PROVIDER": "gemini",
@@ -287,17 +291,15 @@ class GeminiModelChainTests(SimpleTestCase):
         self.assertEqual(len(answerer._client.calls), 1)
 
     def test_when_every_model_is_limited_the_last_error_surfaces(self):
-        answerer = self.gemini(
-            PerModelClient(
-                {
-                    "gemini-3.5-flash": 429,
-                    "gemini-3-flash-preview": 429,
-                    "gemini-3.7-flash": 429,
-                }
-            )
-        )
+        answerer = self.gemini(PerModelClient({}))
+        everything = [answerer.model, *answerer.fallback_models]
+        answerer._client = PerModelClient(dict.fromkeys(everything, 429))
         with self.assertRaises(StatusError):
             answerer.complete(self.request(answerer))
+        self.assertEqual([c["model"] for c in answerer._client.calls], everything)
+
+    def test_an_overloaded_model_is_benched_briefly(self):
+        self.assertEqual(openai_compat._cooldown_seconds(StatusError(503)), 30.0)
 
     def test_a_pinned_model_has_no_chain(self):
         answerer = self.gemini(
@@ -319,6 +321,32 @@ class GeminiModelChainTests(SimpleTestCase):
             groq = answerer_with(PerModelClient({}), RAG_ANSWERER_PROVIDER="groq")
         self.assertNotIn("reasoning_effort", groq._request_kwargs("p"))
         self.assertEqual(groq.fallback_models, ())
+
+    def test_a_rate_limited_model_is_tried_last_on_the_next_call(self):
+        client = PerModelClient({"gemini-3.5-flash": 429})
+        answerer = self.gemini(client)
+        answerer.complete(self.request(answerer))
+        client.calls.clear()
+        answerer.complete(self.request(answerer))
+        self.assertEqual([c["model"] for c in client.calls], ["gemini-3-flash-preview"])
+
+    def test_a_bad_retry_after_cannot_break_the_chain(self):
+        error = StatusError(429)
+        error.response = SimpleNamespace(
+            headers={"retry-after": "Sun, 11 Oct 2026 15:30:00 GMT"}
+        )
+        self.assertEqual(openai_compat._cooldown_seconds(error), 60.0)
+
+    def test_gemini_retry_hint_and_daily_quota_set_the_cooldown(self):
+        self.assertEqual(
+            openai_compat._cooldown_seconds(Exception("Please retry in 14.48s.")), 14.48
+        )
+        self.assertEqual(
+            openai_compat._cooldown_seconds(
+                Exception("quotaId: ...PerDayPerProject...")
+            ),
+            3600.0,
+        )
 
 
 class SmallTalkTests(SimpleTestCase):

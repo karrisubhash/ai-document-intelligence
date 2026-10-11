@@ -35,6 +35,10 @@ services:
       retries: 5
 
   backend:
+    # The dev server warms its models at start (documents/apps.py). An edit
+    # that triggers a reload during that load can abort the process; this
+    # brings it back instead of leaving the API down.
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile

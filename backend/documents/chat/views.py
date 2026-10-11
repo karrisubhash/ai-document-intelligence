@@ -1,3 +1,4 @@
+import contextvars
 import json
 import logging
 import queue
@@ -19,6 +20,7 @@ from documents.agents.runner import PlannedAnswer
 from documents.audit import record_event
 from documents.authorization import get_profile
 from documents.models import AuditLog, Conversation, Message
+from documents.observability import telemetry
 from documents.rag import followup, general, streaming
 from documents.rag.engine import Abstention
 from documents.rag.llm import ABSTENTION_TEXT
@@ -277,7 +279,8 @@ class ChatStreamView(ChatView):
     Server-Sent Events, in order:
 
       event: delta   {"text": ...}   the model's words as it writes them
-      event: reset   {}              discard what has been shown so far
+      event: reset   {source?}       discard what has been shown so far;
+                                     `source: "general"` labels what follows
       event: done    {ChatView payload}
       event: error   {"detail": ...}
 
@@ -315,7 +318,12 @@ class ChatStreamView(ChatView):
         events = queue.Queue()
 
         def sink(event, text):
-            events.put((event, {"text": text} if event == "delta" else {}))
+            if event == "delta":
+                events.put((event, {"text": text}))
+            else:
+                # `reset` may name the source of the answer that follows, so
+                # a general-knowledge reply is labelled while it streams.
+                events.put((event, {"source": text} if text else {}))
 
         def work():
             try:
@@ -323,6 +331,7 @@ class ChatStreamView(ChatView):
                     events.put(("done", self.handle(request, data)))
             except Exception:
                 logger.exception("chat.stream_failed")
+                telemetry.chat_stream_failed()
                 events.put(
                     (
                         "error",
@@ -337,7 +346,14 @@ class ChatStreamView(ChatView):
                 connections.close_all()
                 events.put(None)
 
-        threading.Thread(target=work, name="chat-stream", daemon=True).start()
+        # threading.Thread does not inherit contextvars: without the copy,
+        # every log line and tracing span from the turn lost the request id
+        # (and ObservabilityMiddleware resets it on this thread anyway once
+        # the response is returned). The sink is set inside the copy.
+        context = contextvars.copy_context()
+        threading.Thread(
+            target=context.run, args=(work,), name="chat-stream", daemon=True
+        ).start()
 
         response = StreamingHttpResponse(
             self._events(events), content_type="text/event-stream"

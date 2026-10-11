@@ -111,6 +111,11 @@ def document_indexed(chunks, embedded, *, document_id=None):
 
 
 @_safe
+def chat_stream_failed():
+    metrics.chat_stream_failures.inc()
+
+
+@_safe
 def rag_answered(answer):
     """One RagAnswer, reported. Takes the object so callers cannot forget a
     field, and reads only numbers and fixed vocabularies off it."""

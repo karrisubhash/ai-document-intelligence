@@ -26,7 +26,7 @@ describe("streamChat", () => {
       vi.fn().mockResolvedValue(
         eventStream([
           ": keep-alive\n\n",
-          'event: reset\ndata: {}\n\nevent: delta\ndata: {"text": "Hel',
+          'event: reset\ndata: {"source": "general"}\n\nevent: delta\ndata: {"text": "Hel',
           'lo"}\n\nevent: delta\ndata: {"text": " there"}\n\n',
           `event: done\ndata: ${JSON.stringify(DONE)}\n\n`,
         ]),
@@ -35,9 +35,12 @@ describe("streamChat", () => {
     const seen: string[] = [];
     const response = await streamChat(
       { question: "hi" },
-      { onDelta: (text) => seen.push(text), onReset: () => seen.push("<reset>") },
+      {
+        onDelta: (text) => seen.push(text),
+        onReset: (source) => seen.push(`<reset:${source}>`),
+      },
     );
-    expect(seen).toEqual(["<reset>", "Hello", " there"]);
+    expect(seen).toEqual(["<reset:general>", "Hello", " there"]);
     expect(response).toEqual(DONE);
   });
 

@@ -24,6 +24,21 @@ describe("Markdown", () => {
     expect(screen.getByText("rule two").tagName).toBe("LI");
   });
 
+  it("renders a generative answer's italics, and leaves arithmetic alone", () => {
+    const { container } = render(
+      <Markdown source={"Only on *medical* grounds, **not *any* other**. 5 * 3 and 2*3*4."} />,
+    );
+    const italics = [...container.querySelectorAll("em")].map((node) => node.textContent);
+    expect(italics).toEqual(["medical", "any"]);
+    expect(container.textContent).toContain("5 * 3 and 2*3*4.");
+  });
+
+  it("treats a horizontal rule as a break, not text", () => {
+    const { container } = render(<Markdown source={"First part.\n\n---\n\nSecond part."} />);
+    expect(container.textContent).not.toContain("---");
+    expect(container.querySelectorAll("p")).toHaveLength(2);
+  });
+
   it("never turns document text into markup", () => {
     const hostile =
       'Ignore this <img src=x onerror="alert(1)"> and [click](javascript:alert(1)) <script>alert(2)</script>';

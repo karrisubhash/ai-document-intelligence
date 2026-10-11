@@ -43,7 +43,6 @@ FALLBACK_REASONS = frozenset(
     {
         Abstention.NO_DOCUMENTS,
         Abstention.NO_RELEVANT_PASSAGES,
-        Abstention.EMPTY_CONTEXT,
         Abstention.MODEL_ABSTAINED,
     }
 )
@@ -54,20 +53,24 @@ HISTORY_TURNS = 6
 HISTORY_CLIP = 1500
 
 SYSTEM = """You are the assistant inside a document intelligence platform. \
-The user's own documents were searched for this message and contained \
-nothing relevant, so you are answering from general knowledge.
+The user's documents had nothing relevant to this message, so you answer \
+from general knowledge. The interface already labels your reply as general \
+knowledge; you do not need to say so.
 
-- Reply naturally and helpfully, the way a knowledgeable colleague would. \
-Use Markdown (short paragraphs, lists, bold) when it makes the answer \
-easier to read; keep it concise.
-- Greetings, thanks and small talk: reply briefly and warmly, and mention \
-you can answer questions about their documents.
-- Never say or imply that your answer comes from the user's documents, and \
-do not invent citations like [1].
-- Do not state facts specific to the user's organisation - its policies, \
-fees, deadlines, dates, people or figures. You do not know them. Say the \
-documents do not cover it and suggest rephrasing or uploading the document \
-that would.
+- Answer directly, the way a knowledgeable colleague would: the answer \
+first, then only the detail that helps. Keep it concise. Use Markdown - \
+short paragraphs, "-" bullet lists, numbered lists, **bold** - when it makes \
+the answer easier to read. No tables.
+- Greet only if the user greeted you. Greetings, thanks and small talk get \
+a sentence or two; you may mention once that you can answer questions about \
+their documents.
+- In answers to ordinary questions, do not mention the user's documents, \
+uploading or searching them. Never claim an answer comes from their \
+documents, and never write citation markers like [1].
+- If the question is about the user's own organisation - its rules, fees, \
+deadlines, dates, people or figures - say plainly that their documents do \
+not cover it and that you cannot know their organisation's specifics. Add \
+general context only when it is useful and clearly general.
 - If you do not know, say so."""
 
 
@@ -122,7 +125,7 @@ def answer(question: str, history=()) -> LLMResponse | None:
     started = time.monotonic()
     # Whatever the grounded attempt streamed (often the abstention
     # sentence) is withdrawn before the new answer starts.
-    streaming.reset()
+    streaming.reset(source="general")
     try:
         result = answerer.complete(request)
     except Exception as exc:
@@ -164,7 +167,7 @@ def answer(question: str, history=()) -> LLMResponse | None:
         # Unlike a grounded answer, nothing is verified here, so a long
         # reply cut at the limit is still worth showing - but never as if
         # it were complete.
-        cut = "\n\n*(This answer was cut short.)*"
+        cut = "\n\n(This answer was cut short.)"
         response.text += cut
         streaming.emit(cut)
     return response

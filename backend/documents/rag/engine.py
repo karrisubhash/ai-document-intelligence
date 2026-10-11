@@ -378,9 +378,22 @@ def _ask(
             settings, "RAG_CONTEXT_BUDGET", context_builder.DEFAULT_CONTEXT_BUDGET
         ),
         max_passages=getattr(settings, "RAG_MAX_PASSAGES", 8),
+        # A degraded cross-encoder scored lexically, so it gets the lexical
+        # rules too.
+        semantic_scores=bool(getattr(reranker, "semantic_scores", False))
+        and not degraded,
     )
 
     if built.is_empty:
+        # The counters are the whole explanation for this abstention; without
+        # them a stored message cannot say why relevant passages vanished.
+        notes = [
+            *notes,
+            f"context construction dropped all {len(relevant)} passage(s) above "
+            f"the floor: {built.dropped_as_tiny} too short, "
+            f"{built.dropped_as_duplicate} duplicate, "
+            f"{built.dropped_for_budget} over budget",
+        ]
         return _abstain(
             question,
             Abstention.EMPTY_CONTEXT,

@@ -42,7 +42,8 @@ def emit(text: str) -> None:
         sink("delta", text)
 
 
-def reset() -> None:
+def reset(source: str = "") -> None:
+    """Withdraw what was streamed; `source` labels the answer that follows."""
     sink = _sink.get()
     if sink is not None:
-        sink("reset", "")
+        sink("reset", source)

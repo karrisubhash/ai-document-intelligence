@@ -67,6 +67,8 @@ class BedrockReranker:
     """Reorders retrieved candidates with a cross-encoder."""
 
     name = "bedrock-cohere-rerank-3.5"
+    # Scores read query and passage together (see context.build).
+    semantic_scores = True
     semantic = True
 
     default_relevance_floor = DEFAULT_RELEVANCE_FLOOR

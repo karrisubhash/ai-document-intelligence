@@ -360,7 +360,7 @@ export function Answer({
             </li>
             {answer.reranker ? <li>Ranked by {answer.reranker}</li> : null}
             <li>Answered by {answer.modelName || "—"}</li>
-            {!answer.abstained ? (
+            {!answer.abstained && answer.source !== "general" ? (
               <li>
                 Every figure checked against the cited passages; wording support{" "}
                 {formatPercent(answer.supportRatio)}

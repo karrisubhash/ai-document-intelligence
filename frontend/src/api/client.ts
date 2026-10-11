@@ -18,6 +18,7 @@ import type {
   AuditEntry,
   ChatResponse,
   ClassificationResult,
+  AnswerSource,
   Collection,
   Conversation,
   ConversationSummary,
@@ -208,8 +209,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 export interface StreamHandlers {
   /** Provisional text, as the model writes it. */
   onDelta?: (text: string) => void;
-  /** Discard what onDelta has shown: the server withdrew that answer. */
-  onReset?: () => void;
+  /** Discard what onDelta has shown; `source` labels the answer that follows. */
+  onReset?: (source?: AnswerSource) => void;
 }
 
 /**
@@ -282,7 +283,7 @@ export async function streamChat(
 
       const payload = JSON.parse(data.join("\n"));
       if (event === "delta") handlers.onDelta?.(payload.text);
-      else if (event === "reset") handlers.onReset?.();
+      else if (event === "reset") handlers.onReset?.(payload.source);
       else if (event === "done") return payload as ChatResponse;
       else if (event === "error") {
         throw new ApiError(500, payload.detail ?? describe(500, null), payload);
