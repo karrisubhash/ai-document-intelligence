@@ -79,7 +79,8 @@ the caller is refused.
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/search/` | `{query, limit≤50, document_type?, department?, document_id?, collection_id?}`. POST so queries stay out of URLs and logs. Only authorized, current, non-archived content is searched |
-| POST | `/api/chat/` | `{question, conversation_id?, document_type?, department?, document_id?, collection_id?}` → answer, citations, abstention reason, grounding, retrieval counts, model, plan, `timings`, notes, `resolved_question` for follow-ups |
+| POST | `/api/chat/` | `{question, conversation_id?, document_type?, department?, document_id?, collection_id?}` → answer, citations, abstention reason, grounding, retrieval counts, model, plan, `timings`, notes, `resolved_question` for follow-ups, and `source`: `documents` (grounded, cited), `general` (general knowledge, uncited; only with `CHAT_GENERAL_KNOWLEDGE`) or `none` (abstained) |
+| POST | `/api/chat/stream/` | Same request and the same turn, as Server-Sent Events: `delta {text}` while the model writes (provisional), `reset {}` (discard what was shown), then `done {…the /chat/ payload}` (authoritative) or `error {detail}`. Validation, throttling and conversation ownership fail as ordinary JSON 4xx before streaming starts. Extractive answers send only `done` |
 | GET | `/api/chat/conversations/` | The caller's conversations, newest first |
 | GET · PATCH · DELETE | `/api/chat/conversations/{id}/` | Owner only; PATCH `{title}` |
 | POST | `/api/messages/{id}/feedback/` | `{rating: HELPFUL \| NOT_HELPFUL \| INCORRECT, comment?}`; owner of the conversation only |

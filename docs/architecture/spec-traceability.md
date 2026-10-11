@@ -28,7 +28,7 @@ the deploying institution ([institutional-decisions.md](../release/institutional
 | FR-13 | Search | Done | Hybrid lexical + vector with fusion, permission filter first (`search/service.py`) | `tests_search.py` |
 | FR-14 | RAG chat over collections | Done | `rag/engine.py`, `chat/views.py`, multi-part planning (`agents/`), follow-ups (`rag/followup.py`); **Collections** (`collections/`, `models/collection.py`) narrow search and chat | `tests_rag.py`, `tests_agents.py`, `tests_followup.py`, `tests_collections.py` |
 | FR-15 | Citations | Done | §12.3 shape: document, page, chunk, text, character start/end (`search/service.py`, `rag/grounding.py`). Bounding boxes (optional in §12.3) are not produced | `tests_rag.py` |
-| FR-16 | Abstention | Done | `rag/engine.py` `Abstention` reasons; relevance floor; grounding check | `tests_rag.py`, `tests_evaluation_gate.py` |
+| FR-16 | Abstention | Done / Adapted (chat, opt-in) | `rag/engine.py` `Abstention` reasons; relevance floor; grounding check. With `CHAT_GENERAL_KNOWLEDGE` on, chat replaces a clean abstention with a labelled, uncited general-knowledge reply (`rag/general.py`) - never after a grounding failure, never in search or evaluation | `tests_rag.py`, `tests_evaluation_gate.py` |
 | FR-17 | Evaluation | Done | Offline: `evaluation/` benchmarks, `manage.py evaluate`, CI regression gate. Online: answer feedback, `adi_evaluation_metric`, groundedness histogram | `tests_evaluation.py`, `tests_evaluation_gate.py` |
 | FR-18 | Audit | Done | `documents/audit.py`, `AuditLog` (document, auth, admin, collection actions); `GET /api/v1/admin/audit/` | `tests_security.py`, `accounts/tests_admin.py` |
 

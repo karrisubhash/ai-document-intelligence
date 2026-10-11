@@ -205,6 +205,91 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return parsed as T;
 }
 
+export interface StreamHandlers {
+  /** Provisional text, as the model writes it. */
+  onDelta?: (text: string) => void;
+  /** Discard what onDelta has shown: the server withdrew that answer. */
+  onReset?: () => void;
+}
+
+/**
+ * POST /api/v1/chat/stream/ - one chat turn as Server-Sent Events.
+ *
+ * Resolves with the `done` payload, which is the authoritative answer: the
+ * server checks grounding after generation, so the streamed words are a
+ * preview and may be replaced. An answerer that cannot stream sends only
+ * `done`, and this behaves like api.chat().
+ */
+export async function streamChat(
+  input: ChatInput,
+  handlers: StreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<ChatResponse> {
+  await ensureCsrf();
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/chat/stream/`, {
+      method: "POST",
+      headers: {
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
+        "X-CSRFToken": readCookie("csrftoken"),
+      },
+      body: JSON.stringify(input),
+      signal,
+      credentials: "same-origin",
+    });
+  } catch (caught) {
+    if (caught instanceof DOMException && caught.name === "AbortError") throw caught;
+    throw new ApiError(0, describe(0, null), null);
+  }
+
+  if (!response.ok || !response.body) {
+    // Validation, throttling and ownership are checked before streaming
+    // starts, so these arrive as ordinary JSON errors.
+    const text = await response.text();
+    let parsed: unknown = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // Not JSON; kept as text for describe().
+    }
+    if (response.status === 401) onUnauthorized?.();
+    throw new ApiError(response.status, describe(response.status, parsed), parsed);
+  }
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value;
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+
+      let event = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data.push(line.slice(6));
+      }
+      if (!data.length) continue; // a keep-alive comment
+
+      const payload = JSON.parse(data.join("\n"));
+      if (event === "delta") handlers.onDelta?.(payload.text);
+      else if (event === "reset") handlers.onReset?.();
+      else if (event === "done") return payload as ChatResponse;
+      else if (event === "error") {
+        throw new ApiError(500, payload.detail ?? describe(500, null), payload);
+      }
+    }
+  }
+  throw new ApiError(0, "The answer stopped before it was complete. Please try again.", null);
+}
+
 function query(params: Record<string, string | number | boolean | undefined | null>) {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -401,6 +486,8 @@ export const api = {
     request<SearchResponse>("/api/v1/search/", { method: "POST", body: input }),
   chat: (input: ChatInput) =>
     request<ChatResponse>("/api/v1/chat/", { method: "POST", body: input }),
+  chatStream: (input: ChatInput, handlers?: StreamHandlers, signal?: AbortSignal) =>
+    streamChat(input, handlers, signal),
   conversations: (page = 1) =>
     request<Paginated<ConversationSummary>>(`/api/v1/chat/conversations/${query({ page })}`),
   conversation: (id: number) => request<Conversation>(`/api/v1/chat/conversations/${id}/`),

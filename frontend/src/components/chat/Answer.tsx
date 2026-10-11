@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api/client";
 import { useResource } from "../../api/hooks";
 import type {
+  AnswerSource,
   ChatMessage,
   ChatResponse,
   Citation,
@@ -37,6 +38,7 @@ export interface AnswerView {
   reranker: string;
   semantic: boolean;
   timings: Record<string, number>;
+  source: AnswerSource;
 }
 
 export function fromResponse(response: ChatResponse): AnswerView {
@@ -62,6 +64,7 @@ export function fromResponse(response: ChatResponse): AnswerView {
     reranker: response.retrieval.reranker,
     semantic: response.retrieval.semantic,
     timings: response.timings ?? {},
+    source: response.source ?? (response.abstained ? "none" : "documents"),
   };
 }
 
@@ -93,6 +96,7 @@ export function fromMessage(message: ChatMessage): AnswerView {
     reranker: meta.reranker ?? "",
     semantic: Boolean(meta.semantic_retrieval),
     timings: meta.timings ?? {},
+    source: meta.source ?? (message.abstained ? "none" : "documents"),
   };
 }
 
@@ -327,16 +331,25 @@ export function Answer({
       ) : null}
 
       <div className="answer-meta">
-        <Badge
-          tone={answer.generative ? "info" : "neutral"}
-          title={
-            answer.generative
-              ? `Written by ${answer.modelName} and checked against the cited passages`
-              : "Quoted verbatim from the documents; nothing was generated"
-          }
-        >
-          {answer.generative ? "Written from sources" : "Quoted from sources"}
-        </Badge>
+        {answer.source === "general" ? (
+          <Badge
+            tone="warning"
+            title="Your documents had nothing on this, so the answer comes from the model's general knowledge. It has no sources and was not checked against your documents."
+          >
+            General knowledge · not from your documents
+          </Badge>
+        ) : (
+          <Badge
+            tone={answer.generative ? "info" : "neutral"}
+            title={
+              answer.generative
+                ? `Written by ${answer.modelName} and checked against the cited passages`
+                : "Quoted verbatim from the documents; nothing was generated"
+            }
+          >
+            {answer.generative ? "Written from sources" : "Quoted from sources"}
+          </Badge>
+        )}
         <span className="muted small">{formatDuration(answer.durationMs)}</span>
         <details className="answer-details">
           <summary>How this answer was produced</summary>

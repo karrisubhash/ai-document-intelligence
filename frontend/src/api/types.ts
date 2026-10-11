@@ -318,9 +318,14 @@ export interface ChatResponse {
   timings: Record<string, number>;
   notes: string[];
   message_id: number;
+  /** "documents": grounded and cited; "general": general knowledge, uncited; "none": abstained. */
+  source?: AnswerSource;
 }
 
+export type AnswerSource = "documents" | "general" | "none";
+
 export interface MessageMetadata {
+  source?: AnswerSource;
   reranker?: string;
   semantic_retrieval?: boolean;
   suspected_injections?: number;

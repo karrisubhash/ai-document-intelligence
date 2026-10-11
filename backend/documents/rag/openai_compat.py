@@ -90,6 +90,8 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
+from . import streaming
+
 # Shared with the Claude answerer on purpose: this prompt encodes the
 # citation discipline and the figure rule that documents.rag.grounding
 # enforces afterwards, and two copies of a contract is one copy of a
@@ -124,6 +126,17 @@ class Preset:
     # A property of the service rather than of any request, and it belongs
     # in the answer's metadata either way.
     trains_on_free_tier: bool = False
+
+
+@dataclass
+class Completion:
+    """What one chat completion produced, streamed or not."""
+
+    text: str
+    finish_reason: str
+    usage: object = None
+    served_by: str = ""
+    streamed: bool = False
 
 
 PRESETS = {
@@ -466,30 +479,16 @@ class OpenAICompatibleAnswerer:
         # No `from openai import OpenAI` here: _get_client owns that, so a
         # caller that injected its own client - which the tests do - never
         # needs the package installed at all.
-        client = self._get_client()
-
-        completion = client.chat.completions.create(**self._request_kwargs(prompt))
-
-        choices = getattr(completion, "choices", None)
-        if not choices:
-            error = _embedded_error(completion)
-            logger.warning(
-                "llm.no_choices",
-                extra={"provider": self.provider, "error": error},
-            )
-            raise NoChoicesReturned(
-                f"{self.provider} returned a success with no choices ({error})"
-            )
-
-        choice = choices[0]
-        finish_reason = getattr(choice, "finish_reason", "") or ""
+        result = self.complete(self._request_kwargs(prompt))
+        finish_reason = result.finish_reason
 
         # Read defensively. Every backend in PRESETS reports usage on a
         # non-streaming completion, so a missing block means something was
         # already wrong - and guessing a token count would put an invented
         # number into the cost reporting, which is worse than a zero that
-        # is visibly a zero.
-        usage = getattr(completion, "usage", None)
+        # is visibly a zero. A streamed completion reports it only if the
+        # server volunteers it in the last chunk.
+        usage = result.usage
 
         if finish_reason == "content_filter":
             # Institutional documents are dull, but a disciplinary
@@ -528,10 +527,7 @@ class OpenAICompatibleAnswerer:
                 usage=usage,
             )
 
-        message = getattr(choice, "message", None)
-        # Typed `str | None`, and genuinely None when the model emitted
-        # only tool calls or was cut off by a filter.
-        text = (getattr(message, "content", None) or "").strip()
+        text = result.text.strip()
 
         if not text:
             return self._abstained(
@@ -550,7 +546,8 @@ class OpenAICompatibleAnswerer:
             # Which model actually served it, which is not always the one
             # requested: a free-model router picks per request, and some
             # gateways substitute without saying so anywhere else.
-            "served_by": getattr(completion, "model", "") or self.model,
+            "served_by": result.served_by,
+            "streamed": result.streamed,
             "provider_may_train_on_input": self.trains_on_free_tier,
         }
 
@@ -573,6 +570,74 @@ class OpenAICompatibleAnswerer:
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
             metadata=metadata,
+        )
+
+    def complete(self, request: dict) -> "Completion":
+        """One chat completion, streamed through documents.rag.streaming
+        when a sink is installed and returned whole either way.
+
+        `request` is a full chat.completions.create() payload. Shared by the
+        grounded answer and the general-knowledge reply (documents.rag.general)
+        so both get the same client, key handling and quirk handling.
+        """
+        # No `from openai import OpenAI` here: _get_client owns that, so a
+        # caller that injected its own client - which the tests do - never
+        # needs the package installed at all.
+        client = self._get_client()
+
+        if not streaming.active():
+            completion = client.chat.completions.create(**request)
+            choices = getattr(completion, "choices", None)
+            if not choices:
+                self._no_choices(completion)
+            choice = choices[0]
+            message = getattr(choice, "message", None)
+            return Completion(
+                # Typed `str | None`, and genuinely None when the model
+                # emitted only tool calls or was cut off by a filter.
+                text=getattr(message, "content", None) or "",
+                finish_reason=getattr(choice, "finish_reason", "") or "",
+                usage=getattr(completion, "usage", None),
+                served_by=getattr(completion, "model", "") or self.model,
+            )
+
+        # Streamed. No `stream_options`: some of these servers 400 on a
+        # parameter they do not implement (see _request_kwargs), and usage
+        # is worth less than an answer that arrives at all.
+        parts, finish_reason, usage, served_by, last = [], "", None, "", None
+        for chunk in client.chat.completions.create(**request, stream=True):
+            last = chunk
+            usage = getattr(chunk, "usage", None) or usage
+            served_by = getattr(chunk, "model", "") or served_by
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            piece = getattr(delta, "content", None) or ""
+            if piece:
+                parts.append(piece)
+                streaming.emit(piece)
+            finish_reason = getattr(choices[0], "finish_reason", None) or finish_reason
+        if not parts and not finish_reason:
+            # The streamed form of OpenRouter's HTTP 200 with an `error`
+            # body and no choices.
+            self._no_choices(last)
+        return Completion(
+            text="".join(parts),
+            finish_reason=finish_reason,
+            usage=usage,
+            served_by=served_by or self.model,
+            streamed=True,
+        )
+
+    def _no_choices(self, completion):
+        error = _embedded_error(completion)
+        logger.warning(
+            "llm.no_choices",
+            extra={"provider": self.provider, "error": error},
+        )
+        raise NoChoicesReturned(
+            f"{self.provider} returned a success with no choices ({error})"
         )
 
     def _abstained(self, prompt: str, *, reason: str, usage=None) -> LLMResponse:

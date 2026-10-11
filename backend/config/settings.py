@@ -628,6 +628,17 @@ RAG_ANSWERER_PROVIDER_TRAINS_ON_INPUT = (
 # that cites a different passage on every identical question.
 RAG_ANSWERER_TEMPERATURE = float(os.getenv("RAG_ANSWERER_TEMPERATURE", "0.0"))
 
+# Chat only: when the documents have nothing relevant - including greetings
+# and small talk - reply from the model's general knowledge instead of
+# abstaining. Labelled `source: "general"`, uncited, never used after an
+# answer FAILED grounding, and never by search or the evaluation runner.
+# Needs a generative RAG_ANSWERER (OpenAI-compatible). A deliberate,
+# institution-chosen departure from spec 12.4 / FR-16, so off by default.
+# See documents/rag/general.py.
+CHAT_GENERAL_KNOWLEDGE = os.getenv("CHAT_GENERAL_KNOWLEDGE", "False").lower() == "true"
+CHAT_GENERAL_TEMPERATURE = float(os.getenv("CHAT_GENERAL_TEMPERATURE", "0.3"))
+CHAT_GENERAL_MAX_TOKENS = int(os.getenv("CHAT_GENERAL_MAX_TOKENS", "2048"))
+
 # Context size in CHARACTERS, not tokens: a tokenizer is model-specific and
 # no model is wired up. ~4 chars/token makes this roughly a 2k-token budget.
 RAG_CONTEXT_BUDGET = int(os.getenv("RAG_CONTEXT_BUDGET", "8000"))
@@ -780,6 +791,7 @@ if RUNNING_TESTS:
     # Empty means the bundled ExtractiveAnswerer, which needs no network.
     # Leaving a real one configured would make the suite call an API.
     RAG_ANSWERER = ""
+    CHAT_GENERAL_KNOWLEDGE = False
 
 
 CELERY_BROKER_URL = os.getenv(

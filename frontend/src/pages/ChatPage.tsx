@@ -24,12 +24,15 @@ import {
   useToast,
 } from "../components/ui";
 import { formatRelative } from "../lib/format";
+import { Markdown } from "../lib/markdown";
 
 interface Turn {
   key: string;
   question: string;
   answer: AnswerView | null;
   error?: unknown;
+  /** The answer as it is being written; replaced by `answer` when done. */
+  streaming?: string;
 }
 
 const SUGGESTIONS = [
@@ -299,15 +302,23 @@ export default function ChatPage() {
     setDraft("");
     setSending(true);
     try {
-      const response = await api.chat({
-        question,
-        conversation_id: conversationId,
-        ...(scope
-          ? { document_id: scope.id }
-          : collectionId
-            ? { collection_id: Number(collectionId) }
-            : {}),
-      });
+      const patch = (update: (turn: Turn) => Turn) =>
+        setTurns((current) => current.map((turn) => (turn.key === key ? update(turn) : turn)));
+      const response = await api.chatStream(
+        {
+          question,
+          conversation_id: conversationId,
+          ...(scope
+            ? { document_id: scope.id }
+            : collectionId
+              ? { collection_id: Number(collectionId) }
+              : {}),
+        },
+        {
+          onDelta: (piece) => patch((turn) => ({ ...turn, streaming: (turn.streaming ?? "") + piece })),
+          onReset: () => patch((turn) => ({ ...turn, streaming: "" })),
+        },
+      );
       if (view.current !== askedIn) {
         // Saved in its own conversation, which the list now shows; not
         // displayed over the one the user moved to.
@@ -422,6 +433,14 @@ export default function ChatPage() {
                         ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
                         : errorMessage(turn.error)}
                     </Alert>
+                  ) : turn.streaming ? (
+                    // Provisional: the server's final answer replaces it.
+                    <div className="answer answer-streaming" aria-live="polite" aria-busy="true">
+                      <Markdown
+                        source={turn.streaming}
+                        renderCitation={(marker, key) => <sup key={key}>[{marker}]</sup>}
+                      />
+                    </div>
                   ) : (
                     <div className="thinking">
                       <span className="spinner" aria-hidden="true" />

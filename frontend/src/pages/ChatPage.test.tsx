@@ -131,7 +131,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("ChatPage", () => {
   it("does not let a late first answer take over the conversation the user moved to", async () => {
     let deliver: (response: ChatResponse) => void = () => undefined;
-    vi.spyOn(api, "chat").mockImplementation(
+    vi.spyOn(api, "chatStream").mockImplementation(
       () => new Promise<ChatResponse>((resolve) => (deliver = resolve)),
     );
 
@@ -157,7 +157,7 @@ describe("ChatPage", () => {
 
   it("shows nothing of the previous conversation while the next one loads", async () => {
     let open: (conversation: Conversation) => void = () => undefined;
-    vi.spyOn(api, "chat").mockResolvedValue(answer(3, "First answer."));
+    vi.spyOn(api, "chatStream").mockResolvedValue(answer(3, "First answer."));
     vi.spyOn(api, "conversation").mockImplementation(
       () => new Promise<Conversation>((resolve) => (open = resolve)),
     );

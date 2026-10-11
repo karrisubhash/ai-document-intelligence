@@ -2212,3 +2212,28 @@ mark.evidence {
   flex: 1 1 200px;
   min-width: 0;
 }
+
+/* Chat: the answer while it is being written - a caret after the last word. */
+.answer-streaming > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-streaming > :last-child::after {
+    animation: none;
+  }
+}
+

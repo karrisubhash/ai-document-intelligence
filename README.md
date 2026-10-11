@@ -50,6 +50,7 @@ for** and **what is actually built today**, and never conflates the two.
 | Prometheus + Grafana, multiprocess metrics | 20 | ✅ Built — `/metrics` now aggregates across gunicorn workers |
 | Governed evaluation dataset + regression gate | 19 | ✅ Built — 13 cases, a committed baseline, and it can fail |
 | Versioned API (`/api/v1/`), idempotent uploads | 16 | ✅ Built — `/api/` kept as an alias; `Idempotency-Key` on document and version uploads |
+| Streaming chat, general-knowledge replies | 12, 16 | ✅ Built — answers stream as they are written (`/api/v1/chat/stream/`); opt-in labelled general-knowledge replies when the documents have nothing ([setup](.env.example)) |
 | Collections | 14, 15.2 | ✅ Built — department-scoped document sets that narrow search and chat, never widen them |
 | Distributed tracing, alert rules, dashboards as code | 20 | ✅ Built — OpenTelemetry opt-in (`INSTALL_OTEL`), 11 Prometheus alerts, provisioned Grafana overview |
 | Separate FastAPI AI services | 26 | ⬜ Deliberately not built — see [docs/architecture](docs/architecture/overview.md#why-one-service) |
