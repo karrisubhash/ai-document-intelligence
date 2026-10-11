@@ -14,6 +14,7 @@ const DocumentsPage = lazy(() => import("./pages/DocumentsPage"));
 const DocumentDetailPage = lazy(() => import("./pages/DocumentDetailPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
 const ChatPage = lazy(() => import("./pages/ChatPage"));
+const CollectionsPage = lazy(() => import("./pages/CollectionsPage"));
 const AccountPage = lazy(() => import("./pages/AccountPage"));
 const UsersPage = lazy(() => import("./pages/admin/UsersPage"));
 const DepartmentsPage = lazy(() => import("./pages/admin/DepartmentsPage"));
@@ -98,6 +99,7 @@ export default function App() {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/ask" element={<ChatPage />} />
           <Route path="/ask/:conversationId" element={<ChatPage />} />
+          <Route path="/collections" element={<CollectionsPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route
             path="/admin/users"

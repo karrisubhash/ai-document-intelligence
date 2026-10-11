@@ -24,7 +24,7 @@ from django.db.models import F
 from pgvector.django import CosineDistance
 
 from documents import authorization
-from documents.models import Document, DocumentChunk
+from documents.models import Collection, Document, DocumentChunk
 from documents.observability import tracing
 from documents.processing.chunking import service as chunking_service
 from documents.processing.chunking.exceptions import (
@@ -228,6 +228,7 @@ def search(
     document_type: str = "",
     department: str = "",
     document_id: int | None = None,
+    collection_id: int | None = None,
 ) -> SearchResponse:
     query = (query or "").strip()
     if not query:
@@ -258,6 +259,20 @@ def search(
         # would confirm the id exists.
         queryset = queryset.filter(document_version__document_id=document_id)
         in_scope = in_scope.filter(id=document_id)
+    if collection_id:
+        # Same rule as document_id: AFTER authorization, so a collection
+        # only ever narrows. A collection the caller cannot see narrows to
+        # nothing, rather than revealing which of their documents it holds.
+        if authorization.visible_collections(
+            user, Collection.objects.filter(pk=collection_id)
+        ).exists():
+            queryset = queryset.filter(
+                document_version__document__collections=collection_id
+            )
+            in_scope = in_scope.filter(collections=collection_id)
+        else:
+            queryset = queryset.none()
+            in_scope = in_scope.none()
 
     response = SearchResponse(query=query, authorized_documents=documents.count())
 

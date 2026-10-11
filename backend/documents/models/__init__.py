@@ -1,6 +1,7 @@
 from .audit import AuditLog
 from .chunk import DocumentChunk, DocumentChunkEmbedding
 from .classification import ClassificationResult
+from .collection import Collection
 from .content import DocumentContent, PageContent
 from .conversation import Conversation, Message
 from .document import Document
@@ -19,6 +20,7 @@ from .table import DocumentTable
 from .version import DocumentVersion
 
 __all__ = [
+    "Collection",
     "Document",
     "DocumentVersion",
     "DocumentContent",

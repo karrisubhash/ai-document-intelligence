@@ -18,6 +18,7 @@ import type {
   AuditEntry,
   ChatResponse,
   ClassificationResult,
+  Collection,
   Conversation,
   ConversationSummary,
   Dashboard,
@@ -237,6 +238,7 @@ export interface SearchInput {
   limit?: number;
   document_type?: string;
   department?: string;
+  collection_id?: number | null;
 }
 
 export interface ChatInput {
@@ -244,6 +246,7 @@ export interface ChatInput {
   conversation_id?: number | null;
   document_type?: string;
   department?: string;
+  collection_id?: number | null;
 }
 
 /**
@@ -384,6 +387,16 @@ export const api = {
     fetchBlob(doc(id, `download/${query({ version })}`), signal),
 
   // --- search and chat -------------------------------------------------
+  collections: () => request<Paginated<Collection>>("/api/v1/collections/"),
+  createCollection: (body: { name: string; description?: string; department?: string }) =>
+    request<Collection>("/api/v1/collections/", { method: "POST", body }),
+  deleteCollection: (id: number) =>
+    request<void>(`/api/v1/collections/${id}/`, { method: "DELETE" }),
+  setCollectionDocuments: (id: number, documentIds: number[], add: boolean) =>
+    request<Collection>(`/api/v1/collections/${id}/documents/`, {
+      method: add ? "POST" : "DELETE",
+      body: { document_ids: documentIds },
+    }),
   search: (input: SearchInput) =>
     request<SearchResponse>("/api/v1/search/", { method: "POST", body: input }),
   chat: (input: ChatInput) =>

@@ -13,6 +13,9 @@ class AuditLog(models.Model):
         DOCUMENT_VERSION_UPLOAD = "DOCUMENT_VERSION_UPLOAD", "Document version upload"
         DOCUMENT_ARCHIVE = "DOCUMENT_ARCHIVE", "Document archive"
         DOCUMENT_RESTORE = "DOCUMENT_RESTORE", "Document restore"
+        COLLECTION_CREATE = "COLLECTION_CREATE", "Collection create"
+        COLLECTION_UPDATE = "COLLECTION_UPDATE", "Collection update"
+        COLLECTION_DELETE = "COLLECTION_DELETE", "Collection delete"
         SEARCH = "SEARCH", "Search"
         CHAT = "CHAT", "Chat"
         # Identity. A failed login is recorded against the account it

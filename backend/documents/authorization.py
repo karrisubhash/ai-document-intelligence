@@ -82,3 +82,50 @@ def visible_documents(user, queryset):
         visible |= Q(department=profile.department)
 
     return queryset.filter(visible)
+
+
+# --- Collections (spec 14) ------------------------------------------------
+#
+# The roles that may curate collections: the spec's ORG_ADMIN and MANAGER
+# (DEPARTMENT_ADMIN and FACULTY here) and the platform administrator.
+COLLECTION_CURATORS = frozenset(
+    {
+        UserProfile.Role.SYSTEM_ADMIN,
+        UserProfile.Role.DEPARTMENT_ADMIN,
+        UserProfile.Role.FACULTY,
+    }
+)
+
+
+def can_create_collection(user) -> bool:
+    if is_system_admin(user):
+        return True
+    profile = get_profile(user)
+    # A department-less curator would create a collection nobody else could
+    # see, holding documents nobody could add - refused, not silently empty.
+    return profile.role in COLLECTION_CURATORS and bool(profile.department)
+
+
+def visible_collections(user, queryset):
+    """Same shape as visible_documents: own department, or created by `user`."""
+    if is_system_admin(user):
+        return queryset
+    profile = get_profile(user)
+    visible = Q(created_by=user)
+    if profile.department:
+        visible |= Q(department=profile.department)
+    return queryset.filter(visible)
+
+
+def can_manage_collection(user, collection) -> bool:
+    """Rename, delete, or change membership."""
+    if is_system_admin(user):
+        return True
+    if collection.created_by_id == user.id:
+        return True
+    profile = get_profile(user)
+    return (
+        profile.role == UserProfile.Role.DEPARTMENT_ADMIN
+        and bool(profile.department)
+        and collection.department == profile.department
+    )

@@ -2199,3 +2199,16 @@ mark.evidence {
     display: block;
   }
 }
+
+/* Collections: the "add a document" picker under each collection. */
+.collection-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.collection-add .input {
+  flex: 1 1 200px;
+  min-width: 0;
+}

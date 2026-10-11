@@ -34,6 +34,7 @@ export default function SearchPage() {
   useDocumentTitle("Search");
   const navigate = useNavigate();
   const departments = useResource(() => api.departments(), []);
+  const collections = useResource(() => api.collections(), []);
 
   // The query is deliberately NOT put in the URL. The search API takes it
   // by POST so that what people look for never lands in access logs or
@@ -41,6 +42,7 @@ export default function SearchPage() {
   const [query, setQuery] = useState("");
   const [documentType, setDocumentType] = useState("");
   const [department, setDepartment] = useState("");
+  const [collection, setCollection] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [asked, setAsked] = useState("");
@@ -52,11 +54,17 @@ export default function SearchPage() {
     query: string;
     document_type: string;
     department: string;
+    collection_id: number | null;
   } | null>(null);
   const search = useAction(api.search);
 
   const run = async (
-    request: { query: string; document_type: string; department: string },
+    request: {
+      query: string;
+      document_type: string;
+      department: string;
+      collection_id: number | null;
+    },
     nextLimit = PAGE,
   ) => {
     if (!request.query) return;
@@ -71,7 +79,15 @@ export default function SearchPage() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void run({ query: query.trim(), document_type: documentType, department }, PAGE);
+    void run(
+      {
+        query: query.trim(),
+        document_type: documentType,
+        department,
+        collection_id: collection ? Number(collection) : null,
+      },
+      PAGE,
+    );
   };
 
   const documents = new Set(result?.results.map((hit) => hit.document_id));
@@ -123,6 +139,21 @@ export default function SearchPage() {
             </option>
           ))}
         </select>
+        {collections.data?.results.length ? (
+          <select
+            className="input"
+            aria-label="Collection"
+            value={collection}
+            onChange={(event) => setCollection(event.target.value)}
+          >
+            <option value="">Any collection</option>
+            {collections.data.results.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
         <Button type="submit" variant="primary" loading={search.pending} disabled={!query.trim()}>
           Search
         </Button>

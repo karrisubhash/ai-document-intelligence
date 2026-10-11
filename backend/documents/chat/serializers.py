@@ -21,6 +21,10 @@ class ChatRequestSerializer(serializers.Serializer):
     )
     # Ask about one document. Narrows retrieval after the permission filter.
     document_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    # Narrows to one collection, after authorization (spec 14).
+    collection_id = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
 
 
 class MessageSerializer(serializers.ModelSerializer):

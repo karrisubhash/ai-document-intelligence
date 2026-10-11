@@ -78,6 +78,7 @@ export interface Capabilities {
   view_operations: boolean;
   view_system_status: boolean;
   upload_to_any_department: boolean;
+  create_collections: boolean;
 }
 
 export interface Me {
@@ -497,4 +498,22 @@ export interface SystemStatus {
   };
   pipeline: Record<string, boolean | number | null>;
   debug: boolean;
+}
+
+export interface CollectionMember {
+  id: number;
+  title: string;
+}
+
+export interface Collection {
+  id: number;
+  name: string;
+  description: string;
+  department: string;
+  documents: CollectionMember[];
+  document_count: number;
+  created_by: string | null;
+  can_manage: boolean;
+  created_at: string;
+  updated_at: string;
 }

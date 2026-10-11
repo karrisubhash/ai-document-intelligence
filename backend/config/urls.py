@@ -10,6 +10,7 @@ from documents.operations.views import DashboardView
 # Every JSON endpoint, without its prefix. Mounted twice below.
 api_patterns = [
     path("documents/", include("documents.api.urls")),
+    path("collections/", include("documents.collections.urls")),
     path("search/", include("documents.search.urls")),
     path("chat/", include("documents.chat.urls")),
     path("evaluations/", include("documents.evaluation_api.urls")),

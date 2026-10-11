@@ -36,6 +36,7 @@ class SearchView(APIView):
             document_type=data.get("document_type", ""),
             department=data.get("department", ""),
             document_id=data.get("document_id"),
+            collection_id=data.get("collection_id"),
         )
 
         record_event(

@@ -25,6 +25,7 @@ const ADMIN: Me = {
     view_operations: true,
     view_system_status: false,
     upload_to_any_department: false,
+    create_collections: false,
   },
 };
 

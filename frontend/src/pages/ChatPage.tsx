@@ -200,6 +200,10 @@ export default function ChatPage() {
   const [scope, setScope] = useState<{ id: number; title: string } | null>(
     handoff.documentId ? { id: handoff.documentId, title: handoff.documentTitle ?? "" } : null,
   );
+  // Narrows retrieval to one collection (spec 14) when no single document
+  // is in scope. The server re-applies the reader's permissions first.
+  const collections = useResource(() => api.collections(), []);
+  const [collectionId, setCollectionId] = useState("");
 
   // Every page loaded so far, newest first. Only the first 50 were ever
   // reachable before; older conversations simply could not be opened.
@@ -298,7 +302,11 @@ export default function ChatPage() {
       const response = await api.chat({
         question,
         conversation_id: conversationId,
-        ...(scope ? { document_id: scope.id } : {}),
+        ...(scope
+          ? { document_id: scope.id }
+          : collectionId
+            ? { collection_id: Number(collectionId) }
+            : {}),
       });
       if (view.current !== askedIn) {
         // Saved in its own conversation, which the list now shows; not
@@ -435,6 +443,23 @@ export default function ChatPage() {
               <button type="button" className="link-button" onClick={() => setScope(null)}>
                 Search all documents
               </button>
+            </div>
+          ) : collections.data?.results.length ? (
+            <div className="scope">
+              <label htmlFor="composer-collection">Ask within</label>
+              <select
+                id="composer-collection"
+                className="input"
+                value={collectionId}
+                onChange={(event) => setCollectionId(event.target.value)}
+              >
+                <option value="">All documents</option>
+                {collections.data.results.map((collection) => (
+                  <option key={collection.id} value={collection.id}>
+                    {collection.name}
+                  </option>
+                ))}
+              </select>
             </div>
           ) : null}
           <label htmlFor="composer" className="visually-hidden">

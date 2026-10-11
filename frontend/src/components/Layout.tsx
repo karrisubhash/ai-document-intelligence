@@ -18,6 +18,7 @@ const PRIMARY: NavItem[] = [
   { to: "/documents", label: "Documents", icon: "▤" },
   { to: "/search", label: "Search", icon: "⌕" },
   { to: "/ask", label: "Ask", icon: "✦" },
+  { to: "/collections", label: "Collections", icon: "▣" },
 ];
 
 function adminItems(can: ReturnType<typeof useAuth>["can"]): NavItem[] {

@@ -5,7 +5,11 @@ from rest_framework import serializers
 from accounts import permissions
 from accounts.models import Department, UserProfile
 from accounts.services import UnknownDepartment, resolve_department
-from documents.authorization import get_profile, is_system_admin
+from documents.authorization import (
+    can_create_collection,
+    get_profile,
+    is_system_admin,
+)
 
 User = get_user_model()
 
@@ -52,6 +56,7 @@ class MeSerializer(serializers.Serializer):
             "view_operations": administrator,
             "view_system_status": system,
             "upload_to_any_department": system,
+            "create_collections": can_create_collection(user),
         }
 
 
