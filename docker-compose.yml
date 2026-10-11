@@ -182,6 +182,16 @@ services:
     depends_on:
       - backend
 
+  # Trace viewer for local development (spec 20). Off by default:
+  #   docker compose --profile tracing up -d jaeger
+  # then set OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 in .env, build
+  # with INSTALL_OTEL=true, and open http://localhost:16686.
+  jaeger:
+    image: jaegertracing/jaeger:2.1.0
+    profiles: ["tracing"]
+    ports:
+      - "127.0.0.1:16686:16686"
+
 volumes:
   hf_cache:
   postgres_data:

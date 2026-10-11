@@ -19,6 +19,10 @@ global:
   external_labels:
     stack: ai-document-intelligence
 
+# Alert rules (spec 20); see alerts.yml for thresholds and their rationale.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   # Every backend replica. Each one aggregates its own gunicorn workers via
   # PROMETHEUS_MULTIPROC_DIR, so one target == one container == an honest

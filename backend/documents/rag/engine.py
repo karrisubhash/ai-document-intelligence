@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from django.conf import settings
 from django.utils.module_loading import import_string
 
-from documents.observability import telemetry
+from documents.observability import telemetry, tracing
 from documents.search import service as search_service
 
 from . import context as context_builder
@@ -278,7 +278,15 @@ def _elapsed_ms(since: float) -> int:
     return int((time.monotonic() - since) * 1000)
 
 
-def ask(
+def ask(user, question: str, **options) -> RagAnswer:
+    """Answer `question` for `user`; see _ask. Traced as one `rag.ask` span."""
+    with tracing.span("rag.ask") as current:
+        answer = _ask(user, question, **options)
+        tracing.record_rag_answer(current, answer)
+        return answer
+
+
+def _ask(
     user,
     question: str,
     *,

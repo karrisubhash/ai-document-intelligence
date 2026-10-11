@@ -110,6 +110,17 @@ RUN if [ "$INSTALL_S3" = "true" ]; then \
         echo "Skipping S3 dependencies (INSTALL_S3=$INSTALL_S3)"; \
     fi
 
+# Distributed tracing (spec 20), optional: OpenTelemetry SDK, the OTLP
+# exporter and Django/Celery/psycopg instrumentation. Inert until
+# OTEL_EXPORTER_OTLP_ENDPOINT is set; see documents/observability/tracing.py.
+#
+#   INSTALL_OTEL=true docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+ARG INSTALL_OTEL=false
+
+COPY backend/requirements-otel.txt /app/requirements-otel.txt
+
+RUN if [ "$INSTALL_OTEL" = "true" ]; then         pip install --no-cache-dir -r /app/requirements-otel.txt -c /app/constraints.txt;     else         echo "Skipping tracing dependencies (INSTALL_OTEL=$INSTALL_OTEL)";     fi
+
 # The base image's pip (25.0.1) carries published advisories, and a scanner
 # reads the final filesystem. Upgraded after the dependency layers so the
 # pinned installs above stay cached; nothing at runtime runs pip.

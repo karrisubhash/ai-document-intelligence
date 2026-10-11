@@ -54,6 +54,7 @@ services:
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
+        INSTALL_OTEL: "${INSTALL_OTEL:-false}"
     command: python manage.py migrate --noinput
     env_file:
       - .env
@@ -76,6 +77,7 @@ services:
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
+        INSTALL_OTEL: "${INSTALL_OTEL:-false}"
     restart: unless-stopped
 
     # Every flag stays at the SAME indentation as `gunicorn`.
@@ -193,6 +195,7 @@ services:
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
+        INSTALL_OTEL: "${INSTALL_OTEL:-false}"
     restart: unless-stopped
 
     # --max-tasks-per-child recycles workers so a slow leak in a native
@@ -258,6 +261,7 @@ services:
         INSTALL_LLM: "true"
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
+        INSTALL_OTEL: "${INSTALL_OTEL:-false}"
     restart: unless-stopped
 
     command: >
@@ -350,6 +354,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -369,6 +374,7 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?set GRAFANA_PASSWORD}

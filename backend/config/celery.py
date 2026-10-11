@@ -61,6 +61,14 @@ def keep_django_logging(**kwargs):
 
 
 @worker_process_init.connect
+def start_tracing(**kwargs):
+    """Per child, after the fork (see documents/observability/tracing.py)."""
+    from documents.observability.tracing import configure_tracing
+
+    configure_tracing("adi-worker")
+
+
+@worker_process_init.connect
 def warm_models(**kwargs):
     """Start loading the embedding model in each worker child - in a thread.
 

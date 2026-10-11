@@ -25,6 +25,7 @@ from pgvector.django import CosineDistance
 
 from documents import authorization
 from documents.models import Document, DocumentChunk
+from documents.observability import tracing
 from documents.processing.chunking import service as chunking_service
 from documents.processing.chunking.exceptions import (
     EmbeddingProviderNotConfigured,
@@ -218,6 +219,7 @@ def _vector(queryset, vector, model_name, model_version, limit: int):
     )
 
 
+@tracing.traced("search.hybrid")
 def search(
     user,
     query: str,

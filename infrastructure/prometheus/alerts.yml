@@ -1,0 +1,100 @@
+# Alert rules (spec 20). Loaded by prometheus.yml `rule_files`.
+#
+# Thresholds are starting points for a single-host pilot, not measured SLOs:
+# re-set them from the first weeks of staging data. Every rule waits (`for`)
+# long enough that one slow request or one bad document does not page anyone.
+# Routing (email, chat, pager) is an Alertmanager concern and is not
+# configured here; without it the alerts show on Prometheus's /alerts page
+# and in Grafana.
+groups:
+  - name: adi-availability
+    rules:
+      - alert: TargetDown
+        expr: up{job=~"adi-.*"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.service }} ({{ $labels.instance }}) is not answering scrapes"
+
+      - alert: HighApiErrorRate
+        expr: |
+          sum(rate(adi_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(adi_http_requests_total[5m])), 1e-9) > 0.05
+          and sum(rate(adi_http_requests_total[5m])) > 0.1
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 5% of API requests are failing with 5xx"
+
+      - alert: SlowApiP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(adi_http_request_duration_seconds_bucket{route!~".*chat.*"}[10m]))) > 2
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "API p95 latency (chat excluded) above 2 s for 10 minutes"
+
+  - name: adi-processing
+    rules:
+      - alert: IngestQueueBacklog
+        expr: max by (queue) (adi_queue_depth) > 100
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Queue {{ $labels.queue }} has held over 100 tasks for 15 minutes"
+
+      - alert: PipelineFailureRate
+        expr: |
+          sum(rate(adi_pipeline_jobs_total{outcome="FAILED"}[30m]))
+            / clamp_min(sum(rate(adi_pipeline_jobs_total[30m])), 1e-9) > 0.2
+          and sum(increase(adi_pipeline_jobs_total[30m])) >= 5
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Over 20% of processing jobs failed in the last 30 minutes"
+
+      - alert: MalwareDetected
+        expr: increase(adi_malware_verdicts_total{verdict=~"INFECTED|SUSPICIOUS"}[10m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "An upload was flagged {{ $labels.verdict }} and quarantined"
+
+  - name: adi-ai-quality
+    rules:
+      - alert: HighAbstentionRate
+        expr: |
+          sum(rate(adi_rag_requests_total{abstained="True"}[1h]))
+            / clamp_min(sum(rate(adi_rag_requests_total[1h])), 1e-9) > 0.8
+          and sum(increase(adi_rag_requests_total[1h])) >= 20
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Chat declined over 80% of questions in the last hour - retrieval or index may be broken"
+
+      - alert: RerankerDegraded
+        expr: sum(increase(adi_rerank_degraded_total[15m])) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "The configured reranker is failing and answers fall back to retrieval order"
+
+      - alert: LlmFallbacks
+        expr: sum(increase(adi_llm_fallbacks_total[15m])) > 3
+        labels: {severity: warning}
+        annotations:
+          summary: "The generative answerer fell back more than 3 times in 15 minutes"
+
+  - name: adi-security
+    rules:
+      - alert: AuthenticationFailureBurst
+        expr: sum(increase(adi_auth_failures_total[5m])) > 50
+        labels: {severity: warning}
+        annotations:
+          summary: "Over 50 failed sign-ins in 5 minutes - possible credential stuffing"
+
+      - alert: PromptInjectionAttempts
+        expr: sum(increase(adi_suspicious_inputs_total[1h])) > 10
+        labels: {severity: info}
+        annotations:
+          summary: "Over 10 suspected prompt or document injections in the last hour"

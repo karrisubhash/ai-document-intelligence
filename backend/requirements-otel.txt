@@ -1,0 +1,19 @@
+# Distributed tracing, optional (spec sections 20 and 26).
+#
+# Installed only when traces are exported to an OpenTelemetry collector,
+# Jaeger, Tempo or a vendor. Setting OTEL_EXPORTER_OTLP_ENDPOINT activates
+# it; without that variable, or without these packages, tracing is a no-op.
+# See documents/observability/tracing.py.
+#
+#   pip install -r backend/requirements-otel.txt -c backend/constraints.txt
+#
+# Kept out of requirements.txt for the same reason as the S3 layer: a
+# deployment that does not export traces should not have to patch them.
+#
+# Versions come from constraints.txt. In the image: build with
+# INSTALL_OTEL=true (see the Dockerfile).
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-django
+opentelemetry-instrumentation-celery
+opentelemetry-instrumentation-psycopg
