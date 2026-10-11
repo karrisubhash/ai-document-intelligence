@@ -91,13 +91,13 @@ let csrfPromise: Promise<void> | null = null;
 
 /**
  * Makes sure the CSRF cookie exists before the first unsafe request.
- * Django sets it on GET /api/auth/csrf/; afterwards it is read from the
+ * Django sets it on GET /api/v1/auth/csrf/; afterwards it is read from the
  * cookie on every request, because login rotates it.
  */
 export function ensureCsrf(): Promise<void> {
   if (readCookie("csrftoken")) return Promise.resolve();
   if (!csrfPromise) {
-    csrfPromise = fetch(`${API_BASE_URL}/api/auth/csrf/`, {
+    csrfPromise = fetch(`${API_BASE_URL}/api/v1/auth/csrf/`, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
@@ -321,29 +321,29 @@ export function saveBlob(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const doc = (id: number, suffix = "") => `/api/documents/${id}/${suffix}`;
+const doc = (id: number, suffix = "") => `/api/v1/documents/${id}/${suffix}`;
 
 export const api = {
   // --- identity --------------------------------------------------------
-  me: () => request<Me>("/api/auth/me/", { quiet: true }),
+  me: () => request<Me>("/api/v1/auth/me/", { quiet: true }),
   login: (username: string, password: string) =>
-    request<Me>("/api/auth/login/", {
+    request<Me>("/api/v1/auth/login/", {
       method: "POST",
       body: { username, password },
       quiet: true,
     }),
-  logout: () => request<void>("/api/auth/logout/", { method: "POST", quiet: true }),
+  logout: () => request<void>("/api/v1/auth/logout/", { method: "POST", quiet: true }),
   changePassword: (current_password: string, new_password: string) =>
-    request<void>("/api/auth/password/", {
+    request<void>("/api/v1/auth/password/", {
       method: "POST",
       body: { current_password, new_password },
     }),
-  departments: () => request<Department[]>("/api/departments/"),
-  dashboard: () => request<Dashboard>("/api/dashboard/"),
+  departments: () => request<Department[]>("/api/v1/departments/"),
+  dashboard: () => request<Dashboard>("/api/v1/dashboard/"),
 
   // --- documents -------------------------------------------------------
   documents: (params: DocumentQuery = {}) =>
-    request<Paginated<DocumentSummary>>(`/api/documents/${query({ ...params })}`),
+    request<Paginated<DocumentSummary>>(`/api/v1/documents/${query({ ...params })}`),
   document: (id: number) => request<DocumentDetail>(doc(id)),
   upload: (input: UploadInput, onProgress: (fraction: number) => void) => {
     const form = new FormData();
@@ -351,7 +351,7 @@ export const api = {
     form.append("document_type", input.document_type);
     if (input.department) form.append("department", input.department);
     form.append("file", input.file);
-    return uploadWithProgress<DocumentDetail>("/api/documents/", form, onProgress);
+    return uploadWithProgress<DocumentDetail>("/api/v1/documents/", form, onProgress);
   },
   uploadVersion: (id: number, file: File, onProgress: (fraction: number) => void) => {
     const form = new FormData();
@@ -385,49 +385,49 @@ export const api = {
 
   // --- search and chat -------------------------------------------------
   search: (input: SearchInput) =>
-    request<SearchResponse>("/api/search/", { method: "POST", body: input }),
+    request<SearchResponse>("/api/v1/search/", { method: "POST", body: input }),
   chat: (input: ChatInput) =>
-    request<ChatResponse>("/api/chat/", { method: "POST", body: input }),
+    request<ChatResponse>("/api/v1/chat/", { method: "POST", body: input }),
   conversations: (page = 1) =>
-    request<Paginated<ConversationSummary>>(`/api/chat/conversations/${query({ page })}`),
-  conversation: (id: number) => request<Conversation>(`/api/chat/conversations/${id}/`),
+    request<Paginated<ConversationSummary>>(`/api/v1/chat/conversations/${query({ page })}`),
+  conversation: (id: number) => request<Conversation>(`/api/v1/chat/conversations/${id}/`),
   renameConversation: (id: number, title: string) =>
-    request<Conversation>(`/api/chat/conversations/${id}/`, {
+    request<Conversation>(`/api/v1/chat/conversations/${id}/`, {
       method: "PATCH",
       body: { title },
     }),
   deleteConversation: (id: number) =>
-    request<void>(`/api/chat/conversations/${id}/`, { method: "DELETE" }),
+    request<void>(`/api/v1/chat/conversations/${id}/`, { method: "DELETE" }),
   feedback: (messageId: number, rating: FeedbackRating, comment = "") =>
-    request<unknown>(`/api/messages/${messageId}/feedback/`, {
+    request<unknown>(`/api/v1/messages/${messageId}/feedback/`, {
       method: "POST",
       body: { rating, comment },
     }),
 
   // --- administration --------------------------------------------------
   adminUsers: (params: Record<string, string | number | undefined> = {}) =>
-    request<Paginated<AdminUser>>(`/api/admin/users/${query(params)}`),
+    request<Paginated<AdminUser>>(`/api/v1/admin/users/${query(params)}`),
   adminCreateUser: (body: Partial<AdminUser> & { password: string }) =>
-    request<AdminUser>("/api/admin/users/", { method: "POST", body }),
+    request<AdminUser>("/api/v1/admin/users/", { method: "POST", body }),
   adminUpdateUser: (id: number, body: Partial<AdminUser>) =>
-    request<AdminUser>(`/api/admin/users/${id}/`, { method: "PATCH", body }),
+    request<AdminUser>(`/api/v1/admin/users/${id}/`, { method: "PATCH", body }),
   adminSetPassword: (id: number, password: string) =>
-    request<void>(`/api/admin/users/${id}/set-password/`, {
+    request<void>(`/api/v1/admin/users/${id}/set-password/`, {
       method: "POST",
       body: { password },
     }),
-  adminRoles: () => request<RoleOption[]>("/api/admin/users/roles/"),
+  adminRoles: () => request<RoleOption[]>("/api/v1/admin/users/roles/"),
   adminDepartments: (page = 1) =>
-    request<Paginated<AdminDepartment>>(`/api/admin/departments/${query({ page })}`),
+    request<Paginated<AdminDepartment>>(`/api/v1/admin/departments/${query({ page })}`),
   adminCreateDepartment: (body: Partial<AdminDepartment>) =>
-    request<AdminDepartment>("/api/admin/departments/", { method: "POST", body }),
+    request<AdminDepartment>("/api/v1/admin/departments/", { method: "POST", body }),
   adminUpdateDepartment: (id: number, body: Partial<AdminDepartment>) =>
-    request<AdminDepartment>(`/api/admin/departments/${id}/`, { method: "PATCH", body }),
+    request<AdminDepartment>(`/api/v1/admin/departments/${id}/`, { method: "PATCH", body }),
   adminAudit: (params: Record<string, string | number | undefined> = {}) =>
-    request<Paginated<AuditEntry>>(`/api/admin/audit/${query(params)}`),
+    request<Paginated<AuditEntry>>(`/api/v1/admin/audit/${query(params)}`),
   adminJobs: (params: Record<string, string | number | undefined> = {}) =>
-    request<Paginated<OperationsJob>>(`/api/admin/jobs/${query(params)}`),
+    request<Paginated<OperationsJob>>(`/api/v1/admin/jobs/${query(params)}`),
   adminRetryJob: (id: number) =>
-    request<OperationsJob>(`/api/admin/jobs/${id}/retry/`, { method: "POST" }),
-  adminSystem: () => request<SystemStatus>("/api/admin/system/"),
+    request<OperationsJob>(`/api/v1/admin/jobs/${id}/retry/`, { method: "POST" }),
+  adminSystem: () => request<SystemStatus>("/api/v1/admin/system/"),
 };

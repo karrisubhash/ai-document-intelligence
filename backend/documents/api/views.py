@@ -1,15 +1,22 @@
 from django.db import transaction
 from django.http import FileResponse
+from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from accounts.services import UnknownDepartment, resolve_department
-from documents import authorization
+from documents import authorization, idempotency
 from documents.api import discovery
 from documents.audit import record_event
-from documents.models import AuditLog, Document, DocumentChunk, ProcessingJob
+from documents.models import (
+    AuditLog,
+    Document,
+    DocumentChunk,
+    DocumentVersion,
+    ProcessingJob,
+)
 from documents.permissions import DocumentAccessPolicy
 from documents.services import (
     DocumentArchived,
@@ -147,6 +154,40 @@ class DocumentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        idem = idempotency.Idempotency(
+            request,
+            "documents.create",
+            idempotency.fingerprint(
+                data["title"],
+                data["document_type"],
+                request.data.get("department", ""),
+                data["file"].name,
+                data["file"].size,
+            ),
+        )
+        replay_pk = idem.start()
+        if replay_pk is not None:
+            document = get_object_or_404(
+                authorization.visible_documents(request.user, Document.objects.all()),
+                pk=replay_pk,
+            )
+            return Response(
+                DocumentSerializer(document, context={"request": request}).data,
+                status=status.HTTP_202_ACCEPTED,
+                headers={idempotency.REPLAYED_HEADER: "true"},
+            )
+        try:
+            response = self._create(request, data)
+        except BaseException:
+            idem.abandon()
+            raise
+        if response.status_code == status.HTTP_202_ACCEPTED:
+            idem.finish(response.data["id"])
+        else:
+            idem.abandon()
+        return response
+
+    def _create(self, request, data):
         # Department is a security boundary: only a system admin may
         # place a document outside their own department. Everyone else's
         # upload is pinned to the department on their own profile,
@@ -200,15 +241,35 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 data=request.data, context={"request": request}
             )
             serializer.is_valid(raise_exception=True)
+            upload = serializer.validated_data["file"]
+
+            idem = idempotency.Idempotency(
+                request,
+                f"documents.{document.pk}.versions",
+                idempotency.fingerprint(upload.name, upload.size),
+            )
+            replay_pk = idem.start()
+            if replay_pk is not None:
+                version = get_object_or_404(
+                    DocumentVersion, pk=replay_pk, document=document
+                )
+                return Response(
+                    DocumentVersionSerializer(version).data,
+                    status=status.HTTP_202_ACCEPTED,
+                    headers={idempotency.REPLAYED_HEADER: "true"},
+                )
 
             try:
                 version = create_document_version(
-                    document,
-                    serializer.validated_data["file"],
-                    uploaded_by=request.user,
+                    document, upload, uploaded_by=request.user
                 )
             except DocumentArchived as exc:
+                idem.abandon()
                 return _conflict(str(exc))
+            except BaseException:
+                idem.abandon()
+                raise
+            idem.finish(version.pk)
 
             return Response(
                 DocumentVersionSerializer(version).data,

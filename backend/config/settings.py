@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 
+from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
@@ -251,6 +252,11 @@ USE_TZ = True
 # header, so the browser never needs to attach session cookies to a
 # cross-origin call. Allowing credentials would make every SessionAuthed
 # endpoint reachable from the listed origin with the user's own cookies.
+# Spec 16: uploads accept an Idempotency-Key (documents.idempotency). A
+# cross-origin client could not send it without this.
+CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
+CORS_EXPOSE_HEADERS = ["Idempotent-Replayed", "X-Request-ID"]
+
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")

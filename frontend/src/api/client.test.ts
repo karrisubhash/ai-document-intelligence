@@ -49,7 +49,7 @@ describe("request", () => {
 
     await request("/api/chat/", { method: "POST", body: { question: "q" } });
 
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/csrf/");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/auth/csrf/");
     expect(fetchMock.mock.calls[1][1].headers["X-CSRFToken"]).toBe("fresh");
   });
 
@@ -130,7 +130,7 @@ describe("request", () => {
     await api.search({ query: "confidential salary revision" });
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/search/");
+    expect(url).toBe("/api/v1/search/");
     expect(init.method).toBe("POST");
     expect(url).not.toContain("salary");
   });
