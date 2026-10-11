@@ -231,7 +231,9 @@ export async function streamChat(
     response = await fetch(`${API_BASE_URL}/api/v1/chat/stream/`, {
       method: "POST",
       headers: {
-        Accept: "text/event-stream",
+        // JSON too: errors raised before the stream starts (validation,
+        // authentication, throttling) are JSON responses.
+        Accept: "text/event-stream, application/json",
         "Content-Type": "application/json",
         "X-CSRFToken": readCookie("csrftoken"),
       },

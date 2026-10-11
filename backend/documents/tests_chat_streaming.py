@@ -164,8 +164,10 @@ class ChatStreamEndpointTests(TransactionTestCase):
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
-    def stream(self, payload):
-        response = self.client.post(STREAM, payload, format="json")
+    def stream(self, payload, accept="text/event-stream"):
+        # The header a browser's fetch() sends. Without it these tests
+        # passed while every real request was refused with a 406.
+        response = self.client.post(STREAM, payload, format="json", HTTP_ACCEPT=accept)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response["Content-Type"], "text/event-stream")
         self.assertEqual(response["X-Accel-Buffering"], "no")
@@ -191,8 +193,30 @@ class ChatStreamEndpointTests(TransactionTestCase):
         self.assertEqual(events[-1][1]["source"], "general")
 
     def test_invalid_request_is_a_json_400_not_a_stream(self):
-        response = self.client.post(STREAM, {"question": ""}, format="json")
+        response = self.client.post(
+            STREAM, {"question": ""}, format="json", HTTP_ACCEPT="text/event-stream"
+        )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response["Content-Type"], "application/json")
+
+    def test_every_accept_header_a_client_sends_is_served(self):
+        for accept in (
+            "text/event-stream",
+            "text/event-stream, application/json",
+            "*/*",
+            "application/json",
+        ):
+            with self.subTest(accept=accept):
+                names = [name for name, _ in self.stream({"question": "hi"}, accept)]
+                self.assertEqual(names[-1], "done")
+
+    def test_an_anonymous_browser_gets_a_json_401_not_a_406(self):
+        anonymous = APIClient()
+        response = anonymous.post(
+            STREAM, {"question": "hi"}, format="json", HTTP_ACCEPT="text/event-stream"
+        )
+        self.assertIn(response.status_code, (401, 403))
+        self.assertEqual(response["Content-Type"], "application/json")
 
     def test_someone_elses_conversation_is_a_404_before_streaming(self):
         other = APIClient()

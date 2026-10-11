@@ -294,6 +294,17 @@ class ChatStreamView(ChatView):
 
     KEEPALIVE_SECONDS = 15
 
+    def perform_content_negotiation(self, request, force=False):
+        # A browser asks for `Accept: text/event-stream`, which no DRF
+        # renderer produces - the stream is a plain StreamingHttpResponse
+        # that bypasses renderers. Without `force`, DRF's negotiation runs
+        # before authentication and refused every real browser request
+        # with 406 "Could not satisfy the request Accept header" (found in
+        # the web app; the tests had not sent the header). Forced, it falls
+        # back to the first renderer, so the errors raised BEFORE streaming
+        # - validation, authentication, throttling, 404 - are still JSON.
+        return super().perform_content_negotiation(request, force=True)
+
     def post(self, request):
         serializer = ChatRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
