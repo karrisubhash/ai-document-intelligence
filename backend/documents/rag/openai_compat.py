@@ -127,6 +127,15 @@ class Preset:
     # in the answer's metadata either way.
     trains_on_free_tier: bool = False
 
+    # Tried in order when the configured model is rate-limited, overloaded
+    # or retired. Free tiers meter each model separately, so the next model
+    # usually has its whole quota left.
+    fallback_models: tuple = ()
+
+    # Optional request parameters this backend is KNOWN to accept. Only
+    # per preset, never globally - see _request_kwargs for why.
+    request_extras: tuple = ()
+
 
 @dataclass
 class Completion:
@@ -158,6 +167,19 @@ PRESETS = {
         model="gemini-3.5-flash",
         key_env="GEMINI_API_KEY",
         trains_on_free_tier=True,
+        # Measured 2026-10-11 on a new free-tier key: 5 requests per minute
+        # PER MODEL. gemini-2.5-flash and -flash-lite answer 404 ("no longer
+        # available to new users"); the -lite 3.x models reject
+        # reasoning_effort "none" with a 400. These two accepted it, first
+        # streamed token 1.5 s and 5.8 s. Re-check before relying on them:
+        # Google rotates this catalogue.
+        fallback_models=("gemini-3-flash-preview", "gemini-3.7-flash"),
+        # Gemini 3 Flash "thinks" by default, and its hidden reasoning is
+        # billed against max_tokens: at 200 tokens even "say hello" came
+        # back cut off (finish_reason "length"). "none" also halved the
+        # time to the first streamed word (3.4 s -> 1.6 s). This is
+        # extraction over supplied passages, which needs no deliberation.
+        request_extras=(("reasoning_effort", "none"),),
     ),
     # Very fast, and the wrong shape for this workload on the free tier:
     # gpt-oss is capped at 8K tokens per minute there, which a single long
@@ -322,6 +344,27 @@ class OpenAICompatibleAnswerer:
         # answers recorded under one version string are not comparable.
         self.version = f"{self.provider}/{self.model}"
 
+        # RAG_ANSWERER_FALLBACK_MODELS overrides the preset's chain; "none"
+        # turns it off. A chain only applies to the preset's own default
+        # model: an operator who pinned RAG_ANSWERER_MODEL chose that model.
+        configured = (
+            getattr(settings, "RAG_ANSWERER_FALLBACK_MODELS", "") or ""
+        ).strip()
+        if configured.lower() == "none":
+            chain = ()
+        elif configured:
+            chain = tuple(m.strip() for m in configured.split(",") if m.strip())
+        else:
+            chain = preset.fallback_models if (preset and not model) else ()
+        self.fallback_models = tuple(m for m in chain if m != self.model)
+
+        self.request_extras = dict(preset.request_extras) if preset else {}
+        effort = (getattr(settings, "RAG_ANSWERER_REASONING_EFFORT", "") or "").strip()
+        if effort.lower() == "default":
+            self.request_extras.pop("reasoning_effort", None)
+        elif effort:
+            self.request_extras["reasoning_effort"] = effort
+
         _warn_if_base_url_looks_wrong(self.base_url)
 
         # The extractive answerer is the fallback path, not a second
@@ -473,6 +516,8 @@ class OpenAICompatibleAnswerer:
             ],
             "temperature": self.temperature,
             TOKEN_LIMIT_FIELD: MAX_TOKENS,
+            # Preset-specific parameters known to be accepted (Preset).
+            **self.request_extras,
         }
 
     def _generate(self, *, question: str, context, prompt: str) -> LLMResponse:
@@ -584,7 +629,33 @@ class OpenAICompatibleAnswerer:
         # caller that injected its own client - which the tests do - never
         # needs the package installed at all.
         client = self._get_client()
+        models = [request["model"]]
+        if request["model"] == self.model:
+            models += list(self.fallback_models)
 
+        for index, model in enumerate(models):
+            last = index == len(models) - 1
+            try:
+                # The SDK's own retries honour Retry-After - 14 s on a
+                # free-tier 429 - so they are kept only for the LAST model.
+                # Before that, the next model is the faster retry.
+                attempt_client = client if last else _without_retries(client)
+                return self._complete_once(attempt_client, {**request, "model": model})
+            except Exception as exc:
+                if last or _status(exc) not in MODEL_SPECIFIC_FAILURES:
+                    raise
+                logger.warning(
+                    "llm.model_unavailable",
+                    extra={
+                        "provider": self.provider,
+                        "model": model,
+                        "status": _status(exc),
+                        "next_model": models[index + 1],
+                        "retry_after": _retry_after(exc),
+                    },
+                )
+
+    def _complete_once(self, client, request: dict) -> "Completion":
         if not streaming.active():
             completion = client.chat.completions.create(**request)
             choices = getattr(completion, "choices", None)
@@ -598,7 +669,7 @@ class OpenAICompatibleAnswerer:
                 text=getattr(message, "content", None) or "",
                 finish_reason=getattr(choice, "finish_reason", "") or "",
                 usage=getattr(completion, "usage", None),
-                served_by=getattr(completion, "model", "") or self.model,
+                served_by=getattr(completion, "model", "") or request["model"],
             )
 
         # Streamed. No `stream_options`: some of these servers 400 on a
@@ -626,7 +697,7 @@ class OpenAICompatibleAnswerer:
             text="".join(parts),
             finish_reason=finish_reason,
             usage=usage,
-            served_by=served_by or self.model,
+            served_by=served_by or request["model"],
             streamed=True,
         )
 
@@ -661,6 +732,22 @@ class OpenAICompatibleAnswerer:
                 "model": self.model,
             },
         )
+
+
+# Failures of one MODEL rather than of the account or the request: rate
+# limited (429), retired (404), overloaded (503) or erroring (500/502/504).
+# A bad key (401/403) or a bad request (400) fails every model alike.
+MODEL_SPECIFIC_FAILURES = frozenset({404, 429, 500, 502, 503, 504})
+
+
+def _status(exc) -> int | None:
+    return getattr(exc, "status_code", None)
+
+
+def _without_retries(client):
+    """The same client with SDK retries off; stubs without with_options pass through."""
+    with_options = getattr(client, "with_options", None)
+    return with_options(max_retries=0) if with_options else client
 
 
 def _warn_if_base_url_looks_wrong(base_url: str) -> None:

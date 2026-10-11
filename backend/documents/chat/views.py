@@ -15,10 +15,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from documents import agents
+from documents.agents.runner import PlannedAnswer
 from documents.audit import record_event
 from documents.authorization import get_profile
 from documents.models import AuditLog, Conversation, Message
 from documents.rag import followup, general, streaming
+from documents.rag.engine import Abstention
+from documents.rag.llm import ABSTENTION_TEXT
 from documents.throttling import BurstUserThrottle
 
 from .serializers import (
@@ -82,22 +85,35 @@ class ChatView(APIView):
                 data["question"],
                 conversation.messages.order_by("created_at"),
             )
-
-            # Planned when the question asks for several things, and a plain
-            # single retrieval otherwise - which is the overwhelmingly common
-            # case and behaves exactly as it did before planning existed.
-            answer = agents.answer(
-                request.user,
-                resolved.question,
-                document_type=data.get("document_type", ""),
-                department=data.get("department", ""),
-                document_id=data.get("document_id"),
-                collection_id=data.get("collection_id"),
-                # The user's own words, when the question was widened as a
-                # follow-up: retrieval searched on the widened form, the
-                # answer must still be about what was actually asked.
-                focus=resolved.original if resolved.rewritten else "",
-            )
+            small_talk = followup.is_small_talk(data["question"]) and general.enabled()
+            if small_talk:
+                # A greeting needs no document search. Recorded as a clean
+                # "nothing in the documents", which the general-knowledge
+                # reply below answers.
+                answer = PlannedAnswer(
+                    question=data["question"],
+                    answer=ABSTENTION_TEXT,
+                    abstained=True,
+                    abstention_reason=Abstention.NO_RELEVANT_PASSAGES,
+                    notes=["small talk; documents not searched"],
+                )
+            else:
+                # Planned when the question asks for several things, and a
+                # plain single retrieval otherwise - which is the
+                # overwhelmingly common case and behaves exactly as it did
+                # before planning existed.
+                answer = agents.answer(
+                    request.user,
+                    resolved.question,
+                    document_type=data.get("document_type", ""),
+                    department=data.get("department", ""),
+                    document_id=data.get("document_id"),
+                    collection_id=data.get("collection_id"),
+                    # The user's own words, when the question was widened as
+                    # a follow-up: retrieval searched on the widened form,
+                    # the answer must still be about what was actually asked.
+                    focus=resolved.original if resolved.rewritten else "",
+                )
             source = "none" if answer.abstained else "documents"
 
             # Opt-in (CHAT_GENERAL_KNOWLEDGE): when the documents had
@@ -110,10 +126,12 @@ class ChatView(APIView):
                     history=conversation.messages.order_by("created_at"),
                 )
                 if reply is not None:
-                    answer.notes.append(
-                        f"not found in your documents ({answer.abstention_reason}); "
-                        f"answered from general knowledge"
-                    )
+                    if not small_talk:
+                        answer.notes.append(
+                            f"not found in your documents "
+                            f"({answer.abstention_reason}); "
+                            f"answered from general knowledge"
+                        )
                     answer.answer = reply.text
                     answer.abstained = False
                     answer.abstention_reason = ""

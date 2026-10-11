@@ -114,7 +114,10 @@ def answer(question: str, history=()) -> LLMResponse | None:
         # Conversational, so a little variety reads better than greedy
         # decoding; still low, because "general knowledge" should be stable.
         "temperature": getattr(settings, "CHAT_GENERAL_TEMPERATURE", 0.3),
-        "max_tokens": getattr(settings, "CHAT_GENERAL_MAX_TOKENS", 2048),
+        "max_tokens": getattr(settings, "CHAT_GENERAL_MAX_TOKENS", 4096),
+        # Same preset extras as grounded answers (e.g. thinking off on
+        # Gemini, whose hidden reasoning otherwise eats max_tokens).
+        **getattr(answerer, "request_extras", {}),
     }
     started = time.monotonic()
     # Whatever the grounded attempt streamed (often the abstention
@@ -157,4 +160,11 @@ def answer(question: str, history=()) -> LLMResponse | None:
     if not text or result.finish_reason == "content_filter":
         streaming.reset()
         return None
+    if result.finish_reason == "length":
+        # Unlike a grounded answer, nothing is verified here, so a long
+        # reply cut at the limit is still worth showing - but never as if
+        # it were complete.
+        cut = "\n\n*(This answer was cut short.)*"
+        response.text += cut
+        streaming.emit(cut)
     return response

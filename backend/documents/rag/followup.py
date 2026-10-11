@@ -134,6 +134,31 @@ class Contextualized:
         }
 
 
+# Greetings, thanks and other purely conversational turns. They have no
+# content terms, so looks_dependent() used to read "hi!" as a follow-up and
+# rewrite it into the previous question - and the user's greeting was
+# answered with the attendance policy again (found live, 2026-10-11).
+_SMALL_TALK_PHRASE = (
+    r"(?:h+i+|hel+o+|he+y+|hiya|yo|howdy|greetings"
+    r"|good (?:morning|afternoon|evening|night|day)"
+    r"|thanks?|thank you|thx|ty|cheers|ok(?:ay)?|cool|great|nice|awesome|perfect"
+    r"|got it|bye|goodbye|see you|how are you(?: doing)?|how's it going"
+    r"|who are you|what are you|what can you do)"
+)
+_SMALL_TALK_TAIL = (
+    r"(?:there|again|so much|a lot|very much|you|bot|assistant|today|all)"
+)
+_SMALL_TALK = re.compile(
+    rf"^{_SMALL_TALK_PHRASE}(?: (?:{_SMALL_TALK_PHRASE}|{_SMALL_TALK_TAIL}))*$"
+)
+
+
+def is_small_talk(question: str) -> bool:
+    """A greeting, thanks or similar turn - not a question about documents."""
+    text = " ".join(re.sub(r"[^\w\s']", " ", (question or "").lower()).split())
+    return bool(text) and bool(_SMALL_TALK.match(text))
+
+
 def _content_terms(text: str) -> list:
     """Content words, in order, without stemming.
 
@@ -156,7 +181,7 @@ def looks_dependent(question: str) -> tuple:
     turns out to have been wrong should be explainable after the fact.
     """
     stripped = (question or "").strip()
-    if not stripped:
+    if not stripped or is_small_talk(stripped):
         return False, ""
 
     if REFERRING.search(stripped):

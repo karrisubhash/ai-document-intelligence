@@ -628,6 +628,15 @@ RAG_ANSWERER_PROVIDER_TRAINS_ON_INPUT = (
 # that cites a different passage on every identical question.
 RAG_ANSWERER_TEMPERATURE = float(os.getenv("RAG_ANSWERER_TEMPERATURE", "0.0"))
 
+# Models tried in order when the configured one is rate-limited, overloaded
+# or retired (comma-separated; "none" disables). Empty uses the preset's
+# chain - for gemini, the free models measured to work. See Preset.
+RAG_ANSWERER_FALLBACK_MODELS = os.getenv("RAG_ANSWERER_FALLBACK_MODELS", "")
+
+# Sent as `reasoning_effort` where the preset says the backend accepts it.
+# Empty uses the preset's value (gemini: "none"); "default" sends nothing.
+RAG_ANSWERER_REASONING_EFFORT = os.getenv("RAG_ANSWERER_REASONING_EFFORT", "")
+
 # Chat only: when the documents have nothing relevant - including greetings
 # and small talk - reply from the model's general knowledge instead of
 # abstaining. Labelled `source: "general"`, uncited, never used after an
@@ -637,7 +646,7 @@ RAG_ANSWERER_TEMPERATURE = float(os.getenv("RAG_ANSWERER_TEMPERATURE", "0.0"))
 # See documents/rag/general.py.
 CHAT_GENERAL_KNOWLEDGE = os.getenv("CHAT_GENERAL_KNOWLEDGE", "False").lower() == "true"
 CHAT_GENERAL_TEMPERATURE = float(os.getenv("CHAT_GENERAL_TEMPERATURE", "0.3"))
-CHAT_GENERAL_MAX_TOKENS = int(os.getenv("CHAT_GENERAL_MAX_TOKENS", "2048"))
+CHAT_GENERAL_MAX_TOKENS = int(os.getenv("CHAT_GENERAL_MAX_TOKENS", "4096"))
 
 # Context size in CHARACTERS, not tokens: a tokenizer is model-specific and
 # no model is wired up. ~4 chars/token makes this roughly a 2k-token budget.
