@@ -266,7 +266,9 @@ class LocalCrossEncoderReranker:
                     "build of torch FIRST - otherwise pip resolves the CUDA "
                     "wheel and pulls in several GB of nvidia packages this "
                     "reranker never uses:\n"
-                    "  pip install -r backend/requirements-local.txt"
+                    "  pip install -r backend/requirements-local.txt\n"
+                    "In Docker, set INSTALL_LOCAL=true in .env and rebuild "
+                    "the backend and worker images."
                 ) from exc
 
             started = time.monotonic()
