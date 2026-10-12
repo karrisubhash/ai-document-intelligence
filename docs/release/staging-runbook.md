@@ -328,10 +328,12 @@ $DC exec prometheus wget -qO- 'http://localhost:9090/api/v1/targets' | grep -o '
 #   expect 4 "up": adi-backend, worker, worker-index, prometheus
 ```
 
-The Prometheus datasource is provisioned. **No dashboards and no alert rules ship, and
-nothing delivers alerts.** Build the panels in
-[post-go-live monitoring](RELEASE_READINESS.md#post-go-live-monitoring) before go-live.
-Choosing where alerts go is an institutional decision.
+The Prometheus datasource and an overview dashboard (`infrastructure/grafana/dashboards/`)
+are provisioned, and Prometheus evaluates 12 alert rules
+(`infrastructure/prometheus/alerts.yml`; list their state with
+`$DC exec prometheus wget -qO- 'http://localhost:9090/api/v1/alerts'`). **Nothing delivers an alert**: there
+is no Alertmanager and no Grafana contact point. Choosing where alerts go is an
+institutional decision (O3); wire the delivery once it is made.
 
 Uptime from outside: point the institution's external monitor at `/health/`. Nothing in
 this repository watches the host from outside.

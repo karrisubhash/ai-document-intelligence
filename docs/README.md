@@ -31,12 +31,12 @@ design rationale; these pages are the working reference.
 
 | Claim | Status |
 |---|---|
-| Backend test suite (971 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly; last on 2026-10-06 in the pinned release-candidate image |
-| Frontend typecheck, 44 unit/component tests, production build | **Verified** locally, and inside the web image build |
-| Browser end-to-end suite against the live stack (real worker, real models) | **Verified** locally: on the release-candidate production stack over TLS, 7/7 plus the CSP-violation probe (2026-10-06, twice, with the recommended pilot configuration); earlier 7/7 on the dev stack |
+| Backend test suite (1,103 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly; last on 2026-10-12 on `release/pilot`, in the pinned release image and in CI's environment ([release readiness](release/RELEASE_READINESS.md#locally-verified)) |
+| Frontend typecheck, 57 unit/component tests, production build | **Verified** locally, and inside the web image build (2026-10-12) |
+| Browser end-to-end suite against the live stack (real worker, real models) | **Verified** locally: with CI's e2e job's own steps, 7/7 with the CSP probe skipped by design (2026-10-12, `release/pilot`); on the production stack over TLS, 7/7 plus the CSP-violation probe (2026-10-10 and 2026-10-06, with the recommended pilot configuration) |
 | Backup, restore into an empty database, and a working search on the restored copy | **Verified** locally on a disposable database; the staging runbook's backup, restore and rollback steps rehearsed verbatim on 2026-10-06. Off-host backups and production disaster recovery: **unverified** |
 | Production compose stack boots behind nginx with TLS | **Verified locally** with a self-signed certificate: browser suite 7/7 over TLS, no CSP violations. **Real domain and Let's Encrypt: unverified** |
 | GitHub Actions pipeline | **Never executed** — the repository has no remote. Job commands were run locally; see [operations/ci.md](operations/ci.md) |
-| Hosted AI providers (Anthropic, Bedrock, OpenAI-compatible) | **Contract-tested with stubs; never called for real** — no credentials |
+| Hosted AI providers (Anthropic, Bedrock, OpenAI-compatible) | **Contract-tested with stubs.** Only the Gemini preset has been called for real: in development, against Google's free tier, with a developer's key (2026-10-11). No deployment has called any provider, and no evaluation has run through one |
 | Local semantic embeddings and cross-encoder reranking | **Verified** — run in the e2e stack and measured in [evaluation](evaluation/README.md) |
 | Performance at institutional scale | **Measured at 3,000 documents** on a laptop CPU, one client: [operations/performance.md](operations/performance.md). Concurrent load, OCR-heavy corpora and larger corpora are **not measured** |

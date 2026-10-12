@@ -27,19 +27,32 @@ deploy instead of stopping it.
 ## What has actually been executed
 
 **The workflow has never run on GitHub Actions** — the repository has no remote. Each
-job's commands have been executed locally, which proves the commands, not the YAML:
+job's commands have been executed locally, which proves the commands, not the YAML.
+actionlint 1.7.7 (with shellcheck) finds no errors in the YAML, only two style warnings
+about an unused loop counter.
 
-| Job | Executed locally | Notes |
+Latest local run: 2026-10-12, on `release/pilot` at 3ebf20d (the backend jobs at f451ccb,
+whose backend is identical), each job's steps from a clean `git archive` of the commit, with
+the workflow's environment values, against a disposable
+pgvector/pg16 and Redis 7 ([release readiness](../release/RELEASE_READINESS.md#locally-verified)):
+
+| Job | Executed locally | Result |
 |---|---|---|
-| lint | yes | clean |
-| tests | yes, in the backend image against pgvector/pg16 and Redis 7 | 971 tests, 0 failures (2026-10-06, in an image built from `constraints.txt`, source mounted read-only) |
-| frontend | yes | 44 tests; build and typecheck clean |
-| e2e | yes, in an equivalent form | **CI's own configuration** (2026-10-05): hashing embeddings, lexical reranking, heuristic scanner, rule-based extraction, no classifier, Playwright's bundled Chromium, the Vite dev server proxied to the backend: 7/7, with the CSP probe skipped as designed (Vite sends no policy). Also 7/7 plus the CSP probe against the production stack over TLS with the full local-model configuration. The stack was started with `docker compose run` and environment overrides rather than by the job's `.env` step, so the job's compose wiring itself is what a first real run proves |
-| security | partially | the `.dockerignore` check runs; `check --deploy` and bandit are as before. (`check_deployment_config.py` belongs to the `build` job, and runs - including on a checkout with no `.env`) |
-| ai-regression | yes, as the job runs it (2026-10-05; again 2026-10-06 on the release candidate) | fresh database, corpus seeded through the pipeline, `--fail-on-regression` against `evaluation/baseline.json` and `evaluation/baseline-v2.json`: both pass; see [evaluation/README.md](../evaluation/README.md#the-regression-gate) |
-| build | yes | backend and web images built with Docker BuildKit |
+| lint | yes | clean (ruff 0.16.8) |
+| tests | yes, in a Python 3.12 container with only the job's apt and pip installs | migration check clean; 1,103 backend tests OK; AI suite 88 OK. Also 1,103 OK in the release image with the source mounted read-only |
+| frontend | yes (Node 22) | typecheck clean; 57/57 (three runs under load); build; `npm audit`: 0 |
+| e2e | yes, **with the job's own steps** for the first time: `.env` from `.env.example`, `docker compose up -d --build`, `seed_e2e`, the Vite dev server, Playwright's bundled Chromium; only the ports moved (18000, 15173) | 7 passed, 1 skipped by design (the CSP probe). Before a827d55 the same steps failed twice: Vite reloaded the page whenever Playwright wrote a trace into `e2e/.results` |
+| security | yes | `.dockerignore` gate, `check --deploy`, bandit and pip-audit all pass. On a Windows checkout the `.dockerignore` gate fails falsely: `core.autocrlf` writes the file with CRLF and `grep -x` then matches no line. CI's checkout is LF |
+| ai-regression | yes, as the job runs it | v1 and v2: "no change" against their baselines; see [evaluation/README.md](../evaluation/README.md#the-regression-gate) |
+| build | yes | backend and web images built with BuildKit; `check_deployment_config.py` passes |
 | deploy / smoke | no | need a staging host and credentials |
 
-The first real run should be watched; the likely failure points are environmental
-(service-container networking for the e2e compose stack, Playwright's system dependencies)
-rather than in the commands themselves.
+Earlier runs: 2026-10-05/06 (every job's commands; the e2e configuration through
+`docker compose run` rather than the job's own `.env` step) and 2026-10-10 on bb34379
+(every gate, Playwright 7 passed with the CSP probe skipped by design).
+
+The first real run should be watched. Likely failure points are environmental:
+service-container networking for the e2e compose stack, Playwright's system dependencies
+(`--with-deps` on the runner, not exercised locally), and timing on a slower runner. Two
+timing defects the local runs exposed are fixed: the dev-server reload under the browser
+suite (a827d55) and frontend tests that gave up after 1 s on a loaded machine (3ebf20d).

@@ -63,7 +63,7 @@ By default Playwright drives the installed Chrome (`E2E_CHANNEL=msedge` for Edge
 `chromium` for Playwright's bundled browser, which CI installs). Screenshots of each step
 are written to `frontend/e2e/.results/screens/`.
 
-**Last local runs:** 8/8 (the suite plus the CSP probe) against the release-candidate production stack over TLS on 2026-10-06, with the recommended pilot configuration: local embeddings, the MiniLM cross-encoder, the heuristic scanner and rule-based extraction, models offline. Before that, 7/7 against the dev stack and 7/7 against the production stack over TLS, with the full configuration — local bge-small
+**Last local runs:** 7 passed and the CSP probe skipped by design, with CI's e2e job's own steps on `release/pilot` (2026-10-12). Run Vite and Playwright from the same `frontend/` directory, as CI does: before a827d55 the dev server watched `e2e/.results` and reloaded the page whenever Playwright wrote a trace there. Before that, 8/8 against the production stack over TLS on 2026-10-10 (e34d1c7), and on 2026-10-06 against the release-candidate production stack, with the recommended pilot configuration: local embeddings, the MiniLM cross-encoder, the heuristic scanner and rule-based extraction, models offline. Before that, 7/7 against the dev stack and 7/7 against the production stack over TLS, with the full configuration — local bge-small
 embeddings, bge-reranker-base cross-encoder, the trained text classifier, rule-based field
 extraction and the heuristic scanner. Two defects were found by it and fixed with
 regression tests: a follow-up answered with the previous question's clause, and a

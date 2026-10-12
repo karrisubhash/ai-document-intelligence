@@ -10,7 +10,7 @@ were measured on one laptop, on **synthetic** documents ([datasets](../data/data
 | | System engineering quality | AI model quality |
 |---|---|---|
 | Question | Does the machinery behave as designed? | Are the answers right for *this institution's* documents and questions? |
-| Evidence | 971 backend tests; a browser suite through nginx over TLS; two evaluation gates (v1 and v2) that fail CI on any regression; a calibration run on a separate development set | 57 synthetic benchmark questions over 9 synthetic documents, and nothing else |
+| Evidence | 1,103 backend tests (2026-10-12); a browser suite through nginx over TLS; two evaluation gates (v1 and v2) that fail CI on any regression; a calibration run on a separate development set | 57 synthetic benchmark questions over 9 synthetic documents, and nothing else |
 | Status | **Verified locally** (CI itself has never run on GitHub) | **Unknown for real institutional use** |
 
 The engineering guarantees hold whatever the documents are:
@@ -93,8 +93,12 @@ of 57 on synthetic data.
 ## Hosted answerer activation
 
 A generative answerer is the component most likely to raise coverage: the extractive
-answerer is the measured bottleneck. **It is off and has never been called.** All of the
-following are required before turning it on, on staging first.
+answerer is the measured bottleneck. **It is off by default, and no deployment has called
+it.** In development, the Gemini preset of the OpenAI-compatible answerer was run against
+Google's free tier on 2026-10-11 with a developer's own key; commits f11dd83, 170084d and
+3a34936 record what that found. That was a development check, not an evaluation: no
+benchmark was run through a hosted answerer. All of the following are required before
+turning it on, on staging first.
 
 **Institutional decisions**
 
@@ -111,7 +115,13 @@ following are required before turning it on, on staging first.
    `GEMINI_API_KEY` present selects Gemini.
 3. A monthly spend limit, set at the provider. The application has no spend cap. Its
    only bound is the chat throttle (`THROTTLE_CHAT`, 60 questions per user per hour), and
-   a question can make up to 4 provider calls.
+   a question can make up to 4 provider calls (`RAG_MAX_PLAN_STEPS`). A preset with a
+   fallback chain - Gemini's has four fallback models - sends a throttled or failing
+   call to the next model, so one call can become several requests. A general-knowledge
+   reply ([D8](institutional-decisions.md)) is one more call.
+4. Whether chat may answer from the model's general knowledge when the documents have
+   nothing (`CHAT_GENERAL_KNOWLEDGE`, off by default): decision
+   [D8](institutional-decisions.md). It departs from the specification's abstention rule.
 
 **Configuration**
 
@@ -133,9 +143,8 @@ following are required before turning it on, on staging first.
 - A *failing* provider falls back. Timeouts, rate limits, authentication errors and
   outages all return the extractive answer with a note, and increment
   `adi_llm_fallbacks_total`. Alert on that counter.
-- The `adi_llm_duration_seconds` histogram tops out at 10 s, so generative latency above
-  that cannot be read from it. Use `adi_rag_stage_duration_seconds{stage="generation"}`
-  or the reverse-proxy logs.
+- The `adi_llm_duration_seconds` histogram's buckets reach 120 s (since e492286; they
+  stopped at 10 s before), which matches nginx's 120 s read timeout.
 - Token counts are recorded per answerer class (`claude`, `openai-compatible`), not per
   model, so cost per model cannot be derived from metrics.
 

@@ -11,6 +11,14 @@ That audit comprised:
 - the full test suite;
 - a release-candidate run of the production stack.
 
+**Re-verified 2026-10-12 on branch `release/pilot`**, the branch to push for the first CI
+run. It is `platform-completion`, which had moved 18 commits past the audit, with the
+unmerged `release-review-fixes` merged in, two build fixes and two test-harness fixes
+(fixes 15–18). The re-verification ran every
+CI job's commands locally and re-checked the repository and the local images. It was not a
+new code review. [Since the 2026-10-06 audit](#since-the-2026-10-06-audit) lists what
+changed; [Locally verified](#locally-verified) lists what ran.
+
 Every claim says how it was verified. "Locally" means on the development laptop, never on
 a server. The supporting pages are:
 
@@ -38,12 +46,12 @@ The sections follow that order.
 | Area | Status | In one line |
 |---|---|---|
 | Code | **COMPLETE** for a single-host pilot | Nothing is missing for the pilot scope. Multi-host operation, SSO and a hosted answerer are outside it |
-| Local verification | **COMPLETE** | 974 backend tests; 8/8 browser tests through nginx over TLS on the release candidate, with the pilot configuration; both AI gates; backup, restore and rollback rehearsed |
-| CI | **NOT YET VERIFIED** | There is no GitHub repository, so the workflow has never run. Its commands were run locally |
+| Local verification | **COMPLETE**, re-run 2026-10-12 | 1,103 backend tests, both in the release image and in CI's environment; 88 AI-suite and 57 frontend tests; both AI gates at their baselines; the migration graph along every upgrade path; the e2e job as CI runs it, 7 passed and 1 skipped by design. Backup, restore and rollback last rehearsed 2026-10-06; browser suite 8/8 through nginx over TLS last run 2026-10-10 |
+| CI | **NOT YET VERIFIED** | There is no GitHub repository, so the workflow has never run. actionlint finds no errors in it, and every job's commands pass locally (2026-10-12) |
 | Staging | **BLOCKED** | It needs a server, a hostname and DNS, and the institution's before-staging decisions. No code change is required |
 | Production | **BLOCKED** | It needs staging to pass, plus the before-pilot decisions |
 | AI | **NEEDS REAL DATA** | The engineering is ready for a pilot: grounded, permission-filtered, and it declines rather than guesses. Quality on the institution's documents is unmeasured |
-| Security | **No known release blocker** | 2 blocking defects found by the audit and fixed with tests. Known gaps are documented; 7 security decisions belong to the institution |
+| Security | **No known release blocker** | 2 blocking defects found by the audit, 3 more by an independent review of its fixes, and about 60 defects by a file-by-file review (2026-10-10), each fixed with a test. Known gaps are documented; 7 security decisions belong to the institution |
 | Performance | **Measured on one laptop only** | 3,003 documents, one client. Concurrency, scanned corpora and larger scale are unknown |
 
 ## CODE COMPLETE
@@ -67,13 +75,17 @@ The sections follow that order.
   unprivileged containers;
 - the deployment configuration check;
 - the CI workflow;
-- the evaluation framework, with two regression gates.
+- the evaluation framework, with two regression gates;
+- added after the audit (2026-10-11): the `/api/v1/` prefix (with `/api/` kept as an alias)
+  and idempotent uploads; department-scoped document collections; streamed chat answers
+  and opt-in general-knowledge replies (decision D8); opt-in OpenTelemetry tracing, 12
+  Prometheus alert rules and a Grafana dashboard.
 
 **Fixed by this audit.** Each code fix has a test that fails without it.
 
 | # | Defect | Consequence | Fix |
 |---|---|---|---|
-| 1 | Production dependencies were unpinned (`>=`) | a rebuild installed whatever was newest, so staging and production could run untested code | `backend/constraints.txt` pins all 90 packages of the tested image. Every install, in the image and in CI, uses it. Verified: the rebuilt image's packages are identical to the file |
+| 1 | Production dependencies were unpinned (`>=`) | a rebuild installed whatever was newest, so staging and production could run untested code | `backend/constraints.txt` pins all 90 packages of the tested image (111 since the OpenTelemetry layer and fix 16). Every install, in the image and in CI, uses it. Verified: the rebuilt image's packages are identical to the file |
 | 2 | No image installed the S3 packages, and the S3 boto3 pin conflicted with the LLM layer | setting `AWS_STORAGE_BUCKET_NAME` broke every upload | optional `INSTALL_S3` build layer, versions from the constraints file |
 | 3 | **Quarantine could be lifted by reprocessing** | the download gate read only the newest job; a reprocessed infected file was downloadable by the whole department until the rescan | the verdict persists until a later run completes; reprocess and retry of a quarantined file are refused. 3 tests |
 | 4 | **Deleting a document erased the subject of its audit trail** | the delete row, and every earlier view and download, lost their document | each audit row keeps the document's id and department (migration 0017, with backfill); the delete row keeps the title; still withheld from other departments. 5 tests |
@@ -87,21 +99,94 @@ The sections follow that order.
 | 12 | A redelivered quarantined job could run again (found by an independent review of fix 3) | under `acks_late`, a worker dying after recording the verdict gets its message back; the rerun cleared the code the quarantine is read from | a quarantined job is terminal. Test |
 | 13 | Migration 0017's new column had no database default | during an upgrade the previous release, still serving, could not write any audit row: a 500 on every audited request | migration 0018 adds a database default. Test |
 | 14 | The department-rename guard ignored the department names on deleted documents' audit rows | renaming onto a spelling that survived only there handed that trail, titles included, to the renamed department | the guard checks them. Test |
+| 15 | The gold manifest that `ingest_corpus` writes (`evaluation/corpus_manifest.json`, git-ignored) was not excluded from the build context (found 2026-10-12) | an image built on a machine that had run `ingest_corpus` carried its local document ids and dataset labels | excluded in `.dockerignore` (b77a9ca). Found by listing what a build from the development checkout copies: 262 files, the manifest the only untracked one |
+| 16 | `setuptools`, which torch installs, was the one package in the image without a pin (found 2026-10-12) | a rebuild could install a different setuptools from the tested one | pinned at the tested 84.0.0 (f451ccb). Verified: every package of the rebuilt image matches the file |
+| 17 | The Vite dev server watched `frontend/e2e/.results`, where Playwright writes its traces during the browser suite (found 2026-10-12) | a trace's `.html` resource made Vite reload the page under the test: the upload dialog vanished, the OCR test timed out, and the five serial tests after it never ran. CI runs Vite and Playwright in the same directory, so the first CI run would have failed this way; earlier local runs served Vite from another copy of the source | the dev server ignores that directory (a827d55). The e2e job failed twice before the fix and passed after it, with no reload |
+| 18 | Frontend tests waited only Testing Library's default 1 s for async elements (found 2026-10-12) | on a loaded machine, ChatPage and CollectionsPage tests failed at 1.2–1.7 s: once in the web image build, twice on the host | a 5 s limit (3ebf20d). 57/57 three times in a row under the same load |
 
-The same review raised two more findings, which another session working in this repository took on in the shared checkout; they were not yet committed at the time of writing:
+The same review raised two more findings. Both were fixed on `platform-completion` by the
+file-by-file review of 2026-10-10, each with a test:
 
-- the audit list's `?document=` and `?user=` filters return 500 for digits such as `²`;
-- when a version that once completed is later quarantined, its earlier extracted text stays searchable. Download is the only path that checks quarantine. Pre-existing.
+- the audit list's `?document=` and `?user=` filters returned 500 for digits such as `²`:
+  they answer 400 (8ba7ed4);
+- a version quarantined after it once completed kept its extracted text searchable:
+  quarantine now clears the version's current content, and search reads only the current
+  content's chunks (9270520); the content, chunk, table, figure and source endpoints no
+  longer fall back to the condemned pass (8ba7ed4).
 
-Fixes 12–14 are on branch `release-review-fixes`, to be merged into `platform-completion` once that session's changes are committed.
+Fixes 12–14 were merged into `release/pilot` on 2026-10-12 (3e02d9d). Both branches had
+added a migration numbered 0018; see [Migrations](#migrations).
+
+### Since the 2026-10-06 audit
+
+The audit's three code reviews covered the code as of c4ab67a. After it:
+
+| Commits | What | How it was checked |
+|---|---|---|
+| 8ba7ed4 … bb34379 (8) | A file-by-file review of the whole code base: about 60 defects and 7 tests that could not fail, across the API, security, processing, RAG, evaluation, operations, frontend and AI code | each fix has a regression test; every CI gate passed on bb34379 (2026-10-10) |
+| e34d1c7 | `.gitattributes` keeps shell scripts LF: on a Windows checkout a CRLF entrypoint made the edge image exit 127 | the edge image built from a fresh Windows clone started and served TLS |
+| d4f9913 … e5eb275 (4) | The specification's remaining gaps: API versioning and idempotent uploads; OpenTelemetry, alert rules and a dashboard; collections; a traceability matrix ([spec-traceability](../architecture/spec-traceability.md)) | tests only. **No independent review yet**: one was under way on 2026-10-12, and its fixes are not in this branch |
+| 016cea6 … 3a34936 (4) | Streamed chat, opt-in general-knowledge replies, the Gemini preset's model fallback chain, and fixes found by using the chat in a browser | tests and a browser check against the development stack; the same pending review |
+| 3e02d9d | Merge of `release-review-fixes`: fixes 12–14 and the chat latency measured through the edge | the merge, the merge migration and the whole suite (below) |
+| d8edd3a, merged in 76ac4b6 | `.env.example` documents `INSTALL_LOCAL=false` (compose's value when it is absent); the local embedder's and reranker's import errors give the Docker fix | the whole suite (below) |
+| b77a9ca, f451ccb | Fixes 15 and 16 | rebuilt images |
+| a827d55, 3ebf20d | Fixes 17 and 18 (two frontend files; no backend change) | the e2e job and the frontend suite (below) |
 
 ## LOCALLY VERIFIED
 
 **(B)** All of this ran on the development laptop: an i5-8350U, Docker Desktop, an 8-CPU
 and 7.7 GiB VM.
 
+**On `release/pilot`, 2026-10-12.** Each CI job's steps ran from a clean `git archive` of
+the commit, against a disposable pgvector/pg16 and Redis 7, with the workflow's own
+environment values. The last commit that changes code is 3ebf20d; the commit recording
+this page changes only documentation. The frontend job, the web image and the e2e job ran
+on 3ebf20d. The backend jobs ran on f451ccb: the two commits after it change two frontend
+files and nothing else.
+
+| What | Result |
+|---|---|
+| `lint`: ruff 0.16.8, check and format | clean; 242 files formatted |
+| `tests`, in CI's environment (Python 3.12 with only the job's apt and pip installs) | migration check: no changes; **1,103 backend tests, OK**; AI suite **88, OK** |
+| Backend suite in the release image (ML, LLM and local-model layers, built from `constraints.txt`), source mounted read-only | **1,103 tests, OK**, none skipped; nothing written into the source tree |
+| `frontend` (Node 22) | typecheck clean; **57/57**, three runs in a row with other test suites loading the machine; production build; `npm audit --omit=dev`: 0 vulnerabilities |
+| `security` | `check --deploy --fail-level WARNING`: no issues; bandit 1.9.4: clean; pip-audit 2.10.1: none; `.dockerignore` gate: passes on the committed file (note 1) |
+| The pinned set itself (`pip-audit -r constraints.txt --no-deps`) | no known vulnerabilities; torch's CPU build cannot be audited against PyPI. CI's own audit resolves `requirements.txt` to the newest releases, not to the pins |
+| `ai-regression`, as the job runs it: fresh database, corpus ingested through the pipeline | v1: 13 cases, **no change** against `baseline.json`. v2: 57 cases, recall@1 0.796, **no change** against `baseline-v2.json`. Synthetic data: this shows nothing regressed, not that answers are right |
+| `e2e`, with the job's own steps: `.env` from `.env.example`, `docker compose up -d --build`, `seed_e2e`, the Vite dev server, Playwright's Chromium | **7 passed, 1 skipped by design** (the CSP probe: Vite sends no policy), no dev-server reload. Only the ports differed from CI (18000 and 15173; other servers held 8000 and 5173). Before fix 17, the same steps failed twice |
+| `build` | the backend image as production builds it (f451ccb), and one with every optional layer, S3 and OpenTelemetry included (3e02d9d): both build, `pip check` clean, every package at its pinned version, uid 10001. Web edge image (3ebf20d): builds, and the frontend checks inside it pass, 57/57 (note 2). `check_deployment_config.py`: pass |
+| Workflow file | actionlint 1.7.7 with shellcheck: no errors; 2 style warnings (an unused loop counter) |
+| Prometheus files | promtool: configuration valid, 12 alert rules |
+| Image contents: the release images above and every other local image of this project, development images included | no document, dump, database, key or `.env` file outside installed packages; `/app/backend/media` empty; application images run as uid 10001 |
+
+1. On a Windows checkout (`core.autocrlf=true`) `.dockerignore` is written with CRLF, and
+   the gate's exact-line `grep -x` then fails on every entry. Docker itself trims the CR,
+   and CI checks the file out as committed (LF), where the gate passes.
+2. The edge image runs the frontend tests while it builds. Before fix 18, while the laptop
+   ran three image builds and a test suite at the same time, 5 of 57 failed waiting for a
+   page to render. With fix 18 the image built cleanly, and the suite passed under load.
+
+#### Migrations
+
+Both branches added a `documents` migration numbered 0018 against 0017:
+`0018_auditlog_document_department_db_default` (a database default for one column) and
+`0018_collection` (a new table, and wider choices for `AuditLog.action`). They touch
+different columns. `0019_merge_auditlog_db_default_and_collection` joins them. A merge
+node, not a renumbering, so a database that already applied either 0018 keeps a valid
+history. On a disposable database:
+
+- `makemigrations --check`: no changes; `migrate --check`: nothing unapplied;
+- a fresh database, one first migrated to `0018_collection` (as `platform-completion`
+  left it), and one first migrated to the other 0018 (as `release-review-fixes` left it)
+  all end with the same `pg_dump --schema-only`;
+- `documents` migrates back to 0017 and forward again to the same schema.
+
+**Earlier runs.**
+
 | What | Result | When |
 |---|---|---|
+| CI's `e2e` configuration (hashing embeddings, lexical reranking, the Vite dev server) | Playwright **7 passed**, 1 skipped by design (the CSP probe; Vite sends no policy), on bb34379 | 2026-10-10 |
+| Production stack built fresh with the pilot AI configuration, browser suite through the TLS edge | **8/8** on e34d1c7; Prometheus 4/4 targets up | 2026-10-10 |
 | Backend suite in the image built from `constraints.txt`, source mounted read-only | **971 tests, OK**; **974** with the review fixes below | 2026-10-06; 2026-10-10 |
 | New regression tests against the code before the fixes | all 8 quarantine and audit tests **fail**, proving they test the defect | 2026-10-06 |
 | Lint and format (ruff 0.16.8) | clean | 2026-10-06 |
@@ -121,12 +206,13 @@ and 7.7 GiB VM.
 
 | Check | Result |
 |---|---|
-| Branch | `platform-completion`, ahead of `master`. Nothing is pushed: **there is no remote** |
-| Working tree | clean after the release commits |
-| Tracked files | 364. The only binary is `frontend/e2e/fixtures/scanned-circular.png`, a synthetic OCR fixture. No documents, dumps, databases, certificates or keys in the tree or in history |
-| Secrets | none in tracked files (pattern scan: API keys, AWS keys, private keys, tokens). `.env` is gitignored and excluded from images. CI uses only labelled placeholders |
-| Generated data | seeded benchmarks, corpus manifests, media and backups are gitignored and excluded from images |
-| **Local Docker images** | `ai-document-intelligence-backend:latest` and `-worker:latest`, two weeks old, contain a real institutional PDF in `/app/backend/media/` and run as root. **They must never be pushed to any registry.** Recommended: delete them (`docker rmi`); that is the owner's call. The `adi-rc-*` images are the verified release candidate |
+| Branches (2026-10-12) | **`release/pilot`**: `platform-completion` at d8edd3a, plus the merge of `release-review-fixes` and fixes 15–18. `platform-completion` and `release-review-fixes` are kept unchanged. `master` is an ancestor of all three, 39 commits behind `platform-completion`. Nothing is pushed: **there is no remote** |
+| Other refs | two `refs/codex/…` refs, left by another tool, point at snapshots of the working tree (388 files; nothing sensitive in them). Push branches by name: `git push --mirror` would publish these too |
+| Working tree | `release/pilot` is clean. The development checkout has uncommitted edits that are not part of this release (raising `MAX_DOCUMENT_PAGES` to 2000, a README rewrite, a stylesheet change, and the Gemini block in `.env.example` uncommented) |
+| Tracked files | 391. The only binary is `frontend/e2e/fixtures/scanned-circular.png`, a synthetic OCR fixture. No document, dump, database, certificate, key or `.env` file in the tree, or ever added on any branch (re-checked 2026-10-12) |
+| Secrets | none in tracked files or in any commit on any branch (pattern scan, 2026-10-12: AWS, Anthropic, OpenAI-style, Google API, GitHub and Slack tokens; private keys). `.env` is gitignored and excluded from images. CI uses only labelled placeholders |
+| Generated data | seeded benchmarks, the corpus manifest, media and backups are gitignored and excluded from images (the manifest since fix 15) |
+| **Local Docker images** | The images built about 2026-09-22 as `ai-document-intelligence-backend:latest` and `-worker:latest`, which contained a real institutional PDF and ran as root, **no longer exist** (checked 2026-10-12): no image of this project older than 2026-10-05, no dangling image, and no build cache older than 2026-10-10. Those tags now name development images rebuilt since, which run as uid 10001. Every local image of this project was scanned on 2026-10-12, and none contains a document. Development images are rebuilt often, so scan any image again immediately before pushing it to a registry (checklist step 19). The `adi-rc-*` images were deleted; `adi-perf-*` is the same 2026-10-06 build |
 
 ## EXTERNALLY UNVERIFIED
 
@@ -182,10 +268,12 @@ no images (`push: false`), so no registry credentials are needed.
 
 | Setting | Value | Why |
 |---|---|---|
+| Repository | an owner, a visibility and a plan: decision [I6](institutional-decisions.md) | private repositories get required reviewers only on GitHub Enterprise (I5) |
 | Default branch | `main` or `master` | `push` triggers only on these two; `build`, `ai-regression` and the deploy chain run only on a push to them |
+| What to push | `release/pilot`, as the default branch | a push to any other branch name starts no workflow run at all |
 | Actions | enabled; GitHub-hosted `ubuntu-latest` runners | service containers `pgvector/pgvector:pg16` and `redis:7-alpine`; actions `checkout@v4`, `setup-python@v5`, `setup-node@v4`, `upload-artifact@v4`, `docker/setup-buildx-action@v3`, `docker/build-push-action@v6`; GitHub Actions cache |
-| Environment `staging` | create it | used by `deploy-staging` |
-| Environment `production` | create it **with required reviewers** | used by `deploy-production`; this is the approval gate |
+| Environment `staging` | create it **before the first push** | used by `deploy-staging`. A run that names a missing environment creates it, with no protection rules |
+| Environment `production` | create it **with required reviewers**, before the first push | used by `deploy-production`; this is the approval gate. Created by the first run instead, it has no reviewers, and the job runs unapproved (today it only prints a message) |
 | Repository variable `STAGING_URL` | `https://<staging-host>` | used by `smoke`. **When it is unset, the smoke job passes without testing anything** |
 | Secrets | none | the workflow uses none |
 | Branch protection (recommended) | require `lint`, `tests`, `frontend`, `e2e` and `security` on pull requests | the workflow cannot enforce this itself |
@@ -202,6 +290,7 @@ pilot:
 
 | # | Decision | When |
 |---|---|---|
+| I6 | where the repository lives: owner, visibility, plan | before the first CI run |
 | S4 / O4 | certificate source; server and hostnames | before staging |
 | I1 | sign-in method: local accounts for the pilot, VPN or proxy, or SSO first | before pilot |
 | I2 | whether `/django-admin/` is reachable from the internet | before pilot |
@@ -312,8 +401,12 @@ Details: [ai-release.md](ai-release.md).
   laptop. The cost is 3 fewer answered questions out of 57, on synthetic data. Revisit on
   the institutional evaluation set, when a GPU is available, or if documents are not in
   English.
-- **Hosted answerer: off.** It has never been called. Turning it on requires all of:
+- **Hosted answerer: off.** No deployment has called one. In development the Gemini
+  preset was run against Google's free tier (2026-10-11, a developer's own key); no
+  benchmark has been run through a hosted answerer. Turning one on requires all of:
   - a provider decision with data-processing terms (D2);
+  - if chat should also reply from the model's own knowledge, decision D8
+    (`CHAT_GENERAL_KNOWLEDGE`, off by default);
   - credentials;
   - a provider-side spend cap;
   - a timeout budget below nginx's 120 s. The defaults allow 180 s per call, which would
@@ -404,9 +497,11 @@ differ.
 
 ## GO-LIVE CHECKLIST
 
-1. Create the GitHub repository and push. Create the `staging` and `production`
-   environments, with reviewers on `production`, and set `STAGING_URL`. **Get one green
-   run of all jobs.**
+1. Decide where the repository lives (I6). Create it, then create the `staging` and
+   `production` environments, with reviewers on `production`, **before** pushing. Set
+   `STAGING_URL` once staging exists. Push `release/pilot` as the default branch
+   (`git remote add origin <url>`, then `git push origin release/pilot:main`), branches by
+   name and never `--mirror`. **Get one green run of all jobs.**
 2. Record the before-staging and before-pilot [institutional decisions](institutional-decisions.md).
 3. Provision the staging server. Set up DNS (A record) and the firewall (22 restricted;
    80 and 443 open).
@@ -423,8 +518,9 @@ differ.
 10. Rehearse a rollback on staging.
 11. Run the smoke tests (step 19). They must include the department boundary, the audit
     trail, and a restart.
-12. Wire monitoring: the panels and alerts below, delivered to the agreed channel, plus
-    external uptime and certificate-expiry checks.
+12. Wire monitoring: deliver the shipped alert rules to the agreed channel (O3), check the
+    dashboard against the table below, and add external uptime and certificate-expiry
+    checks.
 13. Record the image digests for `certbot/certbot` and `nginx:1.27-alpine`, and pin
     production to them.
 14. Build the institutional evaluation set. Run it, and decide against the acceptance
@@ -435,13 +531,18 @@ differ.
 17. Tell pilot users what to expect: quoted answers with citations, frequent refusals,
     English documents.
 18. After the first successful certificate renewal, decide on HSTS (S3).
-19. Before any registry push, delete the old local images that contain a real document
-    (`ai-document-intelligence-backend:latest`, `-worker:latest`).
+19. Before any registry push, scan the exact image being pushed for documents and secrets
+    (its `/app/backend/media` must be empty), and push only images built from a clean
+    checkout. The old images that held a real document no longer exist (2026-10-12), but
+    development images are rebuilt from working trees that hold uploads.
 
 ## POST-GO-LIVE MONITORING
 
-**No alert rules or dashboards ship.** Build these in Grafana (reached through an SSH
-tunnel to 127.0.0.1:3000). Wire the alerts to the agreed channel before go-live.
+**Since 2026-10-11, 12 alert rules (`infrastructure/prometheus/alerts.yml`) and an overview
+dashboard ship; nothing delivers an alert.** There is no Alertmanager and no Grafana
+contact point. Check the shipped rules and panels against this table, and wire delivery
+to the agreed channel (O3) before go-live. Grafana is reached through an SSH tunnel to
+127.0.0.1:3000.
 
 | Signal | Query | Alert when |
 |---|---|---|
@@ -479,7 +580,7 @@ tunnel to 127.0.0.1:3000). Wire the alerts to the agreed channel before go-live.
 
 **(F)** None of these blocks the pilot. Each should wait for evidence that it is needed.
 
-- Alert rules and Grafana dashboards as code, from the table above.
+- Alert delivery (Alertmanager or Grafana contact points), once O3 names a channel.
 - Hold downloads and previews until the scan completes (if S2 is decided that way).
 - SSO and MFA (if I1 requires them).
 - Hashed API tokens.

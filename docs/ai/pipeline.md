@@ -82,9 +82,10 @@ missing key, rate limit, timeout, malformed response — with a note on the answ
 `adi_llm_fallbacks_total{answerer,reason}`. Keys are read from the environment only, never
 from Django settings, and never logged or stored.
 
-**Hosted answerers have never been called for real from this repository** (no
-credentials). They are driven with stub clients in `tests_providers.py`, including through
-the full engine to prove a fabricated figure is still rejected.
+**Hosted answerers are tested with stub clients** in `tests_providers.py`, including
+through the full engine to prove a fabricated figure is still rejected. The only real calls
+were made in development, to the Gemini preset on Google's free tier with a developer's own
+key (2026-10-11); no deployment has called one and no evaluation has run through one.
 
 ## Grounding
 
