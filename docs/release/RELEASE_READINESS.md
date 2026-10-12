@@ -12,7 +12,7 @@ That audit comprised:
 - a release-candidate run of the production stack.
 
 **Re-verified 2026-10-12 on branch `release/pilot`**, the branch to push for the first CI
-run. It is `platform-completion`, which had moved 18 commits past the audit, with the
+run. It is `platform-completion`, which had moved 22 commits past the audit, with the
 unmerged `release-review-fixes` merged in, two build fixes and two test-harness fixes
 (fixes 15–18). The re-verification ran every
 CI job's commands locally and re-checked the repository and the local images. It was not a
@@ -46,7 +46,7 @@ The sections follow that order.
 | Area | Status | In one line |
 |---|---|---|
 | Code | **COMPLETE** for a single-host pilot | Nothing is missing for the pilot scope. Multi-host operation, SSO and a hosted answerer are outside it |
-| Local verification | **COMPLETE**, re-run 2026-10-12 | 1,103 backend tests, both in the release image and in CI's environment; 88 AI-suite and 57 frontend tests; both AI gates at their baselines; the migration graph along every upgrade path; the e2e job as CI runs it, 7 passed and 1 skipped by design. Backup, restore and rollback last rehearsed 2026-10-06; browser suite 8/8 through nginx over TLS last run 2026-10-10 |
+| Local verification | **COMPLETE**, re-run 2026-10-12 | 1,142 backend tests, both in the release image and in CI's environment; 88 AI-suite and 61 frontend tests; both AI gates at their baselines; the migration graph along every upgrade path; the e2e job as CI runs it, 7 passed and 1 skipped by design. Backup, restore and rollback last rehearsed 2026-10-06; browser suite 8/8 through nginx over TLS last run 2026-10-10 |
 | CI | **NOT YET VERIFIED** | There is no GitHub repository, so the workflow has never run. actionlint finds no errors in it, and every job's commands pass locally (2026-10-12) |
 | Staging | **BLOCKED** | It needs a server, a hostname and DNS, and the institution's before-staging decisions. No code change is required |
 | Production | **BLOCKED** | It needs staging to pass, plus the before-pilot decisions |
@@ -78,7 +78,7 @@ The sections follow that order.
 - the evaluation framework, with two regression gates;
 - added after the audit (2026-10-11): the `/api/v1/` prefix (with `/api/` kept as an alias)
   and idempotent uploads; department-scoped document collections; streamed chat answers
-  and opt-in general-knowledge replies (decision D8); opt-in OpenTelemetry tracing, 12
+  and opt-in general-knowledge replies (decision D8); opt-in OpenTelemetry tracing, 13
   Prometheus alert rules and a Grafana dashboard.
 
 **Fixed by this audit.** Each code fix has a test that fails without it.
@@ -125,12 +125,13 @@ The audit's three code reviews covered the code as of c4ab67a. After it:
 |---|---|---|
 | 8ba7ed4 … bb34379 (8) | A file-by-file review of the whole code base: about 60 defects and 7 tests that could not fail, across the API, security, processing, RAG, evaluation, operations, frontend and AI code | each fix has a regression test; every CI gate passed on bb34379 (2026-10-10) |
 | e34d1c7 | `.gitattributes` keeps shell scripts LF: on a Windows checkout a CRLF entrypoint made the edge image exit 127 | the edge image built from a fresh Windows clone started and served TLS |
-| d4f9913 … e5eb275 (4) | The specification's remaining gaps: API versioning and idempotent uploads; OpenTelemetry, alert rules and a dashboard; collections; a traceability matrix ([spec-traceability](../architecture/spec-traceability.md)) | tests only. **No independent review yet**: one was under way on 2026-10-12, and its fixes are not in this branch |
-| 016cea6 … 3a34936 (4) | Streamed chat, opt-in general-knowledge replies, the Gemini preset's model fallback chain, and fixes found by using the chat in a browser | tests and a browser check against the development stack; the same pending review |
+| d4f9913 … e5eb275 (4) | The specification's remaining gaps: API versioning and idempotent uploads; OpenTelemetry, alert rules and a dashboard; collections; a traceability matrix ([spec-traceability](../architecture/spec-traceability.md)) | tests, then the independent review below |
+| 016cea6 … 3a34936 (4) | Streamed chat, opt-in general-knowledge replies, the Gemini preset's model fallback chain, and fixes found by using the chat in a browser | tests, a browser check against the development stack, then the review below |
+| 7a0efaf … 6641009 (4), merged in 9f2772b | An independent review of the eight commits above. Among its fixes: a department rename now carries collections; an idempotency key is matched to the file's content, not its name and size, and a claim expires instead of living 24 hours; search text no longer leaves in trace URLs; alert rules that could not fire, or fired on every page load; the Gemini chain drops a model that rejects its settings | each fix has a test; the merge's one conflict (the rename guard) keeps both sides' checks |
 | 3e02d9d | Merge of `release-review-fixes`: fixes 12–14 and the chat latency measured through the edge | the merge, the merge migration and the whole suite (below) |
 | d8edd3a, merged in 76ac4b6 | `.env.example` documents `INSTALL_LOCAL=false` (compose's value when it is absent); the local embedder's and reranker's import errors give the Docker fix | the whole suite (below) |
 | b77a9ca, f451ccb | Fixes 15 and 16 | rebuilt images |
-| a827d55, 3ebf20d | Fixes 17 and 18 (two frontend files; no backend change) | the e2e job and the frontend suite (below) |
+| a827d55, 3ebf20d | Fixes 17 and 18 (two frontend files) | the e2e job and the frontend suite (below) |
 
 ## LOCALLY VERIFIED
 
@@ -139,24 +140,24 @@ and 7.7 GiB VM.
 
 **On `release/pilot`, 2026-10-12.** Each CI job's steps ran from a clean `git archive` of
 the commit, against a disposable pgvector/pg16 and Redis 7, with the workflow's own
-environment values. The last commit that changes code is 3ebf20d; the commit recording
-this page changes only documentation. The frontend job, the web image and the e2e job ran
-on 3ebf20d. The backend jobs ran on f451ccb: the two commits after it change two frontend
-files and nothing else.
+environment values. Every job below ran on 9f2772b, the last commit that changes code; the
+commit recording this page changes only documentation. They had also passed on the
+branch's earlier commits (f451ccb, 3ebf20d), before the independent review's fixes were
+merged.
 
 | What | Result |
 |---|---|
 | `lint`: ruff 0.16.8, check and format | clean; 242 files formatted |
-| `tests`, in CI's environment (Python 3.12 with only the job's apt and pip installs) | migration check: no changes; **1,103 backend tests, OK**; AI suite **88, OK** |
-| Backend suite in the release image (ML, LLM and local-model layers, built from `constraints.txt`), source mounted read-only | **1,103 tests, OK**, none skipped; nothing written into the source tree |
-| `frontend` (Node 22) | typecheck clean; **57/57**, three runs in a row with other test suites loading the machine; production build; `npm audit --omit=dev`: 0 vulnerabilities |
+| `tests`, in CI's environment (Python 3.12 with only the job's apt and pip installs) | migration check: no changes; **1,142 backend tests, OK**, 1 skipped (note 3); AI suite **88, OK** |
+| Backend suite in the release image (ML, LLM and local-model layers, built from `constraints.txt`), source mounted read-only | **1,142 tests, OK**, 1 skipped (note 3); nothing written into the source tree |
+| `frontend` (Node 22) | typecheck clean; **61/61** while both backend suites loaded the machine (on 3ebf20d, 57/57 three runs in a row under load); production build; `npm audit --omit=dev`: 0 vulnerabilities |
 | `security` | `check --deploy --fail-level WARNING`: no issues; bandit 1.9.4: clean; pip-audit 2.10.1: none; `.dockerignore` gate: passes on the committed file (note 1) |
 | The pinned set itself (`pip-audit -r constraints.txt --no-deps`) | no known vulnerabilities; torch's CPU build cannot be audited against PyPI. CI's own audit resolves `requirements.txt` to the newest releases, not to the pins |
 | `ai-regression`, as the job runs it: fresh database, corpus ingested through the pipeline | v1: 13 cases, **no change** against `baseline.json`. v2: 57 cases, recall@1 0.796, **no change** against `baseline-v2.json`. Synthetic data: this shows nothing regressed, not that answers are right |
 | `e2e`, with the job's own steps: `.env` from `.env.example`, `docker compose up -d --build`, `seed_e2e`, the Vite dev server, Playwright's Chromium | **7 passed, 1 skipped by design** (the CSP probe: Vite sends no policy), no dev-server reload. Only the ports differed from CI (18000 and 15173; other servers held 8000 and 5173). Before fix 17, the same steps failed twice |
-| `build` | the backend image as production builds it (f451ccb), and one with every optional layer, S3 and OpenTelemetry included (3e02d9d): both build, `pip check` clean, every package at its pinned version, uid 10001. Web edge image (3ebf20d): builds, and the frontend checks inside it pass, 57/57 (note 2). `check_deployment_config.py`: pass |
+| `build` | the backend image as production builds it (f451ccb; nothing after it changes a dependency or the Dockerfile, and the suites above ran 9f2772b's code in it), and one with every optional layer, S3 and OpenTelemetry included (3e02d9d): both build, `pip check` clean, every package at its pinned version, uid 10001. Web edge image (9f2772b): builds, and the frontend checks inside it pass, 61/61 (note 2). `check_deployment_config.py`: pass |
 | Workflow file | actionlint 1.7.7 with shellcheck: no errors; 2 style warnings (an unused loop counter) |
-| Prometheus files | promtool: configuration valid, 12 alert rules |
+| Prometheus files | promtool: configuration valid, 13 alert rules |
 | Image contents: the release images above and every other local image of this project, development images included | no document, dump, database, key or `.env` file outside installed packages; `/app/backend/media` empty; application images run as uid 10001 |
 
 1. On a Windows checkout (`core.autocrlf=true`) `.dockerignore` is written with CRLF, and
@@ -165,6 +166,9 @@ files and nothing else.
 2. The edge image runs the frontend tests while it builds. Before fix 18, while the laptop
    ran three image builds and a test suite at the same time, 5 of 57 failed waiting for a
    page to render. With fix 18 the image built cleanly, and the suite passed under load.
+3. The skipped test is `SamplerTests`, which needs the optional OpenTelemetry layer;
+   neither CI nor the production image installs it by default. In the image built with
+   every optional layer, all 11 tracing tests pass, that one included.
 
 #### Migrations
 
@@ -206,7 +210,7 @@ history. On a disposable database:
 
 | Check | Result |
 |---|---|
-| Branches (2026-10-12) | **`release/pilot`**: `platform-completion` at d8edd3a, plus the merge of `release-review-fixes` and fixes 15–18. `platform-completion` and `release-review-fixes` are kept unchanged. `master` is an ancestor of all three, 39 commits behind `platform-completion`. Nothing is pushed: **there is no remote** |
+| Branches (2026-10-12) | **`release/pilot`**: `platform-completion` at 6641009, plus the merge of `release-review-fixes` and fixes 15–18. `platform-completion` and `release-review-fixes` are kept unchanged. `master` is an ancestor of all three, 43 commits behind `platform-completion`. Nothing is pushed: **there is no remote** |
 | Other refs | two `refs/codex/…` refs, left by another tool, point at snapshots of the working tree (388 files; nothing sensitive in them). Push branches by name: `git push --mirror` would publish these too |
 | Working tree | `release/pilot` is clean. The development checkout has uncommitted edits that are not part of this release (raising `MAX_DOCUMENT_PAGES` to 2000, a README rewrite, a stylesheet change, and the Gemini block in `.env.example` uncommented) |
 | Tracked files | 391. The only binary is `frontend/e2e/fixtures/scanned-circular.png`, a synthetic OCR fixture. No document, dump, database, certificate, key or `.env` file in the tree, or ever added on any branch (re-checked 2026-10-12) |
@@ -538,7 +542,7 @@ differ.
 
 ## POST-GO-LIVE MONITORING
 
-**Since 2026-10-11, 12 alert rules (`infrastructure/prometheus/alerts.yml`) and an overview
+**Since 2026-10-11, 13 alert rules (`infrastructure/prometheus/alerts.yml`) and an overview
 dashboard ship; nothing delivers an alert.** There is no Alertmanager and no Grafana
 contact point. Check the shipped rules and panels against this table, and wire delivery
 to the agreed channel (O3) before go-live. Grafana is reached through an SSH tunnel to

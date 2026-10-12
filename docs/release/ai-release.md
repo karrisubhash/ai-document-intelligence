@@ -10,7 +10,7 @@ were measured on one laptop, on **synthetic** documents ([datasets](../data/data
 | | System engineering quality | AI model quality |
 |---|---|---|
 | Question | Does the machinery behave as designed? | Are the answers right for *this institution's* documents and questions? |
-| Evidence | 1,103 backend tests (2026-10-12); a browser suite through nginx over TLS; two evaluation gates (v1 and v2) that fail CI on any regression; a calibration run on a separate development set | 57 synthetic benchmark questions over 9 synthetic documents, and nothing else |
+| Evidence | 1,142 backend tests (2026-10-12); a browser suite through nginx over TLS; two evaluation gates (v1 and v2) that fail CI on any regression; a calibration run on a separate development set | 57 synthetic benchmark questions over 9 synthetic documents, and nothing else |
 | Status | **Verified locally** (CI itself has never run on GitHub) | **Unknown for real institutional use** |
 
 The engineering guarantees hold whatever the documents are:
@@ -116,7 +116,7 @@ turning it on, on staging first.
 3. A monthly spend limit, set at the provider. The application has no spend cap. Its
    only bound is the chat throttle (`THROTTLE_CHAT`, 60 questions per user per hour), and
    a question can make up to 4 provider calls (`RAG_MAX_PLAN_STEPS`). A preset with a
-   fallback chain - Gemini's has four fallback models - sends a throttled or failing
+   fallback chain - Gemini's has three fallback models - sends a throttled or failing
    call to the next model, so one call can become several requests. A general-knowledge
    reply ([D8](institutional-decisions.md)) is one more call.
 4. Whether chat may answer from the model's general knowledge when the documents have

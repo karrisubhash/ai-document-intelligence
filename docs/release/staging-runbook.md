@@ -329,7 +329,7 @@ $DC exec prometheus wget -qO- 'http://localhost:9090/api/v1/targets' | grep -o '
 ```
 
 The Prometheus datasource and an overview dashboard (`infrastructure/grafana/dashboards/`)
-are provisioned, and Prometheus evaluates 12 alert rules
+are provisioned, and Prometheus evaluates 13 alert rules
 (`infrastructure/prometheus/alerts.yml`; list their state with
 `$DC exec prometheus wget -qO- 'http://localhost:9090/api/v1/alerts'`). **Nothing delivers an alert**: there
 is no Alertmanager and no Grafana contact point. Choosing where alerts go is an

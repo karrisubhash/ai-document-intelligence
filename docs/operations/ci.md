@@ -31,16 +31,15 @@ job's commands have been executed locally, which proves the commands, not the YA
 actionlint 1.7.7 (with shellcheck) finds no errors in the YAML, only two style warnings
 about an unused loop counter.
 
-Latest local run: 2026-10-12, on `release/pilot` at 3ebf20d (the backend jobs at f451ccb,
-whose backend is identical), each job's steps from a clean `git archive` of the commit, with
-the workflow's environment values, against a disposable
+Latest local run: 2026-10-12, on `release/pilot` at 9f2772b, each job's steps from a clean
+`git archive` of the commit, with the workflow's environment values, against a disposable
 pgvector/pg16 and Redis 7 ([release readiness](../release/RELEASE_READINESS.md#locally-verified)):
 
 | Job | Executed locally | Result |
 |---|---|---|
 | lint | yes | clean (ruff 0.16.8) |
-| tests | yes, in a Python 3.12 container with only the job's apt and pip installs | migration check clean; 1,103 backend tests OK; AI suite 88 OK. Also 1,103 OK in the release image with the source mounted read-only |
-| frontend | yes (Node 22) | typecheck clean; 57/57 (three runs under load); build; `npm audit`: 0 |
+| tests | yes, in a Python 3.12 container with only the job's apt and pip installs | migration check clean; 1,142 backend tests OK, 1 skipped (it needs the optional OpenTelemetry layer, and passes where that is installed); AI suite 88 OK. Also 1,142 OK in the release image with the source mounted read-only |
+| frontend | yes (Node 22) | typecheck clean; 61/61 under load; build; `npm audit`: 0 |
 | e2e | yes, **with the job's own steps** for the first time: `.env` from `.env.example`, `docker compose up -d --build`, `seed_e2e`, the Vite dev server, Playwright's bundled Chromium; only the ports moved (18000, 15173) | 7 passed, 1 skipped by design (the CSP probe). Before a827d55 the same steps failed twice: Vite reloaded the page whenever Playwright wrote a trace into `e2e/.results` |
 | security | yes | `.dockerignore` gate, `check --deploy`, bandit and pip-audit all pass. On a Windows checkout the `.dockerignore` gate fails falsely: `core.autocrlf` writes the file with CRLF and `grep -x` then matches no line. CI's checkout is LF |
 | ai-regression | yes, as the job runs it | v1 and v2: "no change" against their baselines; see [evaluation/README.md](../evaluation/README.md#the-regression-gate) |

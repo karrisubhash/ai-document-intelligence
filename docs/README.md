@@ -31,8 +31,8 @@ design rationale; these pages are the working reference.
 
 | Claim | Status |
 |---|---|
-| Backend test suite (1,103 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly; last on 2026-10-12 on `release/pilot`, in the pinned release image and in CI's environment ([release readiness](release/RELEASE_READINESS.md#locally-verified)) |
-| Frontend typecheck, 57 unit/component tests, production build | **Verified** locally, and inside the web image build (2026-10-12) |
+| Backend test suite (1,142 tests) passes against PostgreSQL + pgvector | **Verified** locally, repeatedly; last on 2026-10-12 on `release/pilot`, in the pinned release image and in CI's environment ([release readiness](release/RELEASE_READINESS.md#locally-verified)) |
+| Frontend typecheck, 61 unit/component tests, production build | **Verified** locally, and inside the web image build (2026-10-12) |
 | Browser end-to-end suite against the live stack (real worker, real models) | **Verified** locally: with CI's e2e job's own steps, 7/7 with the CSP probe skipped by design (2026-10-12, `release/pilot`); on the production stack over TLS, 7/7 plus the CSP-violation probe (2026-10-10 and 2026-10-06, with the recommended pilot configuration) |
 | Backup, restore into an empty database, and a working search on the restored copy | **Verified** locally on a disposable database; the staging runbook's backup, restore and rollback steps rehearsed verbatim on 2026-10-06. Off-host backups and production disaster recovery: **unverified** |
 | Production compose stack boots behind nginx with TLS | **Verified locally** with a self-signed certificate: browser suite 7/7 over TLS, no CSP violations. **Real domain and Let's Encrypt: unverified** |
