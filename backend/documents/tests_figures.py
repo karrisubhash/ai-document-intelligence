@@ -375,6 +375,45 @@ class FigureAbstentionTests(TestCase):
 
         self.assertEqual(engine._figure_hints([]), [])
 
+    def figure_document(self, title):
+        document = Document.objects.create(
+            title=title, document_type="OTHER", owner=self.owner, department="Registry"
+        )
+        body = make_png_bytes(title.upper())
+        version = document.versions.create(
+            version_number=1,
+            file=ContentFile(body, name="figure.png"),
+            file_name="figure.png",
+            file_size=len(body),
+            uploaded_by=self.owner,
+        )
+        document.current_version = version
+        document.save(update_fields=["current_version"])
+        run_pipeline(ProcessingJob.objects.create(document_version=version).id)
+        return document
+
+    def test_the_hint_names_the_best_ranked_documents(self):
+        """Capped at three - and in title order, the cap could drop the
+        document retrieval ranked first for three that sort earlier."""
+        from documents.rag import engine
+
+        alpha, beta, gamma = (
+            self.figure_document(title)
+            for title in ("Alpha Map", "Beta Map", "Gamma Map")
+        )
+        hints = engine._figure_hints([gamma.id, self.document.id, beta.id, alpha.id])
+
+        named = [hint.split("'")[1] for hint in hints]
+        self.assertEqual(named, ["Gamma Map", "Enrolment Chart", "Beta Map"])
+
+    def test_documents_that_share_a_title_are_hinted_separately(self):
+        from documents.rag import engine
+
+        twin = self.figure_document("Enrolment Chart")
+        hints = engine._figure_hints([self.document.id, twin.id])
+
+        self.assertEqual(len(hints), 2)
+
     def test_the_hint_only_covers_documents_retrieval_already_found(self):
         """The safety property. A hint about a document the caller cannot
         see would disclose that it exists, so this must never widen the

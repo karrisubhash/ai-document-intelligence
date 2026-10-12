@@ -26,7 +26,7 @@ from documents.observability import telemetry, tracing
 from documents.search import service as search_service
 
 from . import context as context_builder
-from . import grounding
+from . import grounding, streaming
 from .llm import ABSTENTION_TEXT
 
 # How many retrieved candidates are handed to the reranker. Larger than the
@@ -88,6 +88,13 @@ class Abstention:
     MODEL_ABSTAINED = (
         "the answerer found nothing in the passages that answered the question"
     )
+    # The model declined, was cut off at the token limit or returned
+    # nothing - or was unavailable, and quoting passages found nothing
+    # either. The passages may well have held the answer, so this must not
+    # read as MODEL_ABSTAINED's "the documents do not say": chat's
+    # general-knowledge reply took it that way and replaced a cited answer,
+    # cut off mid-way, with "your documents do not cover this".
+    ANSWERER_FAILED = "the answerer could not produce a usable answer"
     UNGROUNDED = "the answer could not be grounded in the cited passages"
     # Distinguishable from the rest on purpose. "I could not find that" and
     # "I could not find that, and there is a figure on the page you are
@@ -213,18 +220,35 @@ def _figure_hints(document_ids) -> list:
         # extraction passes still have their figures, and pointing a reader
         # at a page of a superseded version is worse than saying nothing.
         .filter(document_version=F("document_version__document__current_version"))
-        .values_list("document_version__document__title", "page_number")
+        .values_list(
+            "document_version__document_id",
+            "document_version__document__title",
+            "page_number",
+        )
         .distinct()
-        .order_by("document_version__document__title", "page_number")
+        .order_by("page_number")
     )
 
-    pages_by_title = {}
-    for title, page_number in rows:
-        pages_by_title.setdefault(title, []).append(page_number)
+    # Per document, not per title: two documents can share a title, and
+    # their pages were listed as one document's.
+    titles = {}
+    pages_by_document = {}
+    for document_id, title, page_number in rows:
+        titles[document_id] = title
+        pages_by_document.setdefault(document_id, []).append(page_number)
+
+    # In retrieval order, so the cap drops the least likely documents. In
+    # title order it could drop the best-ranked one for three that sort
+    # earlier alphabetically.
+    rank = {}
+    for position, document_id in enumerate(document_ids):
+        rank.setdefault(document_id, position)
+    hinted = sorted(pages_by_document, key=rank.__getitem__)[:MAX_HINTED_DOCUMENTS]
 
     hints = []
-    for title in list(pages_by_title)[:MAX_HINTED_DOCUMENTS]:
-        pages = pages_by_title[title]
+    for document_id in hinted:
+        title = titles[document_id]
+        pages = pages_by_document[document_id]
         label = "page" if len(pages) == 1 else "pages"
         # Worded for exactly what happened, which is narrower than "this
         # system cannot read images". OCR did run over these pages and did
@@ -253,8 +277,9 @@ def _abstain(question, reason, started, **extra) -> RagAnswer:
             # UNGROUNDED means an answer WAS produced and failed verification
             # - the hallucination signal telemetry counts by reason. A logo
             # or letterhead in a retrieved document is not a reason to
-            # relabel that; the hint stays as a note.
-            if reason != Abstention.UNGROUNDED:
+            # relabel that; the hint stays as a note. Nor is it a reason to
+            # relabel a model that failed to answer: its passages were found.
+            if reason not in (Abstention.UNGROUNDED, Abstention.ANSWERER_FAILED):
                 reason = Abstention.MAYBE_IN_A_FIGURE
 
     answer = RagAnswer(
@@ -453,10 +478,18 @@ def _ask(
         # limit or came back empty, is a different fact from one that found
         # nothing in the passages - and MODEL_ABSTAINED says only the last.
         reason = (response.metadata or {}).get("reason")
+        failed = bool(response.generative and reason) or bool(fell_back_from)
         if response.generative and reason:
             notes.append(f"the model did not answer: {reason}")
+        # A streaming client discards what it was shown (a cut-off draft, or
+        # the model's own refusal) for the reply that follows.
+        streaming.reset()
         return _abstain(
-            question, Abstention.MODEL_ABSTAINED, started, notes=notes, **common
+            question,
+            Abstention.ANSWERER_FAILED if failed else Abstention.MODEL_ABSTAINED,
+            started,
+            notes=notes,
+            **common,
         )
 
     # --- Verify before returning -----------------------------------------
@@ -468,6 +501,9 @@ def _ask(
         # The model said something; it could not be substantiated. Section
         # 12.4 says abstain rather than invent, and an answer that fails
         # grounding is indistinguishable from an invention here.
+        # Withdrawn from a streaming client too, which has been showing it,
+        # citation markers and all, as the answer.
+        streaming.reset()
         return _abstain(
             question,
             Abstention.UNGROUNDED,

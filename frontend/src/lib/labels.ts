@@ -104,6 +104,9 @@ export function explainAbstention(reason: string): string {
   if (text.includes("found nothing")) {
     return "The retrieved passages were read and none of them answers the question.";
   }
+  if (text.includes("usable answer")) {
+    return "Relevant passages were found, but the language model could not finish an answer this time: it was unavailable, declined, or ran out of room. Try again, or ask about one thing at a time.";
+  }
   if (text.includes("parts of the question")) {
     return "The question was split into parts, and none of the parts could be answered from your documents.";
   }

@@ -38,7 +38,7 @@ from documents.processing.embedding.local import (
 from documents.rag import engine
 from documents.rag.bedrock_rerank import BedrockReranker
 from documents.rag.claude import SYSTEM
-from documents.rag.llm import ABSTENTION_TEXT
+from documents.rag.llm import ABSTENTION_TEXT, LLMResponse
 from documents.rag.local_rerank import LocalCrossEncoderReranker
 from documents.rag.openai_compat import (
     PRESETS,
@@ -435,15 +435,38 @@ class GuardrailsApplyToEveryAnswererTests(TestCase):
     def test_a_reply_cut_off_at_the_token_limit_says_so(self):
         """MODEL_ABSTAINED reads "found nothing in the passages". A reply
         the provider cut off is a different fact, and the provider's reason
-        reached only the log."""
+        reached only the log. Under MODEL_ABSTAINED it was also taken for
+        "the documents do not say", and chat replaced it with a general-
+        knowledge reply saying so."""
         answerer = answerer_with(
             StubChatClient(completion("You need 75 percent", finish_reason="length"))
         )
         answer = self.run_engine(answerer)
 
         self.assertTrue(answer.abstained)
-        self.assertEqual(answer.abstention_reason, engine.Abstention.MODEL_ABSTAINED)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.ANSWERER_FAILED)
         self.assertTrue(any("cut off" in note for note in answer.notes), answer.notes)
+
+    def test_a_fallback_that_found_nothing_is_an_answerer_failure(self):
+        """The generative answerer was down and quoting passages found
+        nothing: the passages were never read by the model that was asked."""
+        fallback = LLMResponse(
+            text=ABSTENTION_TEXT,
+            abstained=True,
+            model_name="extractive",
+            metadata={"fell_back_from": "groq", "fallback_reason": "TimeoutError"},
+        )
+        answer = self.run_engine(mock.Mock(answer=mock.Mock(return_value=fallback)))
+
+        self.assertEqual(answer.abstention_reason, engine.Abstention.ANSWERER_FAILED)
+        self.assertTrue(answer.answerer_fell_back)
+
+    @override_settings(RAG_ANSWERER_PROVIDER="groq")
+    def test_a_model_that_found_nothing_is_still_model_abstained(self):
+        answerer = answerer_with(StubChatClient(completion(ABSTENTION_TEXT)))
+        answer = self.run_engine(answerer)
+
+        self.assertEqual(answer.abstention_reason, engine.Abstention.MODEL_ABSTAINED)
 
     @override_settings(RAG_RERANKER_LOCAL_MODEL="cross-encoder/ms-marco-MiniLM-L6-v2")
     def test_a_degraded_reranker_is_held_to_the_lexical_floor(self):
