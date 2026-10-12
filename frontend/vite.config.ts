@@ -27,6 +27,11 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
+      // Playwright writes its traces into e2e/.results while the browser
+      // suite runs against this server, and a trace's .html resources are
+      // pages to Vite's watcher: each one made it reload the browser under
+      // the test, closing whatever dialog was open.
+      watch: { ignored: ["**/e2e/.results/**"] },
       proxy: Object.fromEntries(
         PROXIED.map((path) => [path, { target, changeOrigin: false }]),
       ),
