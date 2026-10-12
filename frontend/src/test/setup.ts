@@ -1,7 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
+
+// findBy*/waitFor give up after 1 s by default. On a loaded machine the
+// first render of a page with mocked API calls took longer: the chat and
+// collections tests failed at 1.2-1.7 s while other suites shared the CPU,
+// and passed alone. A query still resolves as soon as its element appears.
+configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();
