@@ -51,12 +51,18 @@ def resolve_department(name: str, *, allow_inactive: bool = False) -> str:
 def rename_department(department: Department, new_name: str) -> Department:
     """Rename a department and every reference to it, atomically.
 
-    The name is the value profiles, documents, conversations and evaluation
-    datasets store, so a rename that changed only the registry row would
-    silently move every member and document into a department that no
+    The name is the value profiles, documents, collections, conversations and
+    evaluation datasets store, so a rename that changed only the registry row
+    would silently move every member and document into a department that no
     longer exists - and out of reach of each other.
     """
-    from documents.models import AuditLog, Conversation, Document, EvaluationDataset
+    from documents.models import (
+        AuditLog,
+        Collection,
+        Conversation,
+        Document,
+        EvaluationDataset,
+    )
 
     old_name = department.name
     new_name = new_name.strip()
@@ -68,7 +74,7 @@ def rename_department(department: Department, new_name: str) -> Department:
     # like "physics" beside "Physics" apart). Renaming onto that spelling
     # would merge the two and silently widen access between them - the
     # decision the migration left to an administrator, made by a typo.
-    for model in (UserProfile, Document, Conversation, EvaluationDataset):
+    for model in (UserProfile, Document, Collection, Conversation, EvaluationDataset):
         if model.objects.filter(department=new_name).exists():
             raise DepartmentNameInUse(
                 f"Records already use the department name {new_name!r}; renaming "
@@ -81,6 +87,10 @@ def rename_department(department: Department, new_name: str) -> Department:
 
     UserProfile.objects.filter(department=old_name).update(department=new_name)
     Document.objects.filter(department=old_name).update(department=new_name)
+    # Left behind, a collection would vanish from its members, refuse every
+    # document (they now carry the new name) and pass to whichever
+    # department is next given the old name.
+    Collection.objects.filter(department=old_name).update(department=new_name)
     Conversation.objects.filter(department=old_name).update(department=new_name)
     EvaluationDataset.objects.filter(department=old_name).update(department=new_name)
     # Or a deleted document's trail would fall out of its department's view.

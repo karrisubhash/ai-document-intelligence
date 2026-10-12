@@ -475,7 +475,21 @@ export const api = {
     fetchBlob(doc(id, `download/${query({ version })}`), signal),
 
   // --- search and chat -------------------------------------------------
-  collections: () => request<Paginated<Collection>>("/api/v1/collections/"),
+  /**
+   * Every page, not just the first: the Collections page and the pickers in
+   * Search and Ask list them all, and a system administrator sees every
+   * department's. Page one alone silently dropped the 51st onwards.
+   */
+  collections: async (): Promise<Paginated<Collection>> => {
+    const first = await request<Paginated<Collection>>("/api/v1/collections/");
+    const results = [...first.results];
+    for (let page = 2, next = first.next; next; page += 1) {
+      const more = await request<Paginated<Collection>>(`/api/v1/collections/${query({ page })}`);
+      results.push(...more.results);
+      next = more.next;
+    }
+    return { ...first, results, next: null };
+  },
   createCollection: (body: { name: string; description?: string; department?: string }) =>
     request<Collection>("/api/v1/collections/", { method: "POST", body }),
   deleteCollection: (id: number) =>

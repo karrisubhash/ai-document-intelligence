@@ -41,7 +41,12 @@ function CollectionCard({ collection, onChanged }: { collection: Collection; onC
   );
   const remove = useAction(() => api.deleteCollection(collection.id));
   const members = new Set(collection.documents.map((doc) => doc.id));
-  const addable = (candidates.data?.results ?? []).filter((doc) => !members.has(doc.id));
+  // The department filter is checked here as well: an empty department is
+  // dropped from the query string, which then lists every department's
+  // documents - each of which the server would refuse.
+  const addable = (candidates.data?.results ?? []).filter(
+    (doc) => doc.department === collection.department && !members.has(doc.id),
+  );
 
   const update = async (ids: number[], add: boolean) => {
     const result = await change.run(ids, add);
@@ -123,11 +128,22 @@ function CollectionCard({ collection, onChanged }: { collection: Collection; onC
 
 export default function CollectionsPage() {
   useDocumentTitle("Collections");
-  const { can } = useAuth();
+  const { can, me } = useAuth();
+  // A system administrator says which department a collection is for, as
+  // with an upload; everyone else's is their own.
+  const anyDepartment = can("upload_to_any_department");
+  const departments = useResource(() => api.departments(), [], { enabled: anyDepartment });
   const collections = useResource(() => api.collections(), []);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const create = useAction(() => api.createCollection({ name: name.trim(), description }));
+  const [department, setDepartment] = useState("");
+  const create = useAction(() =>
+    api.createCollection({
+      name: name.trim(),
+      description,
+      ...(anyDepartment && department ? { department } : {}),
+    }),
+  );
   const errors = create.error instanceof ApiError ? create.error.fieldErrors() : {};
 
   const submit = async (event: FormEvent) => {
@@ -136,6 +152,7 @@ export default function CollectionsPage() {
     if (result.ok) {
       setName("");
       setDescription("");
+      setDepartment("");
       collections.reload();
     }
   };
@@ -173,6 +190,31 @@ export default function CollectionsPage() {
                 />
               )}
             </Field>
+            {anyDepartment ? (
+              <Field
+                label="Department"
+                error={errors.department}
+                hint="Who can see it. It holds only that department's documents."
+              >
+                {(props) => (
+                  <select
+                    {...props}
+                    className="input"
+                    value={department}
+                    onChange={(event) => setDepartment(event.target.value)}
+                  >
+                    <option value="">
+                      {me?.department ? `Your own (${me.department})` : "Choose a department…"}
+                    </option>
+                    {(departments.data ?? []).map((item) => (
+                      <option key={item.id} value={item.name}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            ) : null}
             {create.error && !Object.keys(errors).length ? (
               <Alert tone="danger">{errorMessage(create.error)}</Alert>
             ) : null}
