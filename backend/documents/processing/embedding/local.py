@@ -190,7 +190,9 @@ class LocalEmbeddingProvider:
                     "the CUDA wheel and pulls in several GB of nvidia "
                     "packages this provider never uses. The pinned CPU "
                     "wheels and the index they come from are both in:\n"
-                    "  pip install -r backend/requirements-local.txt"
+                    "  pip install -r backend/requirements-local.txt\n"
+                    "In Docker, set INSTALL_LOCAL=true in .env and rebuild "
+                    "the backend and worker images."
                 ) from exc
 
             if self.threads:
