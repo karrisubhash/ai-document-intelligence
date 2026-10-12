@@ -138,10 +138,16 @@ class Contextualized:
 # content terms, so looks_dependent() used to read "hi!" as a follow-up and
 # rewrite it into the previous question - and the user's greeting was
 # answered with the attendance policy again (found live, 2026-10-11).
+#
+# No phrase may also be spelled as a shorter phrase plus a tail word. A
+# separate "thank you" (also "thank" + "you") gave every repetition two
+# parses, and a failing match tried all of them: 200 characters of
+# "thank you thank you ... x" held a worker for over a second, and each
+# further repetition doubled it.
 _SMALL_TALK_PHRASE = (
     r"(?:h+i+|hel+o+|he+y+|hiya|yo|howdy|greetings"
     r"|good (?:morning|afternoon|evening|night|day)"
-    r"|thanks?|thank you|thx|ty|cheers|ok(?:ay)?|cool|great|nice|awesome|perfect"
+    r"|thanks?|thx|ty|cheers|ok(?:ay)?|cool|great|nice|awesome|perfect"
     r"|got it|bye|goodbye|see you|how are you(?: doing)?|how's it going"
     r"|who are you|what are you|what can you do)"
 )
@@ -151,12 +157,17 @@ _SMALL_TALK_TAIL = (
 _SMALL_TALK = re.compile(
     rf"^{_SMALL_TALK_PHRASE}(?: (?:{_SMALL_TALK_PHRASE}|{_SMALL_TALK_TAIL}))*$"
 )
+# Small talk is short. Anything longer is not matched at all, which also
+# bounds the regex's work whatever ambiguity a future phrase brings in.
+_SMALL_TALK_MAX_WORDS = 10
 
 
 def is_small_talk(question: str) -> bool:
     """A greeting, thanks or similar turn - not a question about documents."""
-    text = " ".join(re.sub(r"[^\w\s']", " ", (question or "").lower()).split())
-    return bool(text) and bool(_SMALL_TALK.match(text))
+    words = re.sub(r"[^\w\s']", " ", (question or "").lower()).split()
+    if not words or len(words) > _SMALL_TALK_MAX_WORDS:
+        return False
+    return bool(_SMALL_TALK.match(" ".join(words)))
 
 
 def _content_terms(text: str) -> list:

@@ -11,9 +11,10 @@ When a `v2` ships, `v1` stays mounted until its clients have moved.
 `POST /api/v1/documents/{id}/versions/` accept an `Idempotency-Key` header (1-255
 printable ASCII characters). A retry with the same key within 24 hours returns the first
 result (**202**, header `Idempotent-Replayed: true`) instead of creating a duplicate. The
-same key with a different file or title is **422**; a retry while the first request is
-still running is **409**. Keys are per user. A request that fails releases its key.
-Without the header, behaviour is unchanged.
+same key with a different file (compared by content) or title is **422**; a retry while
+the first request is still running is **409**. Keys are per user. A request that fails
+releases its key; one whose server process died mid-request holds it for at most 10
+minutes. Without the header, behaviour is unchanged.
 
 ## Authentication
 
@@ -99,8 +100,8 @@ department and holds only that department's documents.
 | Method | Path | Who | Notes |
 |---|---|---|---|
 | GET | `/api/collections/` | signed in | Own department's collections, plus any the caller created; system admins see all. Each has `documents` (`{id, title}`, only those the caller may read), `document_count`, `can_manage` |
-| POST | `/api/collections/` | system admin, department admin, faculty (`capabilities.create_collections`) | `{name, description?}`; `department` honoured for system admins only. **201**; duplicate name in the department **400**. Audited |
-| GET · PATCH · DELETE | `/api/collections/{id}/` | read · manage | PATCH `{name?, description?}`. DELETE keeps the documents. Manage = creator, the department's admin, or a system admin. Invisible ids are **404** |
+| POST | `/api/collections/` | system admin, department admin, faculty (`capabilities.create_collections`) | `{name, description?}`; `department` honoured for system admins only, defaulting to their own (**400** if they have none). **201**; duplicate name in the department **400**. Audited |
+| GET · PATCH · DELETE | `/api/collections/{id}/` | read · manage | PATCH `{name?, description?}` (any other body is **400**). DELETE keeps the documents. Manage = creator, the department's admin, or a system admin. Invisible ids are **404** |
 | POST · DELETE | `/api/collections/{id}/documents/` | manage | `{document_ids: [...]}` (≤500). Adding a document the caller cannot read, or from another department, is **404** naming the ids. Audited |
 
 ## Administration

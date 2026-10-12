@@ -1,6 +1,7 @@
 """Streamed chat (POST /api/v1/chat/stream/) and general-knowledge replies."""
 
 import json
+import time
 from types import SimpleNamespace
 from unittest import mock
 
@@ -9,10 +10,18 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from documents.models import Message
-from documents.rag import followup, general, openai_compat, streaming
+from documents.rag import engine, followup, general, openai_compat, streaming
 from documents.rag.engine import Abstention
 from documents.tests import make_user
-from documents.tests_providers import StubChatClient, answerer_with, completion
+from documents.tests_providers import (
+    PASSAGE,
+    FakeSearchResponse,
+    StubChatClient,
+    answerer_with,
+    completion,
+)
+from documents.tests_rag import chunk as passage
+from documents.tests_rag import hits
 
 CHAT = "/api/v1/chat/"
 STREAM = "/api/v1/chat/stream/"
@@ -89,6 +98,11 @@ class GeneralKnowledgeRulesTests(SimpleTestCase):
         for reason in (Abstention.UNGROUNDED, Abstention.MAYBE_IN_A_FIGURE):
             with self.subTest(reason=reason):
                 self.assertNotIn(reason, general.FALLBACK_REASONS)
+
+    def test_never_after_the_answerer_failed(self):
+        # A cut-off or refused answer, or an outage: the passages may well
+        # hold the answer, and the general reply would say they do not.
+        self.assertNotIn(Abstention.ANSWERER_FAILED, general.FALLBACK_REASONS)
 
     @override_settings(**GENERAL_ON)
     def test_needs_a_generative_answerer(self):
@@ -348,6 +362,27 @@ class GeminiModelChainTests(SimpleTestCase):
             3600.0,
         )
 
+    def test_no_model_in_the_chain_is_one_that_rejects_the_extras(self):
+        # The -lite models answer reasoning_effort "none" with a 400, which
+        # ends the chain; with the others cooling it was the model tried.
+        answerer = self.gemini(PerModelClient({}))
+        self.assertEqual(answerer.request_extras.get("reasoning_effort"), "none")
+        self.assertEqual(
+            [model for model in answerer.fallback_models if "lite" in model], []
+        )
+
+    def test_an_answer_records_the_model_that_actually_answered(self):
+        answerer = self.gemini(PerModelClient({"gemini-3.5-flash": 429}))
+        response = answerer._generate(question="q", context=None, prompt="p")
+        self.assertEqual(response.model_version, "gemini/gemini-3-flash-preview")
+
+    @override_settings(**GENERAL_ON)
+    def test_a_general_reply_records_the_model_that_actually_answered(self):
+        answerer = self.gemini(PerModelClient({"gemini-3.5-flash": 503}))
+        with mock.patch("documents.rag.general.get_answerer", return_value=answerer):
+            reply = general.answer("hi")
+        self.assertEqual(reply.model_version, "gemini/gemini-3-flash-preview")
+
 
 class SmallTalkTests(SimpleTestCase):
     def test_greetings_and_thanks_are_small_talk(self):
@@ -374,6 +409,71 @@ class SmallTalkTests(SimpleTestCase):
         # Found live: "hi!" after an attendance question was widened into
         # the attendance question and answered with the policy again.
         self.assertEqual(followup.looks_dependent("hi!"), (False, ""))
+
+    def test_every_way_of_saying_thank_you_still_counts(self):
+        for text in ("thank you", "Thank you so much!", "ok thank you all"):
+            with self.subTest(text=text):
+                self.assertTrue(followup.is_small_talk(text))
+
+    def test_matching_takes_linear_time(self):
+        # "thank you" was also "thank" + "you", so every repetition doubled
+        # the paths a failing match tried: 24 of them took tens of seconds,
+        # and the 2,000 characters a question may have held a worker for good.
+        started = time.monotonic()
+        self.assertIsNone(followup._SMALL_TALK.match("thank you " * 24 + "x"))
+        self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_a_long_message_is_never_small_talk(self):
+        # The cap bounds the regex's work whatever phrase is added later.
+        self.assertTrue(followup.is_small_talk("hi " * 10))
+        self.assertFalse(followup.is_small_talk("hi " * 11))
+
+
+class BreakingStreamClient(StreamingChatClient):
+    """Streams the first piece, then loses the connection."""
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+
+        def broken():
+            yield chunk(self.pieces[0])
+            raise ConnectionError("connection reset")
+
+        return broken()
+
+
+@mock.patch.dict("os.environ", {"GROQ_API_KEY": "k"})
+class WithdrawnDraftTests(TestCase):
+    """Only `done` is authoritative, but until it arrives a client shows the
+    deltas. A draft the engine does not return must be withdrawn, or the
+    reader watches an unverified answer, citation markers and all."""
+
+    def stream_engine(self, answerer):
+        events = []
+        found = FakeSearchResponse(hits((passage(1, PASSAGE), 1.0)))
+        with (
+            mock.patch.object(engine.search_service, "search", return_value=found),
+            mock.patch.object(engine, "get_answerer", return_value=answerer),
+            mock.patch.object(engine, "_figure_hints", return_value=[]),
+            streaming.capture(lambda event, text: events.append(event)),
+        ):
+            answer = engine.ask(
+                None, "What is the minimum attendance for the examination?"
+            )
+        return answer, events
+
+    def test_an_ungrounded_draft_is_withdrawn(self):
+        answerer = stub_answerer(["The minimum attendance is ", "80 percent [1]."])
+        answer, events = self.stream_engine(answerer)
+        self.assertEqual(answer.abstention_reason, Abstention.UNGROUNDED)
+        self.assertEqual(events, ["delta", "delta", "reset"])
+
+    def test_a_stream_that_breaks_is_withdrawn_before_the_quoted_answer(self):
+        client = BreakingStreamClient(["The minimum attendance "])
+        answerer = answerer_with(client, RAG_ANSWERER_PROVIDER="groq")
+        answer, events = self.stream_engine(answerer)
+        self.assertTrue(answer.answerer_fell_back)
+        self.assertEqual(events, ["delta", "reset"])
 
 
 @mock.patch.dict("os.environ", {"GROQ_API_KEY": "k"})

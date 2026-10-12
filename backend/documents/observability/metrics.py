@@ -306,6 +306,16 @@ auth_failures = Counter(
     registry=REGISTRY,
 )
 
+# Wrong usernames and passwords only. auth_failures also counts every 401,
+# and the web app's signed-out session check (GET auth/me/) answers 401 on
+# every page load before sign-in - so a morning of people opening the app
+# read as a credential-stuffing burst. Alerts about guessing use this one.
+login_failures = Counter(
+    "adi_login_failures_total",
+    "Failed sign-ins: a wrong username or password at a login endpoint.",
+    registry=REGISTRY,
+)
+
 authz_denials = Counter(
     "adi_authz_denials_total",
     "Authorization denials, by the action that was refused.",
@@ -337,6 +347,22 @@ upload_rejections = Counter(
     ["reason"],
     registry=REGISTRY,
 )
+
+
+# Every value of a fixed vocabulary that an alert watches starts at zero. A
+# labelled series otherwise first appears at 1, with its first event, and
+# increase() over a series that starts at 1 is 0: with the sample directory
+# wiped at every container start, the first malware verdict, failed job or
+# suspected injection after each deploy never reached an alert. The values
+# are documents.processing.scanning.base.Verdict, the final statuses passed
+# to telemetry.job_finished, and str(bool).
+for _verdict in ("CLEAN", "INFECTED", "SUSPICIOUS"):
+    malware_verdicts.labels(verdict=_verdict)
+for _outcome in ("COMPLETED", "FAILED", "QUARANTINED"):
+    pipeline_jobs.labels(outcome=_outcome)
+for _abstained in ("True", "False"):
+    rag_requests.labels(abstained=_abstained)
+suspicious_inputs.labels(kind="prompt_injection")
 
 
 def multiprocess_dir() -> str:

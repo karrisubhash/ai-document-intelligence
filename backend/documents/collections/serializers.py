@@ -35,20 +35,25 @@ class CollectionSerializer(serializers.ModelSerializer):
         # Only the members the CALLER may see. A curator in the department
         # sees them all; anyone else must not learn that a document they
         # cannot open exists, even by id.
-        # Memoised on the instance: `documents` and `document_count` both
-        # need it, and a listing would otherwise query twice per row.
-        cached = getattr(collection, "_visible_members", None)
-        if cached is None:
+        # The viewset prefetches them as `visible_members`. A collection that
+        # did not come through its queryset (one just created) is read here,
+        # memoised the same way: `documents` and `document_count` both need it.
+        members = getattr(collection, "visible_members", None)
+        if members is None:
             request = self.context["request"]
-            members = authorization.visible_documents(
-                request.user, collection.documents.all()
+            members = list(
+                authorization.visible_documents(
+                    request.user, collection.documents.only("id", "title")
+                ).order_by("title", "id")
             )
-            cached = list(members.order_by("title", "id").values("id", "title"))
-            collection._visible_members = cached
-        return cached
+            collection.visible_members = members
+        return members
 
     def get_documents(self, collection):
-        return self._visible(collection)
+        return [
+            {"id": document.id, "title": document.title}
+            for document in self._visible(collection)
+        ]
 
     def get_document_count(self, collection):
         return len(self._visible(collection))

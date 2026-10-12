@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
-import type { Collection, Me } from "../api/types";
+import type { Collection, DocumentSummary, Me } from "../api/types";
 import App from "../App";
 import { AuthProvider } from "../auth/AuthContext";
 import { ToastProvider } from "../components/ui";
@@ -91,5 +91,56 @@ describe("CollectionsPage", () => {
     expect(await screen.findByText("Exam rules")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+  });
+
+  it("lets a system administrator say which department a collection is for", async () => {
+    vi.spyOn(api, "me").mockResolvedValue({
+      ...FACULTY,
+      role: "SYSTEM_ADMIN",
+      department: "",
+      capabilities: { ...capabilities, upload_to_any_department: true },
+    });
+    vi.spyOn(api, "departments").mockResolvedValue([{ id: 2, name: "Mechanical", code: "ME" }]);
+    const create = vi
+      .spyOn(api, "createCollection")
+      .mockResolvedValue({ ...RULES, id: 9, name: "Workshops", department: "Mechanical" });
+    renderAt("/collections");
+
+    await userEvent.type(await screen.findByLabelText(/^Name/), "Workshops");
+    await userEvent.selectOptions(
+      screen.getByLabelText(/^Department/),
+      await screen.findByRole("option", { name: "Mechanical" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(create).toHaveBeenCalledWith({
+      name: "Workshops",
+      description: "",
+      department: "Mechanical",
+    });
+  });
+
+  it("offers only documents from the collection's own department", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    const document = (id: number, title: string, department: string): DocumentSummary => ({
+      id,
+      title,
+      department,
+      document_type: "POLICY",
+      owner: 1,
+      owner_username: "prof",
+      status: "COMPLETED",
+      current_version: null,
+      is_archived: false,
+      archived_at: null,
+      created_at: "2026-10-01T10:00:00Z",
+      updated_at: "2026-10-01T10:00:00Z",
+    });
+    vi.spyOn(api, "documents").mockResolvedValue(
+      page([document(4, "Fee schedule", "Computer Science"), document(5, "Workshop rules", "Mechanical")]),
+    );
+    renderAt("/collections");
+
+    expect(await screen.findByRole("option", { name: "Fee schedule" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Workshop rules" })).not.toBeInTheDocument();
   });
 });

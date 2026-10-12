@@ -1,11 +1,14 @@
 """Collections (spec 14, 15.2; FR-14): a collection narrows, never grants."""
 
 from django.core.files.base import ContentFile
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from accounts.models import UserProfile
+from accounts.models import Department, UserProfile
+from accounts.services import DepartmentNameInUse, rename_department
 from documents.models import AuditLog, Collection, Document, ProcessingJob
 from documents.processing.chunking import service as chunking_service
 from documents.processing.pipeline import run_pipeline
@@ -142,6 +145,127 @@ class CollectionTests(TestCase):
             [d["id"] for d in response.data["documents"]], [self.attendance.id]
         )
 
+    def test_another_curator_cannot_change_it_but_the_department_admin_can(self):
+        collection = self.make_collection()
+        colleague = make_user("colleague", UserProfile.Role.FACULTY, "Computer Science")
+        refused = self.as_user(colleague).patch(
+            f"{URL}{collection.id}/", {"name": "Mine now"}, format="json"
+        )
+        self.assertEqual(refused.status_code, status.HTTP_403_FORBIDDEN)
+
+        head = make_user(
+            "cs-head", UserProfile.Role.DEPARTMENT_ADMIN, "Computer Science"
+        )
+        allowed = self.as_user(head).patch(
+            f"{URL}{collection.id}/", {"name": "Curated"}, format="json"
+        )
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK, allowed.data)
+
+    def test_patch_changes_the_details_and_nothing_else(self):
+        collection = self.make_collection()
+        response = self.as_user(self.faculty).patch(
+            f"{URL}{collection.id}/",
+            {"name": "Renamed", "department": "Mechanical"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        collection.refresh_from_db()
+        self.assertEqual(collection.name, "Renamed")
+        self.assertEqual(collection.department, "Computer Science")
+
+    def test_patch_with_a_body_that_is_not_an_object_is_a_400(self):
+        # It called .items() on whatever arrived: a list or a string was a 500.
+        collection = self.make_collection()
+        client = self.as_user(self.faculty)
+        for body in ([], "x"):
+            with self.subTest(body=body):
+                response = client.patch(f"{URL}{collection.id}/", body, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # --- System administrators -------------------------------------------
+
+    def test_a_system_admin_who_names_no_department_gets_their_own(self):
+        # It used to store "": a collection no member could see, offering
+        # every document in the institution and accepting none of them.
+        admin = make_user("root", UserProfile.Role.SYSTEM_ADMIN, "Computer Science")
+        created = self.as_user(admin).post(URL, {"name": "Admin set"}, format="json")
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED, created.data)
+        self.assertEqual(created.data["department"], "Computer Science")
+        added = self.client.post(
+            f"{URL}{created.data['id']}/documents/",
+            {"document_ids": [self.attendance.id]},
+            format="json",
+        )
+        self.assertEqual(added.status_code, status.HTTP_200_OK, added.data)
+
+    def test_a_system_admin_with_no_department_must_choose_one(self):
+        admin = make_user("root", UserProfile.Role.SYSTEM_ADMIN, "")
+        response = self.as_user(admin).post(URL, {"name": "Nowhere"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("department", response.data)
+        self.assertFalse(Collection.objects.exists())
+
+    def test_a_system_admin_may_choose_any_registered_department(self):
+        Department.objects.get_or_create(name="Mechanical")
+        admin = make_user("root", UserProfile.Role.SYSTEM_ADMIN, "")
+        response = self.as_user(admin).post(
+            URL, {"name": "Workshops", "department": "mechanical"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["department"], "Mechanical")
+
+    # --- Department renames ----------------------------------------------
+
+    def test_renaming_the_department_takes_its_collections_along(self):
+        collection = self.make_collection(self.attendance)
+        computer_science, _ = Department.objects.get_or_create(name="Computer Science")
+        rename_department(computer_science, "Computing")
+
+        collection.refresh_from_db()
+        self.assertEqual(collection.department, "Computing")
+        self.student.profile.refresh_from_db()
+        listed = self.as_user(self.student).get(URL).data["results"]
+        self.assertEqual([c["id"] for c in listed], [collection.id])
+        self.assertEqual(listed[0]["document_count"], 1)
+
+    def test_a_rename_onto_a_name_only_a_collection_still_uses_is_refused(self):
+        Collection.objects.create(name="Old rules", department="Legacy")
+        physics, _ = Department.objects.get_or_create(name="Physics")
+        with self.assertRaises(DepartmentNameInUse):
+            rename_department(physics, "Legacy")
+
+    # --- Listing ---------------------------------------------------------
+
+    def test_listing_costs_the_same_queries_for_one_collection_or_many(self):
+        # Each row used to query its members again on top of a prefetch that
+        # loaded every member's full row and was then thrown away.
+        self.make_collection(self.attendance, name="First")
+        with CaptureQueriesContext(connection) as one:
+            self.as_user(self.student).get(URL)
+        for number in range(4):
+            self.make_collection(self.attendance, self.fees, name=f"More {number}")
+        with CaptureQueriesContext(connection) as five:
+            response = self.as_user(self.student).get(URL)
+        self.assertEqual(len(response.data["results"]), 5)
+        self.assertEqual(len(five), len(one))
+
+    def test_members_are_only_those_the_caller_can_read(self):
+        notes = Document.objects.create(
+            title="Notes", owner=self.student, department="Computer Science"
+        )
+        collection = self.make_collection(self.attendance, notes)
+        # The creator moves department: they still see the collection they
+        # made, and the document they own, but no longer the student's.
+        self.faculty.profile.department = "Mechanical"
+        self.faculty.profile.save()
+        response = self.as_user(self.faculty).get(f"{URL}{collection.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["documents"],
+            [{"id": self.attendance.id, "title": "Attendance"}],
+        )
+        self.assertEqual(response.data["document_count"], 1)
+
     # --- The tenant boundary ---------------------------------------------
 
     def test_cannot_add_another_departments_document(self):
@@ -182,7 +306,21 @@ class CollectionTests(TestCase):
         )
 
     def test_an_invisible_collection_narrows_to_nothing(self):
-        collection = self.make_collection(self.attendance)
+        # The caller can read the member (they own it) but not the
+        # collection, which is another department's. With an outsider who
+        # could read neither, this passed whether or not the collection's
+        # visibility was ever checked.
+        owned = indexed_document(
+            self.outsider,
+            "Visitor attendance",
+            b"Attendance rules for visiting students.\n",
+            "Computer Science",
+        )
+        collection = self.make_collection(owned)
+        everything = search_service.search(self.outsider, "attendance", limit=10)
+        self.assertIn(
+            owned.id, {h.chunk.document_version.document_id for h in everything.hits}
+        )
         response = search_service.search(
             self.outsider, "attendance", limit=10, collection_id=collection.id
         )

@@ -10,6 +10,7 @@ import {
   queryTerms,
   splitAtSpan,
 } from "./highlight";
+import { explainAbstention } from "./labels";
 import { Markdown, parseBlocks } from "./markdown";
 
 describe("Markdown", () => {
@@ -184,6 +185,14 @@ describe("upload checks", () => {
 
   it("derives a readable title from a filename", () => {
     expect(titleFromFilename("exam_regulations-2024.pdf")).toBe("Exam regulations 2024");
+  });
+});
+
+describe("abstention explanations", () => {
+  it("never tells a reader the passages lacked an answer the model failed to finish", () => {
+    const text = explainAbstention("the answerer could not produce a usable answer");
+    expect(text).toMatch(/could not finish/);
+    expect(text).not.toMatch(/none of them answers/);
   });
 });
 

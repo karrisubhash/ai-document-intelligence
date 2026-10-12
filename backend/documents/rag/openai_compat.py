@@ -149,6 +149,8 @@ class Completion:
     usage: object = None
     served_by: str = ""
     streamed: bool = False
+    # The model the request named: in a fallback chain, the one that answered.
+    model: str = ""
 
 
 PRESETS = {
@@ -179,12 +181,16 @@ PRESETS = {
         # The free tier also caps each model at 20 requests PER DAY (measured
         # 2026-10-11: GenerateRequestsPerDayPerProjectPerModel-FreeTier), so
         # every model in the chain adds a day's allowance of its own.
-        # gemini-3.1-flash-lite and -3.8-flash answered 503 at times that day;
-        # a 503 benches a model for 30 s rather than removing it.
+        # gemini-3.8-flash answered 503 at times that day; a 503 benches a
+        # model for 30 s rather than removing it.
+        # No -lite model belongs here while request_extras sends
+        # reasoning_effort "none": its 400 is not a model-specific failure,
+        # so it ENDS the chain - and since the cooling models sort last, it
+        # was the model tried once the others were rate-limited, so every
+        # question then fell back to quoting passages.
         fallback_models=(
             "gemini-3-flash-preview",
             "gemini-3.7-flash",
-            "gemini-3.1-flash-lite",
             "gemini-3.8-flash",
         ),
         # Gemini 3 Flash "thinks" by default, and its hidden reasoning is
@@ -355,6 +361,8 @@ class OpenAICompatibleAnswerer:
         # model id is served by more than one of these backends, at
         # different quantisations and different context limits, and two
         # answers recorded under one version string are not comparable.
+        # An answer records version_for() its completion instead, which names
+        # the fallback model when one answered.
         self.version = f"{self.provider}/{self.model}"
 
         # RAG_ANSWERER_FALLBACK_MODELS overrides the preset's chain; "none"
@@ -482,6 +490,9 @@ class OpenAICompatibleAnswerer:
             # a caller waiting for an answer, and none of them should
             # surface as a 500 when a grounded extractive answer is
             # available.
+            # A stream that broke part-way is withdrawn: what it showed was
+            # never checked, and the quoted answer replaces it.
+            streaming.reset()
             logger.warning(
                 "llm.fallback",
                 extra={
@@ -558,7 +569,9 @@ class OpenAICompatibleAnswerer:
                 extra={"provider": self.provider, "model": self.model},
             )
             return self._abstained(
-                prompt, reason="the model declined to answer this question", usage=usage
+                prompt,
+                reason="the model declined to answer this question",
+                completion=result,
             )
 
         if finish_reason == "length":
@@ -582,14 +595,14 @@ class OpenAICompatibleAnswerer:
             return self._abstained(
                 prompt,
                 reason="the model's answer was cut off at the output token limit",
-                usage=usage,
+                completion=result,
             )
 
         text = result.text.strip()
 
         if not text:
             return self._abstained(
-                prompt, reason="the model returned no text", usage=usage
+                prompt, reason="the model returned no text", completion=result
             )
 
         metadata = {
@@ -621,7 +634,7 @@ class OpenAICompatibleAnswerer:
             abstained=is_abstention(text),
             cited_markers=_markers(text),
             model_name=self.name,
-            model_version=self.version,
+            model_version=self.version_for(result),
             generative=True,
             prompt_characters=len(prompt),
             completion_characters=len(text),
@@ -629,6 +642,10 @@ class OpenAICompatibleAnswerer:
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
             metadata=metadata,
         )
+
+    def version_for(self, completion: "Completion") -> str:
+        """The version to record for an answer this completion produced."""
+        return f"{self.provider}/{completion.model or self.model}"
 
     def complete(self, request: dict) -> "Completion":
         """One chat completion, streamed through documents.rag.streaming
@@ -691,6 +708,7 @@ class OpenAICompatibleAnswerer:
                 finish_reason=getattr(choice, "finish_reason", "") or "",
                 usage=getattr(completion, "usage", None),
                 served_by=getattr(completion, "model", "") or request["model"],
+                model=request["model"],
             )
 
         # Streamed. No `stream_options`: some of these servers 400 on a
@@ -720,6 +738,7 @@ class OpenAICompatibleAnswerer:
             usage=usage,
             served_by=served_by or request["model"],
             streamed=True,
+            model=request["model"],
         )
 
     def _no_choices(self, completion):
@@ -732,13 +751,16 @@ class OpenAICompatibleAnswerer:
             f"{self.provider} returned a success with no choices ({error})"
         )
 
-    def _abstained(self, prompt: str, *, reason: str, usage=None) -> LLMResponse:
+    def _abstained(
+        self, prompt: str, *, reason: str, completion: "Completion"
+    ) -> LLMResponse:
+        usage = completion.usage
         return LLMResponse(
             text=ABSTENTION_TEXT,
             abstained=True,
             cited_markers=(),
             model_name=self.name,
-            model_version=self.version,
+            model_version=self.version_for(completion),
             generative=True,
             prompt_characters=len(prompt),
             completion_characters=len(ABSTENTION_TEXT),

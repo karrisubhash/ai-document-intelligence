@@ -92,6 +92,11 @@ class DocumentAccessPolicy(permissions.BasePermission):
             # no document content) are not audited when ALLOWED, but an
             # outsider's attempt on one must not vanish from the trail.
             action = AuditLog.Action.DOCUMENT_VIEW
+        if allowed and action == AuditLog.Action.DOCUMENT_VERSION_UPLOAD:
+            # The view records it once the version exists. Recorded here, an
+            # idempotent replay and an upload refused for an archived
+            # document each entered the trail as an upload.
+            action = None
         if action:
             metadata = {}
             # Which version was fetched is part of what happened. Only a

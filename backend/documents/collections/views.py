@@ -12,6 +12,7 @@ Search and chat take `collection_id` to narrow to one collection.
 """
 
 from django.db import IntegrityError, transaction
+from django.db.models import Prefetch
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied
@@ -41,14 +42,24 @@ class CollectionViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
+        user = self.request.user
+        # The members the caller may see (see CollectionSerializer), for a
+        # whole page in one query. Prefetching plain "documents" fetched every
+        # member's full row and then queried again per collection to apply
+        # visibility.
+        members = authorization.visible_documents(
+            user, Document.objects.only("id", "title")
+        ).order_by("title", "id")
         # Authorization scopes every action, so an invisible collection is a
-        # 404 - never a 403 that would confirm the id exists.
+        # 404 - never a 403 that would confirm the id exists. Ordered to the
+        # id: names repeat across departments, and pages of an order with
+        # ties can repeat or skip a row.
         return authorization.visible_collections(
-            self.request.user,
+            user,
             Collection.objects.select_related("created_by").prefetch_related(
-                "documents"
+                Prefetch("documents", queryset=members, to_attr="visible_members")
             ),
-        )
+        ).order_by("name", "id")
 
     def _require_manage(self, collection):
         if not authorization.can_manage_collection(self.request.user, collection):
@@ -73,6 +84,7 @@ class CollectionViewSet(viewsets.ModelViewSet):
 
         # The same boundary rule as uploads: only a system administrator
         # chooses the department; everyone else's is their own.
+        profile = authorization.get_profile(request.user)
         if authorization.is_system_admin(request.user):
             try:
                 department = resolve_department(data["department"])
@@ -80,8 +92,18 @@ class CollectionViewSet(viewsets.ModelViewSet):
                 return Response(
                     {"department": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
                 )
+            # Unlike an upload, a collection is no use without a department:
+            # no member could see it, and it could hold only documents that
+            # have no department either. An administrator who names none
+            # gets their own, as everyone else does.
+            department = department or profile.department
+            if not department:
+                return Response(
+                    {"department": ["Choose the department this collection is for."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
-            department = authorization.get_profile(request.user).department
+            department = profile.department
 
         try:
             with transaction.atomic():
@@ -102,11 +124,13 @@ class CollectionViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         collection = self.get_object()
         self._require_manage(collection)
+        # Name and description are the only writable fields, so the body goes
+        # to the serializer whole - which also answers a body that is not an
+        # object (a list, a string) with a 400. Picking keys out of it here
+        # called .items() on whatever arrived: a 500.
         serializer = CollectionSerializer(
             collection,
-            data={
-                k: v for k, v in request.data.items() if k in ("name", "description")
-            },
+            data=request.data,
             partial=True,
             context={"request": request},
         )
@@ -165,7 +189,8 @@ class CollectionViewSet(viewsets.ModelViewSet):
                 AuditLog.Action.COLLECTION_UPDATE, collection, added=sorted(found)
             )
 
-        collection.refresh_from_db()
+        # Re-read through the queryset: its prefetched members predate the change.
+        collection = self.get_queryset().get(pk=collection.pk)
         return Response(
             CollectionSerializer(collection, context={"request": request}).data
         )

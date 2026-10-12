@@ -557,7 +557,7 @@ to the agreed channel (O3) before go-live. Grafana is reached through an SSH tun
 | Reranker degraded | `increase(adi_rerank_degraded_total[15m])` | `> 0` |
 | Hosted answerer failing (if enabled) | `increase(adi_llm_fallbacks_total[15m])` | `> 0` |
 | Abstention rate | `sum(rate(adi_rag_abstentions_total[1d])) / sum(rate(adi_rag_requests_total[1d]))` | trend only: a sudden change means retrieval changed |
-| Sign-in attacks | `increase(adi_auth_failures_total[15m])`, `increase(adi_throttled_requests_total[15m])` | a spike |
+| Sign-in attacks | `increase(adi_login_failures_total[15m])`, `increase(adi_throttled_requests_total[15m])` | a spike (`adi_auth_failures_total` also counts every 401, including the web app's signed-out session check) |
 | Cross-department probing | `increase(adi_authz_denials_total[1h])` | a spike; investigate in the audit log |
 | User feedback | `sum by (rating) (increase(adi_answer_feedback_total[1d]))` | trend only |
 

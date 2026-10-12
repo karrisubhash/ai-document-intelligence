@@ -136,6 +136,34 @@ describe("request", () => {
   });
 });
 
+describe("collections", () => {
+  it("reads every page, so nothing past the first fifty goes missing", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        respond(200, {
+          count: 3,
+          next: "http://testserver/api/v1/collections/?page=2",
+          previous: null,
+          results: [{ id: 1 }, { id: 2 }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        respond(200, { count: 3, next: null, previous: "/?page=1", results: [{ id: 3 }] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const all = await api.collections();
+
+    expect(all.results.map((collection) => collection.id)).toEqual([1, 2, 3]);
+    expect(all.next).toBeNull();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/collections/",
+      "/api/v1/collections/?page=2",
+    ]);
+  });
+});
+
 describe("fetchBlob", () => {
   it("turns a network failure into a status-0 error, as request() does", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
