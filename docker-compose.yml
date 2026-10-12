@@ -55,6 +55,9 @@ services:
         # cross-encoder reranking. The heavy layer - torch - so it is
         # separate from INSTALL_LLM, which is only API clients.
         INSTALL_LOCAL: ${INSTALL_LOCAL:-false}
+        # OpenTelemetry tracing; see the jaeger service below. Without this
+        # line the Dockerfile's default (false) won whatever .env said.
+        INSTALL_OTEL: ${INSTALL_OTEL:-false}
 
     # Development only. The image runs as an unprivileged user, but here
     # the source tree is bind-mounted from the host, and commands that
@@ -114,6 +117,7 @@ services:
         # cross-encoder reranking. The heavy layer - torch - so it is
         # separate from INSTALL_LLM, which is only API clients.
         INSTALL_LOCAL: ${INSTALL_LOCAL:-false}
+        INSTALL_OTEL: ${INSTALL_OTEL:-false}
 
     # One worker for both queues in development - the separation is
     # about scaling them apart in production, not about needing two

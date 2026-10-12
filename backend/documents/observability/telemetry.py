@@ -228,6 +228,7 @@ def login_failed(method: str):
     input, and the audit log already records the targeted account.
     """
     metrics.auth_failures.inc()
+    metrics.login_failures.inc()
     log_event(logger, logging.WARNING, "security.login.failed", method=str(method))
 
 

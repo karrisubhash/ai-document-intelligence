@@ -68,6 +68,16 @@ def start_tracing(**kwargs):
     configure_tracing("adi-worker")
 
 
+@worker_process_shutdown.connect
+def flush_traces(**kwargs):
+    """A child exits through os._exit(), which skips the exporter's own
+    shutdown: whatever it had not sent yet, its last task included, is sent
+    here or never."""
+    from documents.observability.tracing import flush
+
+    flush()
+
+
 @worker_process_init.connect
 def warm_models(**kwargs):
     """Start loading the embedding model in each worker child - in a thread.

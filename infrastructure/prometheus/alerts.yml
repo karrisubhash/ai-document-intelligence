@@ -16,6 +16,21 @@ groups:
         annotations:
           summary: "{{ $labels.service }} ({{ $labels.instance }}) is not answering scrapes"
 
+      # TargetDown cannot see a service with no running container at all.
+      # Targets come from Docker's DNS, which answers only for running
+      # containers, so a stopped or crash-looping service has no target and
+      # no `up` series to read 0 - it simply vanishes. This asks instead
+      # whether any instance of each service is up.
+      - alert: ServiceDown
+        expr: |
+          label_replace(absent(up{job="adi-backend"} == 1), "service", "backend", "", "")
+          or label_replace(absent(up{job="adi-workers", service="worker"} == 1), "service", "worker", "", "")
+          or label_replace(absent(up{job="adi-workers", service="worker-index"} == 1), "service", "worker-index", "", "")
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "No {{ $labels.service }} instance is up (stopped, restarting or not discoverable)"
+
       - alert: HighApiErrorRate
         expr: |
           sum(rate(adi_http_requests_total{status=~"5.."}[5m]))
@@ -96,7 +111,10 @@ groups:
   - name: adi-security
     rules:
       - alert: AuthenticationFailureBurst
-        expr: sum(increase(adi_auth_failures_total[5m])) > 50
+        # Failed sign-ins only. adi_auth_failures_total also counts every
+        # 401, including the web app's signed-out session check on each page
+        # load, so on it this fired whenever 51 people opened the app.
+        expr: sum(increase(adi_login_failures_total[5m])) > 50
         labels: {severity: warning}
         annotations:
           summary: "Over 50 failed sign-ins in 5 minutes - possible credential stuffing"

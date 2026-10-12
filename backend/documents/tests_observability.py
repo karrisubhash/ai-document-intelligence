@@ -8,7 +8,11 @@ call sites would prove nothing about the careless one written next month.
 
 import json
 import logging
+import os
+import subprocess
+import sys
 
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -406,3 +410,50 @@ class SecurityTelemetryTests(TestCase):
         self.assertEqual(
             counter_value(metrics.malware_verdicts, verdict="INFECTED"), before + 1
         )
+
+    def test_alerted_label_values_are_exported_before_their_first_event(self):
+        """A labelled series first seen at 1 has an increase() of 0, so the
+        first malware verdict after each restart never fired MalwareDetected.
+        Read from a fresh process, where no earlier test's events exist."""
+        script = (
+            "import django; django.setup()\n"
+            "from prometheus_client import generate_latest\n"
+            "from documents.observability import metrics\n"
+            "print(generate_latest(metrics.REGISTRY).decode())\n"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "PROMETHEUS_MULTIPROC_DIR"}
+        exported = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=settings.BASE_DIR,
+            env=env,
+        ).stdout
+        for series in (
+            'adi_malware_verdicts_total{verdict="INFECTED"} 0.0',
+            'adi_malware_verdicts_total{verdict="SUSPICIOUS"} 0.0',
+            'adi_pipeline_jobs_total{outcome="FAILED"} 0.0',
+            'adi_pipeline_jobs_total{outcome="COMPLETED"} 0.0',
+            'adi_rag_requests_total{abstained="True"} 0.0',
+            'adi_suspicious_inputs_total{kind="prompt_injection"} 0.0',
+            "adi_login_failures_total 0.0",
+        ):
+            with self.subTest(series=series):
+                self.assertIn(series, exported)
+
+    def test_only_a_wrong_password_counts_as_a_failed_sign_in(self):
+        # The web app checks its session on every page load, and a signed-out
+        # check is a 401: counted as a failed sign-in, a morning of people
+        # opening the app read as credential stuffing.
+        client = APIClient()
+        before = counter_value(metrics.login_failures)
+        self.assertEqual(client.get("/api/v1/auth/me/").status_code, 401)
+        self.assertEqual(counter_value(metrics.login_failures), before)
+
+        client.post(
+            "/api/v1/auth/login/",
+            {"username": "nobody", "password": "wrong-password"},
+            format="json",
+        )
+        self.assertEqual(counter_value(metrics.login_failures), before + 1)
