@@ -11,9 +11,10 @@ When a `v2` ships, `v1` stays mounted until its clients have moved.
 `POST /api/v1/documents/{id}/versions/` accept an `Idempotency-Key` header (1-255
 printable ASCII characters). A retry with the same key within 24 hours returns the first
 result (**202**, header `Idempotent-Replayed: true`) instead of creating a duplicate. The
-same key with a different file or title is **422**; a retry while the first request is
-still running is **409**. Keys are per user. A request that fails releases its key.
-Without the header, behaviour is unchanged.
+same key with a different file (compared by content) or title is **422**; a retry while
+the first request is still running is **409**. Keys are per user. A request that fails
+releases its key; one whose server process died mid-request holds it for at most 10
+minutes. Without the header, behaviour is unchanged.
 
 ## Authentication
 

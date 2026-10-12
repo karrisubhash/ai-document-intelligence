@@ -157,13 +157,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
         idem = idempotency.Idempotency(
             request,
             "documents.create",
-            idempotency.fingerprint(
-                data["title"],
-                data["document_type"],
-                request.data.get("department", ""),
-                data["file"].name,
-                data["file"].size,
-            ),
+            data["title"],
+            data["document_type"],
+            request.data.get("department", ""),
+            data["file"].name,
+            data["file"],
         )
         replay_pk = idem.start()
         if replay_pk is not None:
@@ -244,9 +242,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             upload = serializer.validated_data["file"]
 
             idem = idempotency.Idempotency(
-                request,
-                f"documents.{document.pk}.versions",
-                idempotency.fingerprint(upload.name, upload.size),
+                request, f"documents.{document.pk}.versions", upload.name, upload
             )
             replay_pk = idem.start()
             if replay_pk is not None:
@@ -270,6 +266,16 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 idem.abandon()
                 raise
             idem.finish(version.pk)
+            # Recorded here, once a version exists - not by the access policy,
+            # which ran before anything happened and so also entered every
+            # replayed retry and every refused upload as an upload.
+            record_event(
+                user=request.user,
+                action=AuditLog.Action.DOCUMENT_VERSION_UPLOAD,
+                document=document,
+                result=AuditLog.Result.ALLOWED,
+                version_number=version.version_number,
+            )
 
             return Response(
                 DocumentVersionSerializer(version).data,

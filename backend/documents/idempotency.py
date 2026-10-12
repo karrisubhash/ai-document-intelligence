@@ -14,8 +14,10 @@ The rules, all of them deliberate:
   Redis, so two concurrent sends cannot both create. The loser gets 409 and
   may retry once the first has finished.
 - A key reused for a DIFFERENT request is a client bug. It gets 422, never
-  the other request's result.
-- A request that fails releases its key, so the retry runs for real.
+  the other request's result. An uploaded file is compared by its content.
+- A request that fails releases its key, so the retry runs for real. One
+  that dies before it can (a killed worker) holds the key only for
+  PENDING_TTL_SECONDS.
 - A replay re-reads the resource through the caller's authorization, so it
   reports the current state and never outlives the caller's access.
 - No header, no behaviour change.
@@ -27,12 +29,20 @@ deduplication window, never data.
 import hashlib
 
 from django.core.cache import cache
+from django.core.files import File
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
 
 HEADER = "Idempotency-Key"
 REPLAYED_HEADER = "Idempotent-Replayed"
 TTL_SECONDS = 24 * 60 * 60
+# How long a claim lasts with no outcome recorded. finish() and abandon()
+# replace or drop it at once; this bounds only a request killed before
+# either ran (a worker timeout, the OOM killer, a deploy's grace period).
+# Claimed for the full day, such a key answered every retry with 409 until
+# the next day. Longer than any request may run: gunicorn kills a worker
+# after GUNICORN_TIMEOUT, 120 s by default.
+PENDING_TTL_SECONDS = 10 * 60
 MAX_KEY_LENGTH = 255
 _PENDING = "pending"
 
@@ -50,15 +60,31 @@ class IdempotencyKeyReused(APIException):
 
 
 def fingerprint(*parts):
-    """A stable digest of the request fields that make two sends 'the same'."""
-    joined = "\x1f".join(str(part) for part in parts)
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+    """A stable digest of the request fields that make two sends 'the same'.
+
+    An uploaded file counts by its content, read in chunks and rewound for
+    whoever reads it next. By name and size alone, an edited file of the same
+    length was "the same request": the retry got the first upload's result
+    and its own content was silently dropped. Each part is hashed on its own,
+    so no choice of values can make two different lists of parts collide.
+    """
+    combined = hashlib.sha256()
+    for part in parts:
+        digest = hashlib.sha256()
+        if isinstance(part, File):
+            for chunk in part.chunks():
+                digest.update(chunk)
+            part.seek(0)
+        else:
+            digest.update(str(part).encode("utf-8"))
+        combined.update(digest.digest())
+    return combined.hexdigest()
 
 
 class Idempotency:
     """One request's claim on its key. Every method is a no-op without one."""
 
-    def __init__(self, request, scope, request_fingerprint):
+    def __init__(self, request, scope, *fingerprint_parts):
         raw = request.headers.get(HEADER)
         self.key = None
         if raw is None:
@@ -75,14 +101,16 @@ class Idempotency:
             )
         digest = hashlib.sha256(raw.encode("ascii")).hexdigest()
         self.key = f"idem:{scope}:{request.user.pk}:{digest}"
-        self.fingerprint = request_fingerprint
+        # Only once a key is known to be present: fingerprinting reads an
+        # upload end to end, which a request without one should not pay for.
+        self.fingerprint = fingerprint(*fingerprint_parts)
 
     def start(self):
         """Claim the key. Returns the stored primary key to replay, or None."""
         if self.key is None:
             return None
         if cache.add(
-            self.key, {"state": _PENDING, "fp": self.fingerprint}, TTL_SECONDS
+            self.key, {"state": _PENDING, "fp": self.fingerprint}, PENDING_TTL_SECONDS
         ):
             return None
         stored = cache.get(self.key)
