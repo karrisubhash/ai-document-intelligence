@@ -69,9 +69,9 @@ Both candidates use the same code path. Switching is one environment variable pl
 | Citation accuracy | 0.875 | 0.860 |
 | Missed abstentions (answered when it should not) | 2 | 2 |
 | Latency, v2 benchmark p50 / p95 (in process) | **644 ms / 3.3 s** | 6.2 s / 16.3 s |
-| Latency, chat through the edge, 3,000 documents | not measured | 13.8 s p50 (13.4 s of it reranking) |
+| Latency, chat through the edge, 3,000 documents | **1.57 s p50**, 3.26 s p95 (1.32 s reranking) | 13.8 s p50 (13.4 s of it reranking) |
 | Size on disk | **about 90 MB** | about 12 times larger |
-| Memory | smaller; not measured | backend 2.1 GiB with three workers, each holding both models |
+| Memory | **backend 1.2 GiB** idle with three workers | backend 2.1 GiB with three workers, each holding both models |
 | CPU | several times less per question | about 0.65 s per passage pair on the test laptop |
 | Operational complexity | same | same |
 

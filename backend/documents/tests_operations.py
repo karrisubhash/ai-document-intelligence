@@ -189,6 +189,41 @@ class AuditTrailTests(ScopedTestCase):
 
         self.assertEqual(len(self.rows(chemistry_admin, action="DOCUMENT_DELETE")), 1)
 
+    def test_a_rename_cannot_merge_into_a_spelling_only_the_audit_trail_keeps(self):
+        """A legacy 'chemistry' beside 'Chemistry' survives only on a deleted
+        document's audit rows. The guard checked every other record, so the
+        rename went through and handed that trail - delete-row title
+        included - to the renamed department's administrator."""
+        from accounts.models import Department
+        from accounts.services import DepartmentNameInUse, rename_department
+
+        chemistry = Department.objects.create(name="Chemistry", code="CHE")
+        legacy = Document.objects.create(
+            title="Legacy Tenant Report", owner=self.root, department="chemistry"
+        )
+        self.delete_as(self.root, legacy)
+
+        with self.assertRaises(DepartmentNameInUse):
+            rename_department(chemistry, "chemistry")
+
+    def test_a_writer_that_predates_the_snapshot_can_still_insert(self):
+        """While an upgrade is rolling out, the previous release keeps
+        serving after `migrate` commits, and its INSERTs do not name the
+        snapshot columns. Without a database default each of them violated
+        NOT NULL: a 500 on every audited request until the new backend was up."""
+        from django.db import connection
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO documents_auditlog "
+                "(user_id, action, document_id, result, metadata, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, now())",
+                [self.root.id, "DOCUMENT_VIEW", self.physics_doc.id, "ALLOWED", "{}"],
+            )
+        row = AuditLog.objects.latest("id")
+        self.assertEqual(row.document_department, "")
+        self.assertIsNone(row.document_ref)
+
 
 class AuditIdFilterParsingTests(ScopedTestCase):
     """`?user=` and `?document=` are ids. A value int() cannot parse is the

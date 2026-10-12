@@ -370,6 +370,26 @@ class ScanStageTests(TestCase):
         )
         self.assertEqual(client.get(url).status_code, status.HTTP_200_OK)
 
+    def test_a_redelivered_quarantined_job_does_not_run_again(self):
+        """Under acks_late a worker that dies after recording the verdict
+        has its message delivered again. Re-running the SAME job cleared its
+        MALWARE_DETECTED code, which the quarantine is read from - and with
+        the scanner since switched off, the rerun completed and the file
+        left quarantine for good."""
+        from documents.services import is_quarantined
+
+        document, job = self.quarantine()
+
+        with override_settings(DOCUMENT_SCANNER=""):
+            run_pipeline(job.id)
+
+        job.refresh_from_db()
+        document.refresh_from_db()
+        self.assertEqual(job.status, ProcessingJob.Status.FAILED)
+        self.assertEqual(job.error_code, ErrorCode.MALWARE_DETECTED)
+        self.assertEqual(document.status, Document.Status.QUARANTINED)
+        self.assertTrue(is_quarantined(document.current_version))
+
     def test_an_infected_document_is_never_parsed(self):
         """The whole point of scanning before extraction."""
         document, job = self.upload(EICAR, name="eicar.txt")

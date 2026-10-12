@@ -95,6 +95,53 @@ on CPU, which is about 0.65 s per pair. Options, in order of effect:
 Eight of the ten chat questions abstained. They were generic questions over a corpus
 of unrelated business documents, so that is expected. It is not a quality measurement.
 
+### With the recommended pilot configuration (MiniLM), measured 2026-10-06
+
+The same stack, edge, worker settings and measurement script were used, on the same 3,000
+QS-OCR documents (6,543 chunks: the earlier corpus less its 3 test uploads). Two things
+differed:
+
+- the reranker was `cross-encoder/ms-marco-MiniLM-L6-v2` at its calibrated floor;
+- the trained classifier was off, as in the pilot configuration.
+
+| Request | n | p50 | p95 | max |
+|---|---|---|---|---|
+| Search (hybrid, 10 results) | 30 | 153 ms | 236 ms | 1,039 ms |
+| Document list | 20 | 45 ms | 50 ms | 51 ms |
+| Dashboard | 20 | 43 ms | 51 ms | 55 ms |
+| **Chat** | 10 | **1.57 s** | **3.26 s** | 3.26 s |
+
+**Chat is about nine times faster than with bge-reranker-base** (13.8 s → 1.57 s at the
+median). The rerank stage fell from 13.4 s to 1.32 s. Other per-stage medians: retrieval
+152 ms, answer 2 ms, grounding 1 ms. This confirms through the edge what the in-process
+benchmark predicted. Four of the ten questions abstained (eight with bge-reranker-base).
+Those are generic questions over unrelated documents, so this is not a quality comparison.
+
+Processing the 3,000 documents took 1,494 s, about 2.0 documents/s on the same 2 worker
+processes. This is not comparable with the 1.73/s above, because the classifier stage
+was off.
+
+**Memory** (`docker stats`, same run):
+
+| Service | Memory |
+|---|---|
+| Backend | 1.2 GiB idle, 1.5–1.7 GiB under load. This is 2.1 GiB with bge-reranker-base |
+| Ingest worker | about 1.1 GiB while processing |
+| `worker-index`, **idle** | **2.3 GiB** |
+
+The index worker's size comes from its default of `CELERY_INDEX_CONCURRENCY=6`, which
+suits a hosted embedder. With the local model, each of its 6 processes loads the model
+(about 490 MB each) and then waits for a re-index that rarely comes. **Set
+`CELERY_INDEX_CONCURRENCY=1` (or 2) on a pilot server with local models.** That should
+leave roughly 0.5–1 GiB for the index worker (estimated from the per-process size, not
+measured).
+
+**Concurrent load was attempted and is not reported.** In that run, single-client
+latencies were five times the sequential figures above, measured an hour earlier on the
+same stack (search 827 ms against 153 ms). That points to other work on the laptop, not
+to the system under test, so the concurrent figures from the same run cannot be trusted.
+Concurrent load remains **unmeasured**.
+
 ## Query plans
 
 `EXPLAIN ANALYZE` on the two retrieval queries exactly as search builds them, for an
@@ -125,9 +172,12 @@ At this corpus size neither half dominates: the two callers' search times are th
 
 Measured during ingestion (`docker stats`):
 
-- **Backend:** 2.1 GiB, three gunicorn workers each holding both models.
+- **Backend:** 2.1 GiB, three gunicorn workers each holding both models, with
+  bge-reranker-base. With MiniLM it is 1.2 GiB idle (see above).
 - **Ingest worker:** about 1 GiB at about 5.3 cores. Two children, each with
   torch's default thread count.
+- **Index worker:** 2.3 GiB while idle, with its default 6 processes and local
+  embeddings. Lower `CELERY_INDEX_CONCURRENCY` (see above).
 
 `EMBEDDING_LOCAL_THREADS` caps torch's threads per process. Setting it to cores ÷
 concurrency avoids oversubscription; the effect has not been measured.

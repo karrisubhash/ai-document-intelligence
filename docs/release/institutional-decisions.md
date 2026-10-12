@@ -47,4 +47,4 @@ pilot.
 | O3 | Where alerts go and who responds | Prometheus collects metrics. No alert rules ship and nothing delivers alerts | an alert channel (email, chat) and an on-call rota | **before pilot** |
 | O4 | Server and hostname | No server exists yet | sizing in [staging runbook step 1](staging-runbook.md#1-server); a staging and a production hostname | **before staging** |
 | O5 | Mail relay | Nothing in the application sends mail yet. Passwords are reset by an administrator in the app; there is no self-service reset. Without a relay, Django's `check --deploy` flags the console backend | the institution's SMTP relay, so mail added later does not silently vanish | before production |
-| O6 | Hardware for chat latency | CPU only; chat measured at 13.8 s p50 with the slower reranker | CPU with the MiniLM reranker (recommended), or a GPU host | before pilot |
+| O6 | Hardware for chat latency | CPU only; chat measured at 1.57 s p50 with the recommended MiniLM reranker, 13.8 s with bge-reranker-base | CPU with the MiniLM reranker (recommended), or a GPU host | before pilot |

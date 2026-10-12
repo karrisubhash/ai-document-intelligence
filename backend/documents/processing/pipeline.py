@@ -91,9 +91,13 @@ def run_pipeline(processing_job_id: int, *, will_retry=None) -> None:
     # redeliver under acks_late, so a job that COMPLETED can be delivered
     # again and would re-run the whole pipeline; and a job that was
     # declared STALLED has already been replaced by a fresh one, so running
-    # it would put two passes in a race to be the live one. FAILED jobs are
-    # NOT skipped in general: a job recovered by an operator (or one failed
-    # before this rule existed) still runs if its message is delivered.
+    # it would put two passes in a race to be the live one. A QUARANTINED
+    # job is final too: re-running it would clear the MALWARE_DETECTED code
+    # the quarantine is read from (see services.is_quarantined), so the file
+    # was downloadable for the whole rerun - and gone from quarantine for
+    # good if the rerun then ended any other way. Other FAILED jobs are NOT
+    # skipped: a job recovered by an operator (or one failed before this
+    # rule existed) still runs if its message is delivered.
     if _is_terminal(job):
         logger.info(
             "pipeline.skipped_terminal_job",
@@ -473,7 +477,7 @@ def _mark_failed(job: ProcessingJob, document: Document, exc: Exception) -> None
 def _is_terminal(job: ProcessingJob) -> bool:
     return job.status == ProcessingJob.Status.COMPLETED or (
         job.status == ProcessingJob.Status.FAILED
-        and job.error_code == ErrorCode.STALLED
+        and job.error_code in (ErrorCode.STALLED, ErrorCode.MALWARE_DETECTED)
     )
 
 

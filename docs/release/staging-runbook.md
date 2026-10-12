@@ -45,7 +45,7 @@ result, and every deviation from this page.
 |---|---|---|
 | Architecture | x86_64 | the images install the CPU build of torch for x86_64; arm64 has never been built |
 | CPU | 4 vCPU minimum, 8 recommended | **measured**: the 3,000-document test ran in a Docker VM with 8 CPUs; the ingest worker used about 5.3 cores |
-| Memory | 8 GiB minimum | **measured**: backend 2.1 GiB, ingest worker about 1 GiB, inside a 7.7 GiB VM; Postgres, Redis, nginx, Prometheus and Grafana share the rest |
+| Memory | 8 GiB minimum | **measured** with the pilot configuration: backend 1.2–1.7 GiB, ingest worker about 1.1 GiB, index worker 2.3 GiB idle at its default concurrency of 6 (set `CELERY_INDEX_CONCURRENCY=1`, step 5), Postgres about 150 MB, inside a 7.7 GiB VM |
 | Disk | 40 GB plus the expected size of the original uploads, multiplied by the backup retention | **estimated**: about 2.5 GB of images, about 1.5 GB of model weights, 86 MB of database for 3,000 small text documents |
 | OS | any current Linux with Docker Engine support | not tested on a server; development used Docker Desktop on Windows |
 
@@ -153,6 +153,10 @@ DOCUMENT_EMBEDDING_PROVIDER=documents.processing.embedding.local.LocalEmbeddingP
 RAG_RERANKER=documents.rag.local_rerank.LocalCrossEncoderReranker
 RAG_RERANKER_LOCAL_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2
 # RAG_ANSWERER stays unset: the extractive answerer, no external calls.
+
+# The re-index worker defaults to 6 processes (sized for a hosted embedder).
+# With local models each one loads the model: 2.3 GiB measured while idle.
+CELERY_INDEX_CONCURRENCY=1
 
 # Storage: the local media volume (single host). Build without the S3 layer.
 INSTALL_S3=false

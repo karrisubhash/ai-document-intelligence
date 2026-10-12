@@ -58,9 +58,14 @@ class AuditLog(models.Model):
     # and every earlier view and download - so "who downloaded document D
     # before it was deleted" had no answer. Kept in step with department
     # renames by accounts.services.rename_department.
+    #
+    # db_default, not just default: during an upgrade the previous release
+    # keeps serving after `migrate` commits, and its INSERTs do not name
+    # this column. With a Python-only default each of them violated NOT
+    # NULL - a 500 on every audited request until the new backend was up.
     document_ref = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     document_department = models.CharField(
-        max_length=255, blank=True, default="", editable=False
+        max_length=255, blank=True, default="", db_default="", editable=False
     )
     result = models.CharField(max_length=10, choices=Result.choices)
     metadata = models.JSONField(blank=True, default=dict)

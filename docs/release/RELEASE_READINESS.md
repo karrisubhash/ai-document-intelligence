@@ -38,7 +38,7 @@ The sections follow that order.
 | Area | Status | In one line |
 |---|---|---|
 | Code | **COMPLETE** for a single-host pilot | Nothing is missing for the pilot scope. Multi-host operation, SSO and a hosted answerer are outside it |
-| Local verification | **COMPLETE** | 971 backend tests; 8/8 browser tests through nginx over TLS on the release candidate, with the pilot configuration; both AI gates; backup, restore and rollback rehearsed |
+| Local verification | **COMPLETE** | 974 backend tests; 8/8 browser tests through nginx over TLS on the release candidate, with the pilot configuration; both AI gates; backup, restore and rollback rehearsed |
 | CI | **NOT YET VERIFIED** | There is no GitHub repository, so the workflow has never run. Its commands were run locally |
 | Staging | **BLOCKED** | It needs a server, a hostname and DNS, and the institution's before-staging decisions. No code change is required |
 | Production | **BLOCKED** | It needs staging to pass, plus the before-pilot decisions |
@@ -84,6 +84,16 @@ The sections follow that order.
 | 9 | `frontend/.env.example` pointed the API at another origin | following it made sign-in impossible | rewritten to use the dev-server proxy |
 | 10 | A test class wrote uploads into the real `backend/media` | test files leaked into the working tree | uses the temporary media directory like every other class |
 | 11 | Documentation overclaimed | it said macros and PDF scripts were quarantined (they are only flagged), promised email (nothing sends mail), and said `--scale` spans machines (it does not) | corrected |
+| 12 | A redelivered quarantined job could run again (found by an independent review of fix 3) | under `acks_late`, a worker dying after recording the verdict gets its message back; the rerun cleared the code the quarantine is read from | a quarantined job is terminal. Test |
+| 13 | Migration 0017's new column had no database default | during an upgrade the previous release, still serving, could not write any audit row: a 500 on every audited request | migration 0018 adds a database default. Test |
+| 14 | The department-rename guard ignored the department names on deleted documents' audit rows | renaming onto a spelling that survived only there handed that trail, titles included, to the renamed department | the guard checks them. Test |
+
+The same review raised two more findings, which another session working in this repository took on in the shared checkout; they were not yet committed at the time of writing:
+
+- the audit list's `?document=` and `?user=` filters return 500 for digits such as `²`;
+- when a version that once completed is later quarantined, its earlier extracted text stays searchable. Download is the only path that checks quarantine. Pre-existing.
+
+Fixes 12–14 are on branch `release-review-fixes`, to be merged into `platform-completion` once that session's changes are committed.
 
 ## LOCALLY VERIFIED
 
@@ -92,7 +102,7 @@ and 7.7 GiB VM.
 
 | What | Result | When |
 |---|---|---|
-| Backend suite in the image built from `constraints.txt`, source mounted read-only | **971 tests, OK** | 2026-10-06 |
+| Backend suite in the image built from `constraints.txt`, source mounted read-only | **971 tests, OK**; **974** with the review fixes below | 2026-10-06; 2026-10-10 |
 | New regression tests against the code before the fixes | all 8 quarantine and audit tests **fail**, proving they test the defect | 2026-10-06 |
 | Lint and format (ruff 0.16.8) | clean | 2026-10-06 |
 | Release-candidate production stack (fresh volumes, nginx with a self-signed certificate, pilot AI configuration, `HF_HUB_OFFLINE=1`) | health, readiness, HTTP→HTTPS 301, anonymous API 401, edge `/metrics` 404, CSP, `DENY` and `nosniff` headers | 2026-10-06 |
@@ -297,7 +307,8 @@ Details: [ai-release.md](ai-release.md).
   Classification predicts business-document classes, not institutional ones.
 - **Reranker decision for the pilot: MiniLM-L6 at its calibrated floor of 0.30.** On v2 it
   ranks better than bge-reranker-base (R@1 0.980 vs 0.857) and is about ten times faster
-  (benchmark p50 644 ms vs 6.2 s). bge-reranker-base made chat take 13.8 s on the test
+  (benchmark p50 644 ms vs 6.2 s). Through the edge on 3,000 documents, chat took 1.57 s
+  at the median with MiniLM against 13.8 s with bge-reranker-base on the test
   laptop. The cost is 3 fewer answered questions out of 57, on synthetic data. Revisit on
   the institutional evaluation set, when a GPU is available, or if documents are not in
   English.
@@ -316,9 +327,9 @@ All figures are from one laptop with one sequential client.
 
 | | Figure |
 |---|---|
-| **MEASURED** | Ingest acceptance 15.0 documents/s. Processing 1.73 documents/s on 2 worker processes (text documents; per-job p50 659 ms, p95 2.5 s). Search p50 158–160 ms, p95 about 380 ms at 3,003 documents. Document list p50 49–72 ms; dashboard 42–68 ms. **Chat p50 13.8 s with bge-reranker-base** (13.4 s of it reranking). In-process benchmark p50 644 ms with MiniLM vs 6.2 s with bge-reranker-base. Exact vector query 61 ms over 6,547 chunks. Backend 2.1 GiB, ingest worker about 1 GiB at about 5.3 cores. Restore of a 153 KB dump: 10.4 s including container start |
+| **MEASURED** | Ingest acceptance 15.0 documents/s. Processing 1.73 documents/s on 2 worker processes (text documents; per-job p50 659 ms, p95 2.5 s). Search p50 158–160 ms, p95 about 380 ms at 3,003 documents. Document list p50 49–72 ms; dashboard 42–68 ms. **Chat p50 13.8 s with bge-reranker-base** (13.4 s of it reranking). In-process benchmark p50 644 ms with MiniLM vs 6.2 s with bge-reranker-base. Exact vector query 61 ms over 6,547 chunks. Backend 2.1 GiB, ingest worker about 1 GiB at about 5.3 cores. **With the recommended MiniLM reranker: chat p50 1.57 s, p95 3.26 s** (rerank 1.32 s), search p50 153 ms; backend 1.2 GiB idle; the idle index worker 2.3 GiB at its default 6 processes (set `CELERY_INDEX_CONCURRENCY=1`). Restore of a 153 KB dump: 10.4 s including container start |
 | **ESTIMATED** | Vector search about 0.25 s at 12,000 documents and about 1 s at 100,000 chunks (linear extrapolation from one point). About 0.15 s per document of model reload cost. Disk sizing in [step 1](staging-runbook.md#1-server) |
-| **UNKNOWN** | Chat latency with MiniLM through the edge. Any concurrent load. Scanned (OCR-heavy) corpora at scale. Anything beyond 3,003 documents. Server-class or GPU hardware. Hosted-provider latency. Restore time for a production-sized database |
+| **UNKNOWN** | Any concurrent load (one attempt was contaminated by other work on the laptop and is not reported). Scanned (OCR-heavy) corpora at scale. Anything beyond 3,003 documents. Server-class or GPU hardware. Hosted-provider latency. Restore time for a production-sized database |
 
 No optimisation was made for bottlenecks that have not been observed. The first
 measurement on staging should be chat latency with MiniLM, and a small concurrent load.
@@ -399,7 +410,7 @@ differ.
 2. Record the before-staging and before-pilot [institutional decisions](institutional-decisions.md).
 3. Provision the staging server. Set up DNS (A record) and the firewall (22 restricted;
    80 and 443 open).
-4. Write `.env` with unique secrets (`chmod 600`). Leave `RAG_ANSWERER` unset and
+4. Write `.env` with unique secrets (`chmod 600`). Set `CELERY_INDEX_CONCURRENCY=1`. Leave `RAG_ANSWERER` unset and
    `INSTALL_S3=false`.
 5. Run `check_deployment_config.py`, then build.
 6. TLS: run test plan T1–T11. Staging CA first, then real issuance, then a renewal
