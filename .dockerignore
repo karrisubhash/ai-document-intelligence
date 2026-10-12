@@ -42,6 +42,9 @@ frontend/e2e/.results/
 # glob would also drop the tracked *.template.json files.
 evaluation/benchmark.json
 evaluation/benchmark-v2.json
+# The gold manifest `ingest_corpus` writes: local document ids mapped to
+# RVL-CDIP labels. Git-ignored, but `COPY evaluation` still carried it in.
+evaluation/corpus_manifest.json
 
 # Model data: datasets and artifacts are mounted, never baked in
 ai/classification/data/
