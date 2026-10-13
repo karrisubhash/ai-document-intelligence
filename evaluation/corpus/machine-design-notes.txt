@@ -1,0 +1,73 @@
+THEORY OF MACHINES - UNIT 4 LECTURE NOTES
+Brakes, Clutches and Dynamometers
+Department of Mechanical Engineering - course notes, not a regulation
+
+4.1 Introduction
+A brake is a device by which artificial frictional resistance is applied to a
+moving machine member in order to retard or stop the motion of a machine. The
+energy absorbed by the brake is dissipated as heat. The capacity of a brake
+depends on the unit pressure between the braking surfaces, the coefficient of
+friction and the time required to bring the wheel to rest.
+
+4.2 Time required to stop a rotating drum
+For a drum rotating at a known speed, the minimum time required to bring it
+to rest is found by equating the work done by the braking torque to the
+kinetic energy of the rotating parts. A typical examination problem gives the
+mass, the radius of gyration and the speed, and asks for the minimum braking
+torque required.
+
+4.3 Simple block brake
+In a simple block brake, a block is pressed against the rim of a revolving
+drum by a lever. When the angle of contact is less than 60 degrees, the
+normal force may be assumed uniform over the block. The required force at the
+end of the lever depends on the direction of rotation of the drum, and the
+brake is self-locking when the moment of the frictional force exceeds that of
+the applied force.
+
+4.4 Band brake
+A band brake consists of a flexible steel band lined with friction material.
+The ratio of the tensions on the tight and slack sides is given by the
+exponential of the product of the coefficient of friction and the angle of
+lap. Students should memorise this relation; it appears in some form in
+nearly every end-semester paper on this unit.
+
+4.5 Internal expanding shoe brake
+Used in motor vehicles. The shoes are pressed outward against the inner
+surface of the drum. The braking torque is the sum of the torques on the
+leading and trailing shoes, and the leading shoe contributes the greater
+share.
+
+4.6 Dynamometers
+A dynamometer measures the power output of an engine. Absorption
+dynamometers, such as the prony brake and the rope brake, absorb the power
+and dissipate it as heat. Transmission dynamometers, such as the belt
+transmission dynamometer and the torsion dynamometer, transmit the power and
+measure it on the way.
+
+4.7 Fine adjustment and return springs
+The return spring withdraws the brake shoe when the applied force is
+released. A fine adjustment screw compensates for wear of the lining, so that
+the clearance and the travel of the lever remain within the limits given in
+the design data book kept in the department library.
+
+4.8 Clutches
+A single plate clutch transmits torque by friction between the flywheel, the
+friction plate and the pressure plate. Under uniform wear, the intensity of
+pressure is inversely proportional to the radius, and the torque transmitted
+is less than under uniform pressure. Cone clutches require a smaller axial
+force for the same torque but are sensitive to wear.
+
+4.9 Worked example
+A vehicle of mass 1200 kg moving at 72 km per hour is brought to rest in a
+distance of 50 metres. Find the average braking force and the time required.
+The kinetic energy is 240 kilojoules, the average braking force is 4800
+newtons, and the time required is 5 seconds.
+
+4.10 Tutorial questions
+1. Derive the ratio of tensions for a band brake.
+2. State the minimum condition for a block brake to be self-locking.
+3. Compare absorption and transmission dynamometers.
+4. Explain why the leading shoe of an internal expanding brake carries the
+greater share of the torque.
+Submit answers to the tutorial questions before the end of the week; late
+submissions are not marked.
