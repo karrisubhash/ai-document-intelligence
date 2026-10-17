@@ -63,6 +63,10 @@ class CaseScore:
     # all. Separates "never found" from "found and ranked badly", which need
     # different fixes.
     pool_recall: float = 0.0
+    # 1-based position of the first relevant passage in retrieval's own
+    # (fused) order, before any reranking - how deep a reranker has to look
+    # to have a chance of finding it. None when retrieval never found it.
+    pool_rank: int | None = None
     outcome: str = ""
     distinct_documents: int = 0
     most_from_one_document: int = 0
@@ -92,7 +96,7 @@ def score_case(
     ranked: list,
     documents: dict,
     evidence: list,
-    pool: set,
+    pool: list,
     *,
     k: int,
     duration_ms: int = 0,
@@ -103,8 +107,11 @@ def score_case(
     `ranked` is chunk ids in returned order; `documents` maps each chunk id
     to its document id; `evidence` is one set of chunk ids per evidence item
     (every current chunk that carries it); `pool` is the chunk ids retrieval
-    produced before any ordering was applied.
+    produced, in retrieval's own order, before the endpoint reordered or
+    selected anything.
     """
+    pool_order = list(pool)
+    pool = set(pool_order)
     relevant_chunks = set().union(*evidence) if evidence else set()
     relevant_documents = {documents[chunk] for chunk in relevant_chunks}
 
@@ -151,6 +158,14 @@ def score_case(
         ranked_documents, relevant_documents
     )
     score.pool_recall = sum(1 for chunks in evidence if chunks & pool) / len(evidence)
+    score.pool_rank = next(
+        (
+            position
+            for position, chunk in enumerate(pool_order, start=1)
+            if chunk in relevant_chunks
+        ),
+        None,
+    )
 
     if ranked and ranked[0] in relevant_chunks:
         score.outcome = TOP1
@@ -223,6 +238,12 @@ def aggregate(scores: list, k: int) -> dict:
         "mean_returned_no_relevant": _mean(s.returned for s in unanswerable),
         f"mean_distinct_documents_at_{k}": _mean(
             s.distinct_documents for s in answerable
+        ),
+        "pool_rank_p95": _percentile(
+            [s.pool_rank for s in answerable if s.pool_rank is not None], 0.95
+        ),
+        "pool_rank_max": max(
+            (s.pool_rank for s in answerable if s.pool_rank is not None), default=0
         ),
         "latency_p50_ms": _percentile([s.duration_ms for s in scores], 0.5),
         "latency_p95_ms": _percentile([s.duration_ms for s in scores], 0.95),

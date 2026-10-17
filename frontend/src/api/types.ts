@@ -256,7 +256,12 @@ export interface SearchHit {
   character_start: number;
   character_end: number;
   text: string;
+  /** Retrieval's fused score. Results are ordered by `relevance` when set. */
   score: number;
+  /** The cross-encoder's score for this passage; null when nothing reranked. */
+  relevance: number | null;
+  /** Only ever true when the request asked for passages below the floor. */
+  below_floor: boolean;
   matched_by: string[];
   lexical_rank: number | null;
   vector_rank: number | null;
@@ -265,6 +270,8 @@ export interface SearchHit {
 export interface SearchResponse {
   query: string;
   count: number;
+  limit: number;
+  max_limit: number;
   /** False means the vector half scored vocabulary overlap, not meaning. */
   semantic: boolean;
   embedding_model: string;
@@ -272,6 +279,15 @@ export interface SearchResponse {
     lexical_candidates: number;
     vector_candidates: number;
     authorized_documents: number;
+  };
+  /** An empty `reranker` means results are in retrieval (fused) order. */
+  ranking: {
+    reranker: string;
+    degraded: boolean;
+    relevance_floor: number | null;
+    reranked: number;
+    /** Candidates scored below the floor and left out unless asked for. */
+    below_floor: number;
   };
   notes: string[];
   results: SearchHit[];

@@ -54,6 +54,11 @@ class SearchHit:
     lexical_score: float = 0.0
     vector_score: float = 0.0
     matched_by: tuple = ()
+    # Set by `ranking.rank` when the endpoint reranks: the reranker's score
+    # for this passage against the query, and whether it fell below the
+    # relevance floor (only ever returned when the caller asked for those).
+    relevance: float | None = None
+    below_floor: bool = False
 
     @property
     def citation(self) -> dict:
@@ -80,6 +85,13 @@ class SearchResponse:
     semantic: bool = False
     embedding_model: str = ""
     notes: list = field(default_factory=list)
+    # How the endpoint ordered and selected the hits (`ranking.rank`).
+    # Empty/None when nothing was reranked.
+    reranker: str = ""
+    reranker_degraded: bool = False
+    relevance_floor: float | None = None
+    reranked: int = 0
+    below_floor: int = 0
 
 
 def authorized_chunks(user):

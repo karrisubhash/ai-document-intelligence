@@ -54,6 +54,15 @@ class Command(BaseCommand):
             help="The user the corpus was seeded under (seed_evaluation --user).",
         )
         parser.add_argument(
+            "--corpus-owner",
+            help=(
+                "The user seed_evaluation ingested the corpus under, when "
+                "scoring as someone else - for instance a user who can also "
+                "read a noise corpus (ingest_corpus) on top of it. Defaults "
+                "to --as-user."
+            ),
+        )
+        parser.add_argument(
             "--split",
             choices=("dev", "test", "all"),
             default="all",
@@ -86,15 +95,19 @@ class Command(BaseCommand):
             raise CommandError(f"{template} is missing")
         data = json.loads(template.read_text(encoding="utf-8"))
 
-        user = get_user_model().objects.filter(username=options["as_user"]).first()
-        if user is None:
+        users = get_user_model().objects
+        user = users.filter(username=options["as_user"]).first()
+        owner = users.filter(
+            username=options.get("corpus_owner") or options["as_user"]
+        ).first()
+        if user is None or owner is None:
             raise CommandError(
-                f"No user {options['as_user']!r}. Seed the corpus first: "
-                f"manage.py seed_evaluation --template {template} "
-                f"--user {options['as_user']}"
+                f"No user {options.get('corpus_owner') or options['as_user']!r}. "
+                f"Seed the corpus first: manage.py seed_evaluation "
+                f"--template {template} --user <name>"
             )
 
-        documents = self._documents(user, data)
+        documents = self._documents(owner, data)
         titles = {pk: slug for slug, pk in documents.items()}
         k = options["k"]
 
@@ -133,7 +146,7 @@ class Command(BaseCommand):
             owners = {hit["chunk_id"]: hit["document_id"] for hit in results}
 
             pool_hits = service.search(user, case["query"], limit=POOL_LIMIT).hits
-            pool = {hit.chunk.id for hit in pool_hits}
+            pool = [hit.chunk.id for hit in pool_hits]
             for hit in pool_hits:
                 owners.setdefault(hit.chunk.id, hit.chunk.document_version.document_id)
             for chunks, document_id in evidence:
@@ -167,18 +180,18 @@ class Command(BaseCommand):
 
     # --- resolution --------------------------------------------------------
 
-    def _documents(self, user, data) -> dict:
+    def _documents(self, owner, data) -> dict:
         slugs = [str(slug).lstrip("@") for slug in data.get("corpus", [])]
         found = dict(
             Document.objects.filter(
-                owner=user, title__in=[f"{TITLE_PREFIX}{slug}" for slug in slugs]
+                owner=owner, title__in=[f"{TITLE_PREFIX}{slug}" for slug in slugs]
             ).values_list("title", "id")
         )
         resolved = {slug: found.get(f"{TITLE_PREFIX}{slug}") for slug in slugs}
         missing = sorted(slug for slug, pk in resolved.items() if pk is None)
         if missing:
             raise CommandError(
-                f"{user.username} owns no [eval] document for: "
+                f"{owner.username} owns no [eval] document for: "
                 f"{', '.join(missing)}. Run seed_evaluation with this template."
             )
         return resolved
@@ -226,6 +239,8 @@ class Command(BaseCommand):
             embedding = f"{provider.name} {provider.version}"
         except Exception as exc:  # reported, not fatal: lexical-only is a config
             embedding = f"unavailable ({type(exc).__name__})"
+        from documents.search import ranking
+
         reranker = engine.get_reranker()
 
         splits = {"all": scores}
@@ -244,6 +259,8 @@ class Command(BaseCommand):
                 "embedding": embedding,
                 "reranker": f"{reranker.name} {getattr(reranker, 'version', '')}",
                 "search_candidates": getattr(settings, "SEARCH_CANDIDATES", None),
+                "search_rerank_depth": ranking.rerank_depth(),
+                "search_relevance_floor": ranking.relevance_floor(reranker),
             },
             "metrics": {
                 name: scoring.aggregate(subset, k) for name, subset in splits.items()

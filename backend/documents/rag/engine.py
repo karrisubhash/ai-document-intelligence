@@ -75,7 +75,7 @@ def resolve_relevance_floor(reranker, override=None, *, degraded=False) -> float
     return getattr(reranker, "default_relevance_floor", DEFAULT_RELEVANCE_FLOOR)
 
 
-def _was_degraded(reranked) -> bool:
+def was_degraded(reranked) -> bool:
     """Whether a cross-encoder handed back lexical scores instead of its own."""
     return any(item.signals.get("reranker_degraded") for item in reranked)
 
@@ -369,7 +369,7 @@ def _ask(
     # a reader has no way to know the answer came from the baseline.
     notes = list(retrieval.notes)
 
-    degraded = _was_degraded(reranked)
+    degraded = was_degraded(reranked)
     if degraded:
         telemetry.rerank_degraded(reranker.name)
         notes.append(
