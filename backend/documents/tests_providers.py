@@ -798,6 +798,28 @@ class LocalCrossEncoderTests(SimpleTestCase):
         self.assertEqual(len(ranked), 1)
         self.assertIn("reranker_degraded", ranked[0].signals)
 
+    def test_a_passage_retrieved_twice_is_scored_once(self):
+        """The same file uploaded twice retrieves identical chunks side by
+        side. A forward pass is the whole cost of reranking, and the copy's
+        score is already known; it still gets that score and its place."""
+        model = FakeCrossEncoder([0.9, 0.2])
+        ranked = self.reranker(model).rerank(
+            "q",
+            hits(
+                (chunk(1, "fines are two rupees a day"), 0.9),
+                (chunk(2, "borrowing limit"), 0.8),
+                (chunk(3, "fines are two rupees a day "), 0.7),
+            ),
+        )
+
+        self.assertEqual(
+            model.pairs,
+            [("q", "fines are two rupees a day"), ("q", "borrowing limit")],
+        )
+        self.assertEqual([r.chunk.id for r in ranked], [1, 3, 2])
+        self.assertEqual([r.score for r in ranked], [0.9, 0.9, 0.2])
+        self.assertTrue(all(r.signals["scored"] for r in ranked))
+
 
 class AbstentionRecognitionTests(SimpleTestCase):
     """A model writes the abstention sentence the way a model writes it."""

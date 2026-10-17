@@ -391,8 +391,16 @@ class LocalCrossEncoderReranker:
         # the pair list has to line up with the candidate list index for
         # index, so lifting them out here is also what keeps that mapping
         # honest.
+        #
+        # Each distinct passage is scored ONCE. The same file uploaded twice
+        # is two documents with identical chunks, and both come back from
+        # retrieval side by side; scoring the copy is a forward pass - the
+        # whole cost of this step - spent on a number already known, since
+        # the same pair always scores the same. Every candidate still gets
+        # its score and its place in the ranking.
         pairs = []
-        pair_indexes = []
+        pair_of = {}
+        position_of_text = {}
         truncated = set()
 
         for index, candidate in enumerate(candidates):
@@ -401,8 +409,10 @@ class LocalCrossEncoderReranker:
                 continue
             if len(text) > MAX_PASSAGE_CHARS:
                 truncated.add(index)
-            pairs.append((query, text))
-            pair_indexes.append(index)
+            if text not in position_of_text:
+                position_of_text[text] = len(pairs)
+                pairs.append((query, text))
+            pair_of[index] = position_of_text[text]
 
         if truncated:
             logger.warning(
@@ -470,7 +480,7 @@ class LocalCrossEncoderReranker:
 
             # predict() sorts by length internally and un-sorts before
             # returning, so this is the input order.
-            by_index = dict(zip(pair_indexes, scores, strict=True))
+            by_index = {index: scores[position] for index, position in pair_of.items()}
 
         scored = []
         for index, candidate in enumerate(candidates):
