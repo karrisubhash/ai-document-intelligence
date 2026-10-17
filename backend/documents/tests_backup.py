@@ -217,9 +217,9 @@ class RestoreSafetyTests(TestCase):
         self.assertFalse(Command._is_benign("could not connect to server"))
 
     def test_a_missing_object_that_was_not_being_dropped_is_a_failure(self):
-        """"does not exist" was benign wherever it appeared, so a server
-        whose pgvector has no HNSW restored every row, failed the vector
-        index, and was reported as a successful restore."""
+        """The bare "does not exist" was benign wherever it appeared, so a
+        server whose pgvector has no HNSW restored every row, failed the
+        vector index, and was reported as a successful restore."""
         from unittest import mock
 
         dump = self.tmp / "db-test.dump"
