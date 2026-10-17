@@ -789,3 +789,41 @@ class AdminMountTests(SimpleTestCase):
         for path in ("/admin/", "/admin/users", "/admin/audit", "/admin/system"):
             with self.subTest(path=path), self.assertRaises(Resolver404):
                 resolve(path)
+
+
+class AuditTrailAdminTests(TestCase):
+    """The Django admin could not add or edit audit rows, but it could
+    delete them - one at a time or all at once - so whoever held the admin
+    could remove the record of what they had done."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        from documents.models import AuditLog
+
+        self.root = get_user_model().objects.create_superuser(
+            "root", "root@example.com", "pass1234"
+        )
+        self.row = AuditLog.objects.create(
+            user=self.root,
+            action=AuditLog.Action.LOGIN,
+            result=AuditLog.Result.ALLOWED,
+        )
+        self.client.force_login(self.root)
+
+    def test_a_superuser_cannot_delete_an_audit_row(self):
+        from documents.models import AuditLog
+
+        url = reverse("admin:documents_auditlog_delete", args=[self.row.pk])
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.assertEqual(self.client.post(url, {"post": "yes"}).status_code, 403)
+
+        self.client.post(
+            reverse("admin:documents_auditlog_changelist"),
+            {
+                "action": "delete_selected",
+                "_selected_action": [self.row.pk],
+                "post": "yes",
+            },
+        )
+        self.assertTrue(AuditLog.objects.filter(pk=self.row.pk).exists())
