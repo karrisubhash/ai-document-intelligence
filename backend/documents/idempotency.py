@@ -27,6 +27,7 @@ deduplication window, never data.
 """
 
 import hashlib
+import uuid
 
 from django.core.cache import cache
 from django.core.files import File
@@ -38,10 +39,14 @@ REPLAYED_HEADER = "Idempotent-Replayed"
 TTL_SECONDS = 24 * 60 * 60
 # How long a claim lasts with no outcome recorded. finish() and abandon()
 # replace or drop it at once; this bounds only a request killed before
-# either ran (a worker timeout, the OOM killer, a deploy's grace period).
-# Claimed for the full day, such a key answered every retry with 409 until
-# the next day. Longer than any request may run: gunicorn kills a worker
-# after GUNICORN_TIMEOUT, 120 s by default.
+# either ran (the OOM killer, a deploy's grace period). Claimed for the full
+# day, such a key answered every retry with 409 until the next day.
+#
+# Nothing guarantees a request ends sooner. Production gunicorn runs
+# threaded workers (--threads), and their --timeout watches the worker, not
+# the request: a slow storage write keeps its thread long after nginx gave
+# the client a 504 at 120 s. A request that outlives its claim is why each
+# claim carries a token (see _still_ours).
 PENDING_TTL_SECONDS = 10 * 60
 MAX_KEY_LENGTH = 255
 _PENDING = "pending"
@@ -87,6 +92,7 @@ class Idempotency:
     def __init__(self, request, scope, *fingerprint_parts):
         raw = request.headers.get(HEADER)
         self.key = None
+        self.token = None
         if raw is None:
             return
         raw = raw.strip()
@@ -109,9 +115,9 @@ class Idempotency:
         """Claim the key. Returns the stored primary key to replay, or None."""
         if self.key is None:
             return None
-        if cache.add(
-            self.key, {"state": _PENDING, "fp": self.fingerprint}, PENDING_TTL_SECONDS
-        ):
+        self.token = uuid.uuid4().hex
+        claim = {"state": _PENDING, "fp": self.fingerprint, "token": self.token}
+        if cache.add(self.key, claim, PENDING_TTL_SECONDS):
             return None
         stored = cache.get(self.key)
         if stored is None:
@@ -123,14 +129,31 @@ class Idempotency:
             raise IdempotencyConflict()
         return stored["pk"]
 
+    def _still_ours(self) -> bool:
+        """Whether the key holds this request's claim, or nothing at all.
+
+        Once a slow request's claim expired, a retry could claim the key -
+        and the slow request's late finish() then replaced the retry's
+        record, or its abandon() released the retry's claim mid-upload.
+        Read-then-write, not atomic, but the window left is microseconds
+        rather than the rest of the retry.
+        """
+        stored = cache.get(self.key)
+        return stored is None or stored.get("token") == self.token
+
     def finish(self, pk):
-        if self.key is not None:
+        if self.key is not None and self._still_ours():
             cache.set(
                 self.key,
-                {"state": "done", "fp": self.fingerprint, "pk": pk},
+                {
+                    "state": "done",
+                    "fp": self.fingerprint,
+                    "pk": pk,
+                    "token": self.token,
+                },
                 TTL_SECONDS,
             )
 
     def abandon(self):
-        if self.key is not None:
+        if self.key is not None and self._still_ours():
             cache.delete(self.key)

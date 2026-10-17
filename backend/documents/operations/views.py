@@ -22,6 +22,12 @@ from .serializers import AuditLogSerializer, OperationsJobSerializer
 
 User = get_user_model()
 
+COLLECTION_ACTIONS = (
+    AuditLog.Action.COLLECTION_CREATE,
+    AuditLog.Action.COLLECTION_UPDATE,
+    AuditLog.Action.COLLECTION_DELETE,
+)
+
 
 def _department_scope(user):
     """None for a system admin (no restriction), else their department."""
@@ -41,10 +47,10 @@ class AuditLogView(ListAPIView):
     """The audit trail, newest first.
 
     A department administrator sees rows about their department: actions
-    taken BY its members, and actions taken ON its documents. The second
-    half matters as much as the first - an outsider's denied attempt to
-    read a department's document is exactly what that department's admin
-    needs to see.
+    taken BY its members, and actions taken ON its documents and
+    collections. The second half matters as much as the first - an
+    outsider's denied attempt to read a department's document is exactly
+    what that department's admin needs to see.
     """
 
     serializer_class = AuditLogSerializer
@@ -63,9 +69,16 @@ class AuditLogView(ListAPIView):
             document_ref__isnull=False,
             document_department=department,
         )
+        # Collection rows carry the collection's department in the same
+        # column (record_event's subject_department).
+        of_department_collection = Q(
+            action__in=COLLECTION_ACTIONS, document_department=department
+        ) & ~Q(document_department="")
         if department is not None:
             queryset = queryset.filter(
-                Q(user__profile__department=department) | in_department
+                Q(user__profile__department=department)
+                | in_department
+                | of_department_collection
             )
 
         params = self.request.query_params

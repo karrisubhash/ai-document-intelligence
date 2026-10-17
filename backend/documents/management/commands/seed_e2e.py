@@ -14,6 +14,8 @@ No documents are created: the suite uploads its own, from the governed
 synthetic corpus in evaluation/corpus/, through the real upload path.
 """
 
+import re
+
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
@@ -21,6 +23,19 @@ from django.db import connection
 from accounts.models import Department, UserProfile
 
 DISPOSABLE_MARKERS = ("e2e", "test", "ci")
+
+
+def is_disposable(name: str) -> bool:
+    """Whether a marker is one whole part of the name ("adi_e2e", "test_x").
+
+    Not a substring test: "ci" is inside "social_sciences", "precision" and
+    "cincinnati", and "test" inside "attestation" - real names, each of which
+    passed, and each of which would have been given an administrator account
+    with a known password.
+    """
+    parts = re.split(r"[^a-z0-9]+", name.lower())
+    return any(marker in parts for marker in DISPOSABLE_MARKERS)
+
 
 DEPARTMENTS = [
     ("Computer Science", "CSE"),
@@ -50,11 +65,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         name = connection.settings_dict.get("NAME") or ""
-        if not any(marker in name.lower() for marker in DISPOSABLE_MARKERS):
+        if not is_disposable(name):
             raise CommandError(
                 f"Refusing to seed test accounts into database {name!r}. This "
-                f"command only runs against a database whose name contains one "
-                f"of {DISPOSABLE_MARKERS}, e.g. POSTGRES_DB=adi_e2e."
+                f"command only runs against a database whose name has one of "
+                f"{DISPOSABLE_MARKERS} as a whole part, separated by _ or -, "
+                f"e.g. POSTGRES_DB=adi_e2e."
             )
 
         password = options["password"]

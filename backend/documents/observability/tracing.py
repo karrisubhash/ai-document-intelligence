@@ -61,14 +61,41 @@ def _without_query(span, request):
 
 
 def _with_request_id(span, request, response):
-    """response_hook: the X-Request-ID the middleware gave this request."""
-    from .context import RESPONSE_HEADER
+    """response_hook: the X-Request-ID the middleware gave this request.
+
+    Read from the context, which ObservabilityMiddleware sets before calling
+    inwards: the tracing middleware runs inside it (see _middleware_position)
+    and sees the response before the middleware adds the header.
+    """
+    from .context import RESPONSE_HEADER, get_request_id
 
     if span is None or not span.is_recording():
         return
-    request_id = response.get(RESPONSE_HEADER) if response is not None else None
+    request_id = get_request_id() or (
+        response.get(RESPONSE_HEADER) if response is not None else None
+    )
     if request_id:
         span.set_attribute("adi.request_id", request_id)
+
+
+OBSERVABILITY_MIDDLEWARE = "documents.observability.middleware.ObservabilityMiddleware"
+
+
+def _middleware_position(middleware) -> int:
+    """Just inside ObservabilityMiddleware, not in front of it.
+
+    The instrumentation's default is position 0, and its first act on every
+    request is request.build_absolute_uri(), which validates the Host. In
+    front of the middleware's shortcut for /metrics, /health/ and /ready/,
+    that turned every Prometheus scrape (by container IP) and every
+    container healthcheck (localhost) into a 400 - measured on gunicorn with
+    the pinned layer - the moment tracing was switched on.
+    OTEL_PYTHON_DJANGO_MIDDLEWARE_POSITION still overrides this.
+    """
+    middleware = list(middleware)
+    if OBSERVABILITY_MIDDLEWARE in middleware:
+        return middleware.index(OBSERVABILITY_MIDDLEWARE) + 1
+    return 0
 
 
 def _sampler():
@@ -168,6 +195,7 @@ def configure_tracing(service_name: str) -> bool:
         or UNTRACED_URLS,
         request_hook=_without_query,
         response_hook=_with_request_id,
+        middleware_position=_middleware_position(settings.MIDDLEWARE),
     )
     CeleryInstrumentor().instrument()
     # Statement text is parameterised SQL - values are bound separately - so
