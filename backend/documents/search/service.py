@@ -14,12 +14,15 @@ literally contain "REG/2024/117". Fusing them is what makes a search robust
 to both paraphrase and exact identifiers (section 12.2).
 """
 
+import contextvars
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 
 from django.conf import settings
 from django.contrib.postgres.search import SearchQuery, SearchRank
+from django.db import connections
 from django.db.models import F
 from pgvector.django import CosineDistance
 
@@ -189,16 +192,39 @@ def _build_lexical_query(query: str):
     return combined
 
 
+# Columns a candidate never needs on its way to a result or an answer, and
+# which dominated the cost of fetching one. `extracted_text` is the WHOLE
+# document's text, carried on the version every candidate row joins to: on
+# a corpus with one 2.26-million-character PDF, each of that document's
+# candidates brought all of it, and a question answered from it drew 58 to
+# 100 of its 100 candidates from it - by calculation, 131 to 226 MB out of
+# Postgres and into Python strings per question. Measured on the dev data,
+# the same queries interleaved, for such questions: lexical 2,256 -> 228 ms
+# and vector 2,554 -> 224 ms (p50). `search_vector` is a tsvector longer
+# than the chunk text itself, and is only ever read inside the SQL. Both are
+# loaded on access, so leaving them out cannot change a result - only its
+# cost.
+CANDIDATE_DEFERRED_FIELDS = ("search_vector", "document_version__extracted_text")
+
+
+def _candidates(queryset):
+    """Candidate rows with what citations, reranking and context need."""
+    return queryset.select_related("document_version__document").defer(
+        *CANDIDATE_DEFERRED_FIELDS
+    )
+
+
 def _lexical(queryset, query: str, limit: int):
     search_query = _build_lexical_query(query)
     if search_query is None:
         return []
 
     return list(
-        queryset.filter(search_vector=search_query)
-        .annotate(rank=SearchRank(F("search_vector"), search_query))
-        .order_by("-rank", "id")
-        .select_related("document_version__document")[:limit]
+        _candidates(
+            queryset.filter(search_vector=search_query)
+            .annotate(rank=SearchRank(F("search_vector"), search_query))
+            .order_by("-rank", "id")
+        )[:limit]
     )
 
 
@@ -209,14 +235,68 @@ def _vector(queryset, vector, model_name, model_version, limit: int):
     produces numbers that look like scores and mean nothing.
     """
     return list(
-        queryset.filter(
-            embeddings__model_name=model_name,
-            embeddings__model_version=model_version,
-        )
-        .annotate(distance=CosineDistance("embeddings__embedding", vector))
-        .order_by("distance", "id")
-        .select_related("document_version__document")[:limit]
+        _candidates(
+            queryset.filter(
+                embeddings__model_name=model_name,
+                embeddings__model_version=model_version,
+            )
+            .annotate(distance=CosineDistance("embeddings__embedding", vector))
+            .order_by("distance", "id")
+        )[:limit]
     )
+
+
+def _embedding_provider():
+    """(provider, note): the configured provider, or None and why not."""
+    try:
+        return chunking_service.get_provider(), ""
+    except EmbeddingProviderNotConfigured:
+        return None, "no embedding provider configured - lexical results only"
+    except EmbeddingProviderUnavailable as exc:
+        return None, f"embedding provider unavailable: {exc}"
+
+
+class _QueryEmbedding:
+    """`provider.embed([query])`, running on its own thread from creation.
+
+    A plain thread rather than a pool: one per search costs well under a
+    millisecond, and a pool created before gunicorn forks would hand each
+    worker an executor whose threads do not exist there. The embedder
+    touches no database, so the thread needs no connection of its own and
+    sees nothing a test's transaction hides. `result()` waits and re-raises
+    whatever the embedder raised, so a failure is handled exactly where it
+    was when the call was inline.
+    """
+
+    def __init__(self, provider, query: str):
+        self._batch = None
+        self._error = None
+        # Copied so log lines and tracing spans from the embedder keep the
+        # request's context, as the chat stream's worker thread does.
+        context = contextvars.copy_context()
+        self._thread = threading.Thread(
+            target=context.run,
+            args=(self._run, provider, query),
+            name="search-query-embedding",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self, provider, query):
+        try:
+            self._batch = provider.embed([query])
+        except BaseException as exc:  # re-raised on the caller's thread
+            self._error = exc
+        finally:
+            # Nothing here should open one, but a provider that did would
+            # otherwise leave it open for the life of the process.
+            connections.close_all()
+
+    def result(self):
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        return self._batch
 
 
 @tracing.traced("search.hybrid")
@@ -280,20 +360,22 @@ def search(
         response.notes.append(_why_nothing_is_searchable(user, in_scope))
         return response
 
+    # The query's embedding needs nothing from the database, so it is started
+    # here and computed while the database answers the lexical query, instead
+    # of after it. Not earlier: a search with nothing to search embeds
+    # nothing, which for a hosted embedder is a billed call. Notes about the
+    # provider are still added where they always were; see the vector half.
+    provider, provider_note = _embedding_provider()
+    pending = _QueryEmbedding(provider, query) if provider is not None else None
+
     # --- Lexical half -----------------------------------------------------
     lexical = _lexical(queryset, query, candidates)
     response.lexical_candidates = len(lexical)
 
     # --- Vector half ------------------------------------------------------
     vector_hits = []
-    try:
-        provider = chunking_service.get_provider()
-    except EmbeddingProviderNotConfigured:
-        response.notes.append("no embedding provider configured - lexical results only")
-        provider = None
-    except EmbeddingProviderUnavailable as exc:
-        response.notes.append(f"embedding provider unavailable: {exc}")
-        provider = None
+    if provider_note:
+        response.notes.append(provider_note)
 
     if provider is not None:
         response.semantic = provider.semantic
@@ -321,7 +403,7 @@ def search(
         # comparable, and fusing one in would silently corrupt the ranking
         # rather than narrow it.
         try:
-            batch = provider.embed([query])
+            batch = pending.result()
         except Exception as exc:
             response.notes.append(
                 f"query could not be embedded ({type(exc).__name__}) - "

@@ -5,11 +5,15 @@ keeping its tests pure is what proves a chunking strategy can be benchmarked
 offline before it is adopted.
 """
 
+import threading
 from itertools import pairwise
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -352,6 +356,122 @@ class HybridSearchTests(TestCase):
 
         self.assertEqual(response.hits, [])
         self.assertEqual(response.vector_candidates, 0)
+
+    def test_candidates_leave_the_whole_document_text_in_the_database(self):
+        """Every candidate row joins to its version, and a version carries
+        its document's ENTIRE extracted text. On a 2.26-million-character
+        PDF each candidate from it fetched 2.26 MB, and retrieving 50 took
+        seconds."""
+        with CaptureQueriesContext(connection) as queries:
+            response = search_service.search(self.user, "attendance minimum", limit=3)
+
+        self.assertTrue(response.hits)
+        self.assertEqual(
+            [
+                q["sql"]
+                for q in queries.captured_queries
+                if "extracted_text" in q["sql"]
+            ],
+            [],
+        )
+        chunk = response.hits[0].chunk
+        self.assertIn("search_vector", chunk.get_deferred_fields())
+        self.assertIn("extracted_text", chunk.document_version.get_deferred_fields())
+
+        # Nothing a result is built from was deferred with them.
+        with self.assertNumQueries(0):
+            for hit in response.hits:
+                hit.citation  # noqa: B018 - the property is what is under test
+
+    def test_the_query_is_embedded_while_the_database_answers(self):
+        """The query's embedding needs nothing from the database, so it is
+        computed alongside the lexical half instead of after it.
+
+        A rendezvous: each side waits for the other to have started, so an
+        embedding done before the lexical half (or after it) times out on
+        one side. Generous timeouts, because a loaded CI runner may be slow
+        to schedule a thread; with the overlap there both return at once."""
+        provider = chunking_service.get_provider()
+        embed = provider.embed
+        lexical = search_service._lexical
+        embedding_started = threading.Event()
+        lexical_started = threading.Event()
+        met = {}
+
+        def embedding(texts):
+            embedding_started.set()
+            met["lexical had started"] = lexical_started.wait(10)
+            return embed(texts)
+
+        def lexical_half(*args, **kwargs):
+            lexical_started.set()
+            met["embedding had started"] = embedding_started.wait(10)
+            return lexical(*args, **kwargs)
+
+        with (
+            mock.patch.object(provider, "embed", side_effect=embedding),
+            mock.patch.object(search_service, "_lexical", side_effect=lexical_half),
+        ):
+            response = search_service.search(self.user, "attendance minimum", limit=3)
+
+        self.assertEqual(
+            met, {"lexical had started": True, "embedding had started": True}
+        )
+        self.assertGreater(response.vector_candidates, 0)
+        self.assertEqual(self.titles(response)[0], "Attendance Regulation")
+
+    def test_nothing_is_embedded_when_nothing_can_be_searched(self):
+        """Authorization and filters come first; a search they leave empty
+        must not pay for an embedding - for a hosted embedder, a billed call."""
+        provider = chunking_service.get_provider()
+
+        with mock.patch.object(provider, "embed", wraps=provider.embed) as embed:
+            response = search_service.search(
+                self.user, "attendance", limit=5, document_type="CIRCULAR"
+            )
+
+        self.assertEqual(response.hits, [])
+        embed.assert_not_called()
+
+    def test_answering_never_loads_the_document_text_either(self):
+        """The whole answer path - rerank, context, answer, grounding - reads
+        only what the candidates carry, so the deferred columns stay unread."""
+        from documents.rag import engine
+
+        with CaptureQueriesContext(connection) as queries:
+            answer = engine.ask(self.user, "What is the attendance minimum?")
+
+        self.assertFalse(answer.abstained, answer.abstention_reason)
+        self.assertEqual(
+            [
+                q["sql"]
+                for q in queries.captured_queries
+                if "extracted_text" in q["sql"]
+            ],
+            [],
+        )
+
+    def test_a_query_that_cannot_be_embedded_degrades_to_lexical(self):
+        """The embedder's failure crosses a thread now; it must still land
+        where it always did - a note, a warning and the lexical half."""
+        provider = chunking_service.get_provider()
+
+        with (
+            mock.patch.object(provider, "embed", side_effect=RuntimeError("no torch")),
+            # Semantic until the embedding fails, so the reset is observable.
+            mock.patch.object(provider, "semantic", True),
+            self.assertLogs("adi.search", level="WARNING") as logs,
+        ):
+            response = search_service.search(self.user, "borrowing limit", limit=3)
+
+        self.assertEqual(self.titles(response)[0], "Library Policy")
+        self.assertFalse(response.semantic)
+        self.assertEqual(response.vector_candidates, 0)
+        self.assertIn(
+            "query could not be embedded (RuntimeError) - lexical results only",
+            response.notes,
+        )
+        self.assertIn("search.query_embedding_failed", logs.output[0])
 
 
 # --- Authorization: the security property ------------------------------------
