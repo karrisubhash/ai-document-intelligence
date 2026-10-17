@@ -58,6 +58,9 @@ class AuditLog(models.Model):
     # and every earlier view and download - so "who downloaded document D
     # before it was deleted" had no answer. Kept in step with department
     # renames by accounts.services.rename_department.
+    #
+    # A collection row has no document, and document_department holds the
+    # collection's department instead (record_event's subject_department).
     document_ref = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     document_department = models.CharField(
         max_length=255, blank=True, default="", editable=False

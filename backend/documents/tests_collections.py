@@ -4,6 +4,7 @@ from django.core.files.base import ContentFile
 from django.db import connection
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -213,6 +214,42 @@ class CollectionTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertEqual(response.data["department"], "Mechanical")
+
+    # --- The audit trail -------------------------------------------------
+
+    def collection_updates_seen_by(self, admin, actor):
+        response = self.as_user(admin).get(
+            reverse("admin-audit"),
+            {"action": AuditLog.Action.COLLECTION_UPDATE, "user": actor.id},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data["results"]
+
+    def test_the_departments_admin_sees_an_outsiders_collection_edits(self):
+        """A system administrator from another department is not a member,
+        and a collection row has no document: their changes to the
+        department's collection reached no department admin's trail."""
+        collection = self.make_collection(self.attendance)
+        root = make_user("root", UserProfile.Role.SYSTEM_ADMIN, "Mechanical")
+        renamed = self.as_user(root).patch(
+            f"{URL}{collection.id}/", {"name": "Root's rules"}, format="json"
+        )
+        self.assertEqual(renamed.status_code, status.HTTP_200_OK, renamed.data)
+        head = make_user(
+            "cs-head", UserProfile.Role.DEPARTMENT_ADMIN, "Computer Science"
+        )
+        physics_head = make_user(
+            "physics-head", UserProfile.Role.DEPARTMENT_ADMIN, "Physics"
+        )
+
+        self.assertEqual(len(self.collection_updates_seen_by(head, root)), 1)
+        self.assertEqual(self.collection_updates_seen_by(physics_head, root), [])
+
+        # And it stays the department's row through a rename.
+        computer_science, _ = Department.objects.get_or_create(name="Computer Science")
+        rename_department(computer_science, "Computing")
+        head.profile.refresh_from_db()
+        self.assertEqual(len(self.collection_updates_seen_by(head, root)), 1)
 
     # --- Department renames ----------------------------------------------
 
