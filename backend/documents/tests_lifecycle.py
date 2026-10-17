@@ -849,10 +849,18 @@ class SeedE2ETests(TestCase):
     def test_it_refuses_a_database_that_is_not_marked_disposable(self):
         from django.core.management.base import CommandError
 
-        with mock.patch.dict(
-            connection.settings_dict, {"NAME": "ai_document_intelligence"}
+        # The last three contain a marker only as part of a word.
+        for name in (
+            "ai_document_intelligence",
+            "social_sciences",
+            "precision_archive",
+            "attestation",
         ):
-            with self.assertRaises(CommandError):
+            with (
+                self.subTest(name=name),
+                mock.patch.dict(connection.settings_dict, {"NAME": name}),
+                self.assertRaises(CommandError),
+            ):
                 call_command(
                     "seed_e2e", "--password", "long-enough-password", stdout=StringIO()
                 )

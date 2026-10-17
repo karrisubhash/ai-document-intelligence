@@ -78,5 +78,5 @@ docker compose exec -T db sh -c 'createdb -U "$POSTGRES_USER" adi_e2e'
 docker compose run --rm -e POSTGRES_DB=adi_e2e backend python manage.py migrate
 ```
 
-`seed_e2e` refuses to run against a database whose name does not contain `e2e`, `test` or
-`ci`.
+`seed_e2e` refuses to run against a database whose name does not have `e2e`, `test` or
+`ci` as a whole part separated by `_` or `-` (`adi_e2e` passes; `social_sciences` does not).
