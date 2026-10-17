@@ -152,6 +152,23 @@ class GeneralKnowledgeChatTests(TestCase):
         self.assertTrue(data["abstained"])
 
     @override_settings(**GENERAL_ON)
+    @mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "k"})
+    def test_a_long_model_id_is_stored_whole(self):
+        """Message.model_version held 50 characters, and "provider/model"
+        for an ordinary OpenRouter id is longer: every turn that model
+        answered failed to save, and the chat request was a 500."""
+        model = "nousresearch/deephermes-3-llama-3-8b-preview:free"
+        answerer = answerer_with(
+            StreamingChatClient(["Hello!"]),
+            RAG_ANSWERER_PROVIDER="openrouter",
+            RAG_ANSWERER_MODEL=model,
+        )
+        with mock.patch("documents.rag.general.get_answerer", return_value=answerer):
+            data = self.ask()
+        stored = Message.objects.get(id=data["message_id"])
+        self.assertEqual(stored.model_version, f"openrouter/{model}")
+
+    @override_settings(**GENERAL_ON)
     def test_earlier_turns_are_sent_as_context(self):
         answerer = stub_answerer()
         with mock.patch("documents.rag.general.get_answerer", return_value=answerer):
