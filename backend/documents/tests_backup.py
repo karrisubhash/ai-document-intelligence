@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+from io import StringIO
 from pathlib import Path
 
 from django.conf import settings
@@ -214,6 +215,41 @@ class RestoreSafetyTests(TestCase):
         )
         self.assertTrue(Command._is_benign("Command was: SET transaction_timeout = 0;"))
         self.assertFalse(Command._is_benign("could not connect to server"))
+
+    def test_a_missing_object_that_was_not_being_dropped_is_a_failure(self):
+        """"does not exist" was benign wherever it appeared, so a server
+        whose pgvector has no HNSW restored every row, failed the vector
+        index, and was reported as a successful restore."""
+        from unittest import mock
+
+        dump = self.tmp / "db-test.dump"
+        dump.write_bytes(b"pretend archive")
+        no_hnsw = subprocess.CompletedProcess(
+            args=["pg_restore"],
+            returncode=1,
+            stdout="",
+            stderr=(
+                "pg_restore: error: could not execute query: ERROR:  access "
+                'method "hnsw" does not exist\n'
+                "Command was: CREATE INDEX chunk_embedding_hnsw ON "
+                "public.documents_documentchunkembedding USING hnsw "
+                "(embedding public.vector_cosine_ops);\n"
+                "pg_restore: warning: errors ignored on restore: 1\n"
+            ),
+        )
+
+        with (
+            mock.patch(
+                "documents.management.commands.restore.subprocess.run",
+                return_value=no_hnsw,
+            ),
+            self.assertRaises(CommandError) as caught,
+        ):
+            call_command(
+                "restore", str(dump), yes=True, skip_checksum=True, stdout=StringIO()
+            )
+
+        self.assertIn('access method "hnsw" does not exist', str(caught.exception))
 
     def test_a_failed_pg_restore_over_a_live_database_is_a_failure(self):
         """The target already has every table, so "tables exist afterwards"

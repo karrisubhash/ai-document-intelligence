@@ -246,8 +246,15 @@ class Command(BaseCommand):
 
     # Notices that do not mean the restore failed.
     BENIGN = (
-        # Restoring into an empty database: --clean tries to drop first.
-        "does not exist",
+        # Restoring into an empty database: --clean drops first, and with
+        # --if-exists a missing object is only this notice. Not the bare
+        # "does not exist": that is also how a real failure reads - a
+        # server whose pgvector predates HNSW answers the index with
+        # 'access method "hnsw" does not exist', and the restore reported
+        # success without its vector index. Measured with pg_restore 17
+        # against Postgres 16, into an empty database and over a live one:
+        # neither prints any "does not exist" line.
+        "does not exist, skipping",
         # The dumping client is newer than the server and emits a SET for a
         # parameter the server has never heard of.
         "unrecognized configuration parameter",
