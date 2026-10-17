@@ -31,6 +31,7 @@ backups/
 evaluation/benchmark.json
 evaluation/benchmark-*.json
 !evaluation/benchmark-*.template.json
+evaluation/search-relevance.json
 
 # Written by `manage.py ingest_corpus`, keyed by database document id, for
 # the same reason.

@@ -106,6 +106,18 @@ class Command(BaseCommand):
                 "loaded dataset that referenced them."
             ),
         )
+        # Visibility is "owner OR same department", so two evaluators in one
+        # department each see the other's corpus: a second benchmark seeded
+        # under its own --user still changed the first one's exam. A
+        # benchmark scored next to another needs its own department.
+        parser.add_argument(
+            "--department",
+            default=DEPARTMENT,
+            help=(
+                f"Department for --user and the corpus (default {DEPARTMENT}). "
+                f"Give each benchmark that shares a database its own."
+            ),
+        )
 
     def handle(self, *args, **options):
         template = Path(options["template"])
@@ -117,9 +129,10 @@ class Command(BaseCommand):
         data = json.loads(template.read_text(encoding="utf-8"))
         slugs = self._corpus_slugs(data, template)
 
-        user = self._evaluator(options["user"])
+        department = options.get("department") or DEPARTMENT
+        user = self._evaluator(options["user"], department)
         self._check_for_foreign_documents(user, slugs, prune=options["prune"])
-        ids = self._ingest(user, slugs)
+        ids = self._ingest(user, slugs, department)
         self._resolve(data, ids, Path(options["output"]))
 
     @staticmethod
@@ -191,7 +204,7 @@ class Command(BaseCommand):
             self.style.WARNING(f"pruned {len(foreign)}: {', '.join(names)}")
         )
 
-    def _evaluator(self, username):
+    def _evaluator(self, username, department=DEPARTMENT):
         User = get_user_model()
         user, created = User.objects.get_or_create(
             username=username, defaults={"email": f"{username}@example.invalid"}
@@ -203,14 +216,14 @@ class Command(BaseCommand):
             user.save(update_fields=["password"])
 
         profile = getattr(user, "profile", None)
-        if profile is not None and profile.department != DEPARTMENT:
-            profile.department = DEPARTMENT
+        if profile is not None and profile.department != department:
+            profile.department = department
             profile.save(update_fields=["department"])
 
-        self.stdout.write(f"evaluator: {user.username} ({DEPARTMENT})")
+        self.stdout.write(f"evaluator: {user.username} ({department})")
         return user
 
-    def _ingest(self, user, slugs):
+    def _ingest(self, user, slugs, department=DEPARTMENT):
         sources = [CORPUS / f"{slug}.txt" for slug in slugs]
         missing = [source.name for source in sources if not source.exists()]
         if missing:
@@ -235,13 +248,15 @@ class Command(BaseCommand):
             document, _ = Document.objects.get_or_create(
                 title=f"{TITLE_PREFIX}{slug}",
                 owner=user,
-                defaults={"document_type": "OTHER", "department": DEPARTMENT},
+                defaults={"document_type": "OTHER", "department": department},
             )
 
             with transaction.atomic():
-                # The versions and their content go; the document stays.
+                # The versions and their content go; the document stays -
+                # moved, if this seed names a different department.
                 document.current_version = None
-                document.save(update_fields=["current_version"])
+                document.department = department
+                document.save(update_fields=["current_version", "department"])
                 document.versions.all().delete()
 
             version = document.versions.create(

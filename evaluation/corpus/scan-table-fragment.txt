@@ -1,0 +1,4 @@
+SUMMARY 0F EXPER1MENTAL RESULTS:
+Tab|e 3   Run   Load   Time   % eff.
+1   20   4.1   62
+2   40   3.8   71

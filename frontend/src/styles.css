@@ -1707,6 +1707,17 @@ mark.evidence {
   padding: 0 1px;
 }
 
+/* Passages the reranker scored below the relevance floor, shown only on request. */
+.results-weak-head {
+  margin: 8px 0 4px;
+  font-size: 15px;
+}
+
+.results-weak .result {
+  box-shadow: none;
+  border-style: dashed;
+}
+
 /* --- Chat ---------------------------------------------------------------------------------- */
 
 .chat {
