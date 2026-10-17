@@ -1,7 +1,8 @@
 """Score the Search endpoint against a passage-level relevance set.
 
     python manage.py seed_evaluation --template ../evaluation/search-relevance.template.json \
-        --user search-evaluator --output /tmp/search-relevance.json
+        --user search-evaluator --department "Search evaluation" \
+        --output ../evaluation/search-relevance.json
     python manage.py evaluate_search --as-user search-evaluator --split test
 
 Each query goes through `SearchView` itself, as the evaluator, so what is

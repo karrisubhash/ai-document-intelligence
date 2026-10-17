@@ -397,6 +397,34 @@ jobs:
         env:
           DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
 
+      # The Search endpoint, scored per PASSAGE in the order it returns them
+      # (docs/evaluation/search-relevance.md). Its own user AND department:
+      # visibility is owner-or-same-department, so under the shared
+      # Evaluation department it would score v2's documents as part of its
+      # corpus. Offline baselines again, so the gate is deterministic: it
+      # guards retrieval, fusion and the endpoint's selection logic. The
+      # cross-encoder's quality is measured locally, not gated - CI has no
+      # model.
+      - name: Seed the search-relevance corpus
+        run: >
+          python backend/manage.py seed_evaluation
+          --template evaluation/search-relevance.template.json
+          --user search-evaluator
+          --department "Search evaluation"
+          --output evaluation/search-relevance.json
+        env:
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
+
+      - name: Evaluate search relevance against its baseline
+        run: >
+          python backend/manage.py evaluate_search
+          --as-user search-evaluator
+          --label "${GITHUB_SHA::7}-search"
+          --baseline evaluation/search-baseline.json
+          --fail-on-regression
+        env:
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
+
   build:
     name: Build images
     runs-on: ubuntu-latest
