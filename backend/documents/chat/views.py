@@ -77,16 +77,23 @@ class ChatView(APIView):
         conversation = self._conversation(request, data.get("conversation_id"))
 
         try:
+            # Read once, and only what follow-up resolution and the general
+            # reply use. Each assistant turn also stores its citations - the
+            # cited passages' full text - and its metadata. Follow-up
+            # resolution used to fetch all of that, for every turn, on every
+            # question, and the general reply fetched it again whenever it
+            # answered.
+            history = list(
+                conversation.messages.order_by("created_at").only("role", "content")
+            )
+
             # A follow-up is resolved against the caller's own earlier turns
             # before retrieval sees it. "What about MECH?" carries one
             # content term and retrieves nothing useful on its own; the
             # conversation is where the rest of that question already lives.
             # Independent questions are returned untouched - see
             # documents.rag.followup.
-            resolved = followup.contextualize(
-                data["question"],
-                conversation.messages.order_by("created_at"),
-            )
+            resolved = followup.contextualize(data["question"], history)
             small_talk = followup.is_small_talk(data["question"]) and general.enabled()
             if small_talk:
                 # A greeting needs no document search. Recorded as a clean
@@ -123,10 +130,7 @@ class ChatView(APIView):
             # labelled, uncited, and never after a grounding failure. See
             # documents.rag.general for the rules.
             if general.should_answer(answer):
-                reply = general.answer(
-                    data["question"],
-                    history=conversation.messages.order_by("created_at"),
-                )
+                reply = general.answer(data["question"], history=history)
                 if reply is not None:
                     if not small_talk:
                         answer.notes.append(
