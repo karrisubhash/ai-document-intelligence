@@ -144,6 +144,26 @@ class IdempotentUploadTests(APITestCase):
         retry = idempotency.Idempotency(request, "documents.create", "same")
         self.assertEqual(retry.start(), 42)
 
+    def test_a_request_that_outlived_its_claim_leaves_the_retry_alone(self):
+        """Threaded gunicorn never kills a slow request, so one can outlive
+        PENDING_TTL_SECONDS; a retry then claims the key. The slow one's
+        late outcome released or overwrote the retry's claim."""
+        request = SimpleNamespace(headers={"Idempotency-Key": "key-7"}, user=self.user)
+        slow = idempotency.Idempotency(request, "documents.create", "same")
+        self.assertIsNone(slow.start())
+        idempotency.cache.delete(slow.key)  # its claim expires
+        retry = idempotency.Idempotency(request, "documents.create", "same")
+        self.assertIsNone(retry.start())
+
+        slow.abandon()
+        with self.assertRaises(idempotency.IdempotencyConflict):
+            idempotency.Idempotency(request, "documents.create", "same").start()
+
+        slow.finish(41)
+        retry.finish(42)
+        again = idempotency.Idempotency(request, "documents.create", "same")
+        self.assertEqual(again.start(), 42)
+
     def test_a_claim_nobody_finished_does_not_hold_the_key_for_a_day(self):
         # A worker killed mid-upload never releases its claim; retries got
         # 409 for the claim's whole lifetime, which was the full 24 hours.
