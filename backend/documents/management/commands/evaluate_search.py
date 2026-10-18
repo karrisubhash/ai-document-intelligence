@@ -144,6 +144,8 @@ class Command(BaseCommand):
 
             results = response.data["results"]
             ranked = [hit["chunk_id"] for hit in results]
+            # .get: an endpoint without the field marks nothing.
+            below_floor = {hit["chunk_id"] for hit in results if hit.get("below_floor")}
             owners = {hit["chunk_id"]: hit["document_id"] for hit in results}
 
             pool_hits = service.search(user, case["query"], limit=POOL_LIMIT).hits
@@ -164,6 +166,7 @@ class Command(BaseCommand):
                     k=k,
                     duration_ms=duration_ms,
                     titles=titles,
+                    below_floor=below_floor,
                 )
             )
 
@@ -287,7 +290,7 @@ class Command(BaseCommand):
             for key, value in block["diagnostics"].items():
                 self.stdout.write(f"  {key:32} {value}")
 
-        self.stdout.write("\n[by kind]  R@k    P@k    MRR    nDCG   empty-ok  returned")
+        self.stdout.write("\n[by kind]  R@k    P@k    MRR    nDCG   no-match  returned")
         for kind, block in report["by_kind"].items():
             quality = block["quality"]
             self.stdout.write(
@@ -296,15 +299,19 @@ class Command(BaseCommand):
                 f"{quality.get(f'precision_at_{k}', float('nan')):.3f}  "
                 f"{quality.get('mrr', float('nan')):.3f}  "
                 f"{quality.get(f'ndcg_at_{k}', float('nan')):.3f}  "
-                f"{quality.get('no_relevant_returned_nothing', float('nan')):.3f}     "
+                f"{quality.get('no_relevant_said_no_match', float('nan')):.3f}     "
                 f"{block['diagnostics']['mean_returned_answerable'] or block['diagnostics']['mean_returned_no_relevant']:.1f}"
             )
 
         if show_cases:
+            # * relevant, - not relevant; ~ marks a passage the endpoint
+            # returned as below its relevance floor.
             self.stdout.write("")
             for s in scores:
                 marks = " ".join(
-                    ("*" if item["relevant"] else "-") + str(item["document"])
+                    ("~" if item.get("below_floor") else "")
+                    + ("*" if item["relevant"] else "-")
+                    + str(item["document"])
                     for item in s.top
                 )
                 self.stdout.write(

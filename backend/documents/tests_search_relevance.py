@@ -138,6 +138,20 @@ class NoRelevantCaseTests(SimpleTestCase):
         self.assertFalse(result.answerable)
         self.assertEqual(result.outcome, scoring.CORRECT_EMPTY)
 
+    def test_returning_only_passages_marked_below_the_floor_says_no_match(self):
+        result = scoring.score_case(
+            case("no-relevant"),
+            [7, 8],
+            {7: 70, 8: 80},
+            [],
+            [7, 8],
+            k=5,
+            below_floor={7, 8},
+        )
+
+        self.assertEqual(result.matched, 0)
+        self.assertEqual(result.outcome, scoring.SAID_NO_MATCH)
+
     def test_returning_anything_is_recorded(self):
         result = scoring.score_case(case("no-relevant"), [7], {7: 70}, [], {7}, k=5)
 
@@ -153,13 +167,21 @@ class AggregateTests(SimpleTestCase):
             scoring.score_case(case(), [], owners, [{2}], {2}, k=5),
             scoring.score_case(case("no-relevant"), [], owners, [], set(), k=5),
             scoring.score_case(case("no-relevant"), [2], owners, [], {2}, k=5),
+            # Returned the closest passage, marked below the floor.
+            scoring.score_case(
+                case("no-relevant"), [1], owners, [], {1}, k=5, below_floor={1}
+            ),
         ]
 
         report = scoring.aggregate(scores, 5)
 
         self.assertEqual(report["quality"]["mrr"], 0.5)
         self.assertEqual(report["quality"]["answerable_with_results"], 0.5)
-        self.assertEqual(report["quality"]["no_relevant_returned_nothing"], 0.5)
+        self.assertEqual(report["quality"]["answerable_with_a_match"], 0.5)
+        self.assertAlmostEqual(
+            report["quality"]["no_relevant_returned_nothing"], 1 / 3, 4
+        )
+        self.assertAlmostEqual(report["quality"]["no_relevant_said_no_match"], 2 / 3, 4)
         self.assertEqual(report["diagnostics"]["outcomes"]["ranking"], 1)
 
 
@@ -279,17 +301,44 @@ class RankingTests(TestCase):
         self.assertEqual(data["ranking"]["relevance_floor"], 0.5)
         self.assertEqual(data["ranking"]["below_floor"], 2)
 
-    def test_a_query_nothing_answers_gets_no_results_and_says_why(self):
-        """The other reproduced failure: a full page for a query no document
-        is about."""
+    @override_settings(SEARCH_FALLBACK_RESULTS=2)
+    def test_a_query_nothing_answers_says_so_and_marks_the_closest(self):
+        """The other reproduced failure: a full page of unrelated passages,
+        presented as results, for a query no document is about. Now: an
+        explicit no-match, with only the closest few, each marked."""
+        FakeCrossEncoder.scores = {"Curfew": 0.40}
+
+        data = self.search(query="quantum chromodynamics lattice gauge theory")
+
+        self.assertEqual(data["count"], 2)
+        self.assertTrue(all(hit["below_floor"] for hit in data["results"]))
+        # Still in relevance order: the 0.40 passage first.
+        self.assertEqual(data["results"][0]["document_title"], "Hostel Regulations")
+        self.assertEqual(data["ranking"]["below_floor"], 3)
+        self.assertTrue(any("close enough match" in note for note in data["notes"]))
+
+    @override_settings(SEARCH_FALLBACK_RESULTS=0)
+    def test_without_a_fallback_a_query_nothing_answers_gets_nothing(self):
         FakeCrossEncoder.scores = {}
 
         data = self.search(query="quantum chromodynamics lattice gauge theory")
 
-        self.assertEqual(data["count"], 0)
         self.assertEqual(data["results"], [])
-        self.assertEqual(data["ranking"]["below_floor"], 3)
+        self.assertTrue(any("none is shown" in note for note in data["notes"]))
+
+    def test_asking_for_weaker_matches_still_says_none_is_a_close_match(self):
+        FakeCrossEncoder.scores = {}
+
+        data = self.search(query="quantum chromodynamics", include_below_floor=True)
+
+        self.assertEqual(data["count"], 3)
+        self.assertTrue(all(hit["below_floor"] for hit in data["results"]))
         self.assertTrue(any("close enough match" in note for note in data["notes"]))
+
+    def test_the_fallback_never_applies_when_something_cleared_the_floor(self):
+        data = self.search(query="library late return fine")
+
+        self.assertEqual([hit["below_floor"] for hit in data["results"]], [False])
 
     def test_passages_below_the_floor_are_one_request_away_and_marked(self):
         data = self.search(query="late fine", include_below_floor=True)

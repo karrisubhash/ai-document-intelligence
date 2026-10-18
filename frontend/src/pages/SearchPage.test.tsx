@@ -115,15 +115,27 @@ describe("SearchPage", () => {
     expect(screen.getAllByRole("list")[0]).not.toHaveTextContent("Scanned fragment");
   });
 
-  it("says there is no close match instead of showing unrelated passages", async () => {
-    vi.spyOn(api, "search").mockResolvedValue(response([], 4));
+  it("says there is no close match and shows the closest only as weaker matches", async () => {
+    vi.spyOn(api, "search").mockResolvedValue(response([FRAGMENT], 4));
     renderSearch();
     await searchFor("quantum chromodynamics");
 
     expect(await screen.findByText("No close match")).toBeInTheDocument();
     expect(screen.getByText(/4 passages share words or meaning/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show the weaker matches" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Weaker matches" })).toHaveTextContent("Scanned fragment");
+    expect(screen.getByRole("button", { name: "Show all 4 weaker matches" })).toBeInTheDocument();
+    // Weaker matches are not counted as results.
+    expect(screen.getByText(/passages? from/)).toHaveTextContent("0 passages from 0 documents");
     expect(screen.queryByText("Nothing found")).not.toBeInTheDocument();
+  });
+
+  it("offers the weaker matches when the server returned none of them", async () => {
+    vi.spyOn(api, "search").mockResolvedValue(response([], 4));
+    renderSearch();
+    await searchFor("quantum chromodynamics");
+
+    expect(await screen.findByText("No close match")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show the weaker matches" })).toBeInTheDocument();
   });
 
   it("still says nothing was found when retrieval found nothing at all", async () => {

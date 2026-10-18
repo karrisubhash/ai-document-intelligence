@@ -46,6 +46,16 @@ split):
   some paraphrase answers, which is why below-floor passages stay one request
   away (`include_below_floor`) rather than being dropped.
 
+* NEVER AN EMPTY PAGE WHEN THERE WERE CANDIDATES. With nothing above the
+  floor, the SEARCH_FALLBACK_RESULTS best-ranked passages are returned,
+  marked below_floor, beside a note that none is a close match. This one was
+  decided AFTER the test split was scored, and says so: the strict version
+  left 9 of 13 paraphrased answers off the page behind "no close match",
+  although MiniLM still ranked them first to third. A floor cannot fix that
+  (see above); returning the closest few, labelled, does - and a query no
+  document answers still gets an explicit no-match response, not a page of
+  unrelated passages presented as results.
+
 * AN UNCALIBRATED CROSS-ENCODER REORDERS BUT HIDES NOTHING. A floor belongs
   to one model's score distribution; applying a guess would hide passages on
   a number nobody measured. SEARCH_RELEVANCE_FLOOR sets one explicitly.
@@ -77,6 +87,17 @@ DEFAULT_RERANK_DEPTH = 30
 CALIBRATED_FLOORS = {
     "cross-encoder/ms-marco-MiniLM-L6-v2": 0.03,
 }
+
+# When nothing clears the floor, how many of the best-ranked passages are
+# still returned, marked below_floor. 3 because every dev paraphrase had its
+# answer at reranked rank 1-3. 0 returns an empty list instead.
+DEFAULT_FALLBACK_RESULTS = 3
+
+
+def fallback_results() -> int:
+    return max(
+        0, int(getattr(settings, "SEARCH_FALLBACK_RESULTS", DEFAULT_FALLBACK_RESULTS))
+    )
 
 
 def rerank_depth() -> int:
@@ -163,15 +184,30 @@ def rank(
     response.reranked = len(reranked)
     response.below_floor = len(below)
 
-    if not above:
-        response.notes.append(
-            f"no passage is a close enough match to show; {len(below)} weaker "
-            f"match(es) scored below the relevance floor (best "
-            f"{reranked[0].score:.3f}, floor {floor:.3f})"
-        )
+    if include_below_floor:
+        selected = above + below
+    elif above:
+        selected = above
+    else:
+        # Nothing cleared the floor. The closest few, marked, rather than an
+        # empty page: the floor cannot tell a paraphrased answer from no
+        # answer, and the reranker's ORDER still puts the answer first.
+        selected = below[: fallback_results()]
 
-    selected = above + below if include_below_floor else above
     response.hits = selected[:limit]
+
+    if below and not above:
+        shown = len(response.hits)
+        response.notes.append(
+            f"no passage is a close enough match: all {len(below)} scored below "
+            f"the relevance floor (best {reranked[0].score:.3f}, floor "
+            f"{floor:.3f}); "
+            + (
+                f"the {shown} closest are shown, marked as weaker matches"
+                if shown
+                else "none is shown"
+            )
+        )
 
     logger.info(
         "search.ranked",

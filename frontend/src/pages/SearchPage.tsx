@@ -232,10 +232,11 @@ export default function SearchPage() {
           {strong.length === 0 && hidden > 0 ? (
             <EmptyState title="No close match" icon="🔍">
               {plural(hidden, "passage")} share words or meaning with this search, but none is a
-              close enough match to show.{" "}
-              {showingWeaker ? null : (
+              close enough match.{" "}
+              {weak.length ? `The closest ${weak.length === 1 ? "is" : plural(weak.length, "is", "are")} below. ` : null}
+              {showingWeaker || weak.length >= hidden ? null : (
                 <Button variant="ghost" onClick={showWeaker} loading={search.pending}>
-                  Show the weaker matches
+                  {weak.length ? `Show all ${hidden} weaker matches` : "Show the weaker matches"}
                 </Button>
               )}
             </EmptyState>

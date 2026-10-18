@@ -512,6 +512,10 @@ SEARCH_RERANK_DEPTH = int(os.getenv("SEARCH_RERANK_DEPTH", "30"))
 _search_floor = os.getenv("SEARCH_RELEVANCE_FLOOR", "").strip()
 SEARCH_RELEVANCE_FLOOR = float(_search_floor) if _search_floor else None
 
+# With nothing above the floor, the best-ranked passages still returned,
+# marked below_floor, beside a "no close match" note. 0 returns nothing.
+SEARCH_FALLBACK_RESULTS = int(os.getenv("SEARCH_FALLBACK_RESULTS", "3"))
+
 # Results per request when the client does not say, and the most it may
 # ask for.
 SEARCH_DEFAULT_LIMIT = int(os.getenv("SEARCH_DEFAULT_LIMIT", "10"))
