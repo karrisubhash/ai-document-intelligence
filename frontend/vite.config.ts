@@ -64,6 +64,13 @@ export default defineConfig(({ mode }) => {
       setupFiles: ["./src/test/setup.ts"],
       css: false,
       restoreMocks: true,
+      // Well above the 5 s that each findBy*/waitFor may wait (src/test/
+      // setup.ts). At vitest's default, also 5 s, a test whose waits were
+      // each within their limit timed out as a whole on a loaded machine -
+      // seven tests at 5.2-6.6 s, all passing alone - and a query whose
+      // element never appeared reported "Test timed out" instead of the
+      // query's own error.
+      testTimeout: 20_000,
     },
   };
 });
