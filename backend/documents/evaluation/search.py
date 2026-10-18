@@ -53,6 +53,10 @@ class CaseScore:
     query: str
     answerable: bool
     returned: int
+    # Returned passages NOT marked below the relevance floor: what the
+    # response presented as matches. Zero with passages returned is the
+    # endpoint saying "no close match; here are the closest".
+    matched: int = 0
     recall: float = 0.0
     precision: float = 0.0
     reciprocal_rank: float = 0.0
@@ -88,6 +92,9 @@ TOP_K = "top-k"
 RANKING = "ranking"
 RETRIEVAL = "retrieval"
 CORRECT_EMPTY = "correct-empty"
+# Passages returned, every one marked below the relevance floor: the endpoint
+# said there was no close match and showed the closest anyway.
+SAID_NO_MATCH = "said-no-match"
 RESULTS_FOR_NOTHING = "results-for-no-relevant"
 
 
@@ -101,6 +108,7 @@ def score_case(
     k: int,
     duration_ms: int = 0,
     titles: dict | None = None,
+    below_floor: set | None = None,
 ) -> CaseScore:
     """Score one query.
 
@@ -108,8 +116,10 @@ def score_case(
     to its document id; `evidence` is one set of chunk ids per evidence item
     (every current chunk that carries it); `pool` is the chunk ids retrieval
     produced, in retrieval's own order, before the endpoint reordered or
-    selected anything.
+    selected anything; `below_floor` is the returned chunk ids the endpoint
+    marked as below its relevance floor.
     """
+    below_floor = below_floor or set()
     pool_order = list(pool)
     pool = set(pool_order)
     relevant_chunks = set().union(*evidence) if evidence else set()
@@ -132,6 +142,7 @@ def score_case(
         query=case["query"],
         answerable=bool(evidence),
         returned=len(ranked),
+        matched=sum(1 for chunk in ranked if chunk not in below_floor),
         distinct_documents=len(per_document),
         most_from_one_document=max(per_document.values(), default=0),
         duration_ms=duration_ms,
@@ -140,13 +151,19 @@ def score_case(
                 "chunk": chunk,
                 "document": (titles or {}).get(documents[chunk], documents[chunk]),
                 "relevant": chunk in relevant_chunks,
+                "below_floor": chunk in below_floor,
             }
             for chunk in top
         ],
     )
 
     if not evidence:
-        score.outcome = CORRECT_EMPTY if not ranked else RESULTS_FOR_NOTHING
+        if not ranked:
+            score.outcome = CORRECT_EMPTY
+        elif not score.matched:
+            score.outcome = SAID_NO_MATCH
+        else:
+            score.outcome = RESULTS_FOR_NOTHING
         return score
 
     score.recall = evidence_recall_at_k(ranked, evidence, k)
@@ -218,11 +235,21 @@ def aggregate(scores: list, k: int) -> dict:
                 "answerable_with_results": _mean(
                     1.0 if s.returned else 0.0 for s in answerable
                 ),
+                # ...or that the endpoint said had no close match.
+                "answerable_with_a_match": _mean(
+                    1.0 if s.matched else 0.0 for s in answerable
+                ),
             }
         )
     if unanswerable:
         quality["no_relevant_returned_nothing"] = _mean(
             1.0 if not s.returned else 0.0 for s in unanswerable
+        )
+        # Returned nothing, or returned only passages it marked as below
+        # the relevance floor: either way, no unrelated passage was
+        # presented as a match.
+        quality["no_relevant_said_no_match"] = _mean(
+            1.0 if not s.matched else 0.0 for s in unanswerable
         )
 
     outcomes = {}
