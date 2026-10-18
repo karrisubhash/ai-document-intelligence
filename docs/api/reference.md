@@ -58,11 +58,12 @@ the caller is refused.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/documents/` | read | Paginated (50). `search`, `status`, `document_type`, `department`, `owner` (id or `me`), `created_after/before`, `updated_after/before`, `ordering` (≤3 of `id,title,status,document_type,created_at,updated_at`, `-` for descending), `archived` = `false` (default) / `true` / `all` |
+| GET | `/api/documents/` | read | Paginated (50); each row carries `can_manage`. `search`, `status`, `document_type`, `department`, `owner` (id or `me`), `created_after/before`, `updated_after/before`, `ordering` (≤3 of `id,title,status,document_type,created_at,updated_at`, `-` for descending), `archived` = `false` (default) / `true` / `all` |
 | POST | `/api/documents/` | any signed-in user | multipart `title`, `document_type`, `file`, and `department` (system admins only; must be a registered department). **202** — processing is asynchronous |
 | GET | `/api/documents/{id}/` | read | Includes `current_version`, `owner_username`, `is_archived`, `can_manage` |
 | PATCH | `/api/documents/{id}/` | manage | multipart `title`, `document_type` |
 | DELETE | `/api/documents/{id}/` | manage | Permanent: versions, content, index and files |
+| POST | `/api/documents/bulk-delete/` | manage (each) | JSON, exactly one of `{"ids": [...]}` (≤100) or `{"all": true, "filters": {<listing parameters>}}`. **200** `{deleted, forbidden, not_found}`, each a list of ids; a document the caller cannot see is `not_found`. `all` deletes at most 100 per request and adds `remaining` (repeat until 0) and `skipped` (matching and visible, but not the caller's to delete). Audited per document as `DOCUMENT_DELETE` with `bulk: true` |
 | POST | `/api/documents/{id}/archive/` · `/restore/` | manage | Archived documents leave search, answers and the default listing |
 | GET · POST | `/api/documents/{id}/versions/` | read · manage | POST multipart `file` → new immutable version, **202**; **409** if archived |
 | GET | `/api/documents/{id}/download/[?version=N]` | read | Original bytes; the version is recorded on the audit row. **403** for a version the scanner quarantined, except to a system admin |

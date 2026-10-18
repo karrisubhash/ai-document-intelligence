@@ -1,13 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { api } from "../api/client";
+import { api, type DocumentQuery } from "../api/client";
 import { useDebouncedValue, usePolling, useResource } from "../api/hooks";
 import { DOCUMENT_STATUSES, DOCUMENT_TYPES } from "../api/types";
 import UploadDialog from "../components/UploadDialog";
 import {
   Badge,
   Button,
+  Dialog,
   EmptyState,
   ErrorState,
   PageHeader,
@@ -15,6 +16,7 @@ import {
   Skeleton,
   StatusBadge,
   useDocumentTitle,
+  useToast,
 } from "../components/ui";
 import { formatBytes, formatRelative } from "../lib/format";
 import { IN_FLIGHT, STATUS_LABEL, TYPE_LABEL } from "../lib/labels";
@@ -82,6 +84,58 @@ export default function DocumentsPage() {
   usePolling(documents.reload, anyInFlight);
 
   const filtered = Boolean(search || status || documentType || department || mine);
+
+  // Selection belongs to one listing: a different page, filter or sort
+  // starts empty, so nothing off-screen is ever deleted by surprise.
+  // `allMatching` widens it to every matching document, on every page.
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [allMatching, setAllMatching] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const listing = JSON.stringify([page, search, status, documentType, department, ordering, archived, mine]);
+  useEffect(() => {
+    setSelected(new Set());
+    setAllMatching(false);
+  }, [listing]);
+
+  const selectable = rows.filter((row) => row.can_manage);
+  const pageSelected = selectable.length > 0 && selectable.every((row) => selected.has(row.id));
+  const someSelected = selectable.some((row) => selected.has(row.id));
+  const showSelection = selectable.length > 0 || selected.size > 0;
+  const total = documents.data?.count ?? 0;
+
+  const toggle = (id: number, on: boolean) => {
+    setAllMatching(false);
+    setSelected((current) => {
+      const next = new Set(current);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const togglePage = (on: boolean) => {
+    setAllMatching(false);
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const row of selectable) {
+        if (on) next.add(row.id);
+        else next.delete(row.id);
+      }
+      return next;
+    });
+  };
+  const clearSelection = () => {
+    setSelected(new Set());
+    setAllMatching(false);
+  };
+
+  const filters: Omit<DocumentQuery, "page" | "ordering"> = {
+    search,
+    status,
+    document_type: documentType,
+    department,
+    archived,
+    owner: mine ? "me" : undefined,
+  };
 
   return (
     <div className="page">
@@ -215,11 +269,48 @@ export default function DocumentsPage() {
             : "Upload a regulation, policy, circular or form to make it searchable."}
         </EmptyState>
       ) : (
+        <>
+        {selected.size > 0 || allMatching ? (
+          <div className="bulk-bar" role="region" aria-label="Selected documents">
+            <span className="bulk-bar-count" aria-live="polite">
+              {allMatching
+                ? `All ${total} matching ${plural(total, "document")} selected`
+                : `${selected.size} selected`}
+            </span>
+            {!allMatching && total > selected.size ? (
+              <Button variant="ghost" size="sm" onClick={() => setAllMatching(true)}>
+                Select all {total} matching
+              </Button>
+            ) : null}
+            <Button variant="ghost" size="sm" onClick={clearSelection}>
+              Clear selection
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              className="bulk-bar-action"
+              onClick={() => setConfirmingDelete(true)}
+            >
+              {allMatching ? "Delete all" : "Delete selected"}
+            </Button>
+          </div>
+        ) : null}
         <div className="table-wrap" aria-busy={documents.loading}>
           <table className="table">
             <caption className="visually-hidden">Documents</caption>
             <thead>
               <tr>
+                {showSelection ? (
+                  <th scope="col" className="table-select">
+                    <SelectBox
+                      label="Select all on this page"
+                      checked={allMatching || pageSelected}
+                      indeterminate={!allMatching && someSelected && !pageSelected}
+                      disabled={selectable.length === 0}
+                      onChange={togglePage}
+                    />
+                  </th>
+                ) : null}
                 <th scope="col">Title</th>
                 <th scope="col">Type</th>
                 <th scope="col">Department</th>
@@ -230,7 +321,18 @@ export default function DocumentsPage() {
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.id}>
+                <tr key={row.id} className={selected.has(row.id) || (allMatching && row.can_manage) ? "selected" : undefined}>
+                  {showSelection ? (
+                    <td className="table-select">
+                      <SelectBox
+                        label={`Select ${row.title}`}
+                        checked={row.can_manage && (allMatching || selected.has(row.id))}
+                        disabled={!row.can_manage}
+                        title={row.can_manage ? undefined : "You may not delete this document"}
+                        onChange={(on) => toggle(row.id, on)}
+                      />
+                    </td>
+                  ) : null}
                   <td>
                     <Link to={`/documents/${row.id}`} className="table-title">
                       {row.title}
@@ -256,6 +358,7 @@ export default function DocumentsPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {documents.data ? (
@@ -274,6 +377,209 @@ export default function DocumentsPage() {
           navigate(`/documents/${document.id}`);
         }}
       />
+
+      <BulkDeleteDialog
+        open={confirmingDelete}
+        target={allMatching ? { all: true, count: total, filters } : { ids: [...selected] }}
+        someNotManageable={rows.some((row) => !row.can_manage)}
+        onClose={() => setConfirmingDelete(false)}
+        onDone={(deleted) => {
+          setConfirmingDelete(false);
+          setSelected((current) => {
+            const next = new Set(current);
+            for (const id of deleted) next.delete(id);
+            return next;
+          });
+          setAllMatching(false);
+          // Deleting can empty the page being looked at.
+          if (page > 1 && deleted.length > 0) update({ page: "" });
+          else documents.reload();
+        }}
+      />
     </div>
+  );
+}
+
+function plural(count: number, word: string) {
+  return count === 1 ? word : `${word}s`;
+}
+
+function SelectBox({
+  label,
+  checked,
+  indeterminate = false,
+  disabled,
+  title,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onChange: (checked: boolean) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  // Only settable as a property - there is no indeterminate attribute.
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="select-box"
+      aria-label={label}
+      title={title}
+      checked={checked}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.checked)}
+    />
+  );
+}
+
+type DeleteTarget =
+  | { ids: number[] }
+  | { all: true; count: number; filters: Omit<DocumentQuery, "page" | "ordering"> };
+
+/** What the server takes per request; larger selections are sent in batches. */
+const BATCH = 100;
+const CONFIRM_WORD = "DELETE";
+
+function BulkDeleteDialog({
+  open,
+  target,
+  someNotManageable,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  target: DeleteTarget;
+  someNotManageable: boolean;
+  onClose: () => void;
+  onDone: (deleted: number[]) => void;
+}) {
+  const toast = useToast();
+  const [typed, setTyped] = useState("");
+  const [pending, setPending] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<unknown>(null);
+
+  useEffect(() => {
+    if (open) {
+      setTyped("");
+      setProgress(0);
+      setError(null);
+    }
+  }, [open]);
+
+  const all = "all" in target;
+  const count = all ? target.count : target.ids.length;
+  const noun = plural(count, "document");
+  const armed = !all || typed.trim().toUpperCase() === CONFIRM_WORD;
+
+  const run = async () => {
+    setPending(true);
+    setError(null);
+    const deleted: number[] = [];
+    let refused = 0;
+    try {
+      if (all) {
+        // The server deletes a bounded batch per request and says how many
+        // still match; stop too if a round deletes nothing, so a document
+        // that keeps failing cannot spin this forever.
+        for (;;) {
+          const result = await api.bulkDeleteDocuments({ all: true, filters: target.filters });
+          deleted.push(...result.deleted);
+          setProgress(deleted.length);
+          refused = result.skipped ?? 0;
+          if (!result.remaining || result.deleted.length === 0) break;
+        }
+      } else {
+        for (let start = 0; start < target.ids.length; start += BATCH) {
+          const result = await api.bulkDeleteDocuments({
+            ids: target.ids.slice(start, start + BATCH),
+          });
+          deleted.push(...result.deleted);
+          setProgress(deleted.length);
+          refused += result.forbidden.length;
+        }
+      }
+    } catch (caught) {
+      setError(caught);
+      setPending(false);
+      if (deleted.length > 0) {
+        toast(`Deleted ${deleted.length} ${plural(deleted.length, "document")} before the error.`, "warning");
+      }
+      return;
+    }
+    setPending(false);
+
+    if (deleted.length === 0 && refused > 0) {
+      toast("Nothing was deleted: you may not delete these documents.", "warning");
+    } else {
+      const left = refused
+        ? ` ${refused} you may not delete ${refused === 1 ? "was" : "were"} left in place.`
+        : "";
+      toast(`Deleted ${deleted.length} ${plural(deleted.length, "document")}.${left}`, refused ? "warning" : "success");
+    }
+    onDone(deleted);
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onClose={() => {
+        if (!pending) onClose();
+      }}
+      title={all ? `Delete all ${count} matching ${noun}?` : `Delete ${count} ${noun}?`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={run} loading={pending} disabled={!armed}>
+            {all ? "Delete all permanently" : "Delete permanently"}
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p>
+          {count === 1 ? "The document is" : "Each document is"} removed permanently, with every
+          version, its extracted text, its search index and its files. This cannot be undone.
+        </p>
+        {all ? (
+          <p>
+            This includes every document matching the current search and filters, on every page -
+            not only the ones shown.
+          </p>
+        ) : null}
+        {all && someNotManageable ? (
+          <p className="muted">Documents you may not delete are skipped.</p>
+        ) : null}
+        <p className="muted">To take documents out of search without losing them, archive them instead.</p>
+        {all ? (
+          <label className="field">
+            <span className="field-label">Type {CONFIRM_WORD} to confirm</span>
+            <input
+              className="input"
+              value={typed}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={pending}
+              onChange={(event) => setTyped(event.target.value)}
+            />
+          </label>
+        ) : null}
+        {pending && progress > 0 ? (
+          <p role="status">
+            Deleted {progress} of {count}…
+          </p>
+        ) : null}
+        {error ? <ErrorState error={error} title="Deleting stopped" /> : null}
+      </div>
+    </Dialog>
   );
 }

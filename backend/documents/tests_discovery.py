@@ -704,6 +704,8 @@ class ResponseShapeTests(DiscoveryTestCase):
                 "current_version",
                 "is_archived",
                 "archived_at",
+                # Added with bulk delete: which rows the caller may select.
+                "can_manage",
                 "created_at",
                 "updated_at",
             },

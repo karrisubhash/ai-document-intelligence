@@ -1010,6 +1010,49 @@ textarea.input {
   width: auto;
 }
 
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: var(--radius);
+}
+
+.bulk-bar-count {
+  font-size: 14px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.bulk-bar-action {
+  margin-left: auto;
+}
+
+.table .table-select {
+  width: 1%;
+  padding-right: 0;
+}
+
+.select-box {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.select-box:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.table tbody tr.selected {
+  background: var(--accent-soft);
+}
+
 .table-wrap {
   overflow-x: auto;
   background: var(--surface);
