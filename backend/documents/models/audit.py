@@ -59,6 +59,9 @@ class AuditLog(models.Model):
     # before it was deleted" had no answer. Kept in step with department
     # renames by accounts.services.rename_department.
     #
+    # A collection row has no document, and document_department holds the
+    # collection's department instead (record_event's subject_department).
+    #
     # db_default, not just default: during an upgrade the previous release
     # keeps serving after `migrate` commits, and its INSERTs do not name
     # this column. With a Python-only default each of them violated NOT

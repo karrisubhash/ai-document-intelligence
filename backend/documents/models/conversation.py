@@ -59,7 +59,10 @@ class Message(models.Model):
     support_ratio = models.FloatField(default=0.0)
 
     model_name = models.CharField(max_length=100, blank=True, default="")
-    model_version = models.CharField(max_length=50, blank=True, default="")
+    # "provider/model" for hosted answerers, and OpenRouter-style ids are
+    # long on their own ("nousresearch/deephermes-3-llama-3-8b-preview:free"):
+    # at 50 characters every turn such a model answered failed to save.
+    model_version = models.CharField(max_length=200, blank=True, default="")
     # Whether the answer was generated or extracted verbatim. A reader
     # should not have to guess which kind of answer they are looking at.
     generative = models.BooleanField(default=False)

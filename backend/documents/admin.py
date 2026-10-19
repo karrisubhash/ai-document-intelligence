@@ -197,6 +197,12 @@ class AuditLogAdmin(DepartmentScopedAdmin):
     def has_change_permission(self, request, obj=None):
         return False
 
+    # Nor deleted: a trail anyone with the admin open can prune - one row,
+    # or every row through "delete selected" - is no evidence of what they
+    # did. Nothing in the application deletes audit rows.
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 class ExtractedFieldInline(admin.TabularInline):
     model = ExtractedField

@@ -70,6 +70,10 @@ class CollectionViewSet(viewsets.ModelViewSet):
             user=self.request.user,
             action=action,
             result=AuditLog.Result.ALLOWED,
+            # A system administrator, or a creator who has since moved, is
+            # not a member of the department: without this its admin never
+            # saw them change the department's collection.
+            subject_department=collection.department,
             collection_id=collection.pk,
             collection=collection.name,
             **metadata,

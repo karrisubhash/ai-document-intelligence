@@ -353,7 +353,7 @@ class FigureAbstentionTests(TestCase):
             "q",
             engine.Abstention.UNGROUNDED,
             0.0,
-            retrieved_document_ids=[self.document.id],
+            relevant_document_ids=[self.document.id],
         )
 
         self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
@@ -364,11 +364,49 @@ class FigureAbstentionTests(TestCase):
 
         answer = engine._abstain(
             "q",
-            engine.Abstention.NO_RELEVANT_PASSAGES,
+            engine.Abstention.MODEL_ABSTAINED,
             0.0,
-            retrieved_document_ids=[self.document.id],
+            relevant_document_ids=[self.document.id],
         )
         self.assertEqual(answer.abstention_reason, engine.Abstention.MAYBE_IN_A_FIGURE)
+
+    def ask(self, **options):
+        from documents.rag import engine
+
+        answer = engine.ask(self.owner, "enrolment by year", **options)
+        self.assertIn(self.document.id, answer.retrieved_document_ids)
+        return answer
+
+    def test_a_document_judged_irrelevant_is_not_where_the_answer_is(self):
+        """Semantic retrieval returns its full depth for almost any
+        question, and every reranked document used to count: a logo in any
+        of them turned "nothing relevant" into MAYBE_IN_A_FIGURE, which
+        chat's general-knowledge reply may not replace."""
+        from documents.rag import engine, general
+
+        answer = self.ask(relevance_floor=1.01)
+
+        self.assertEqual(
+            answer.abstention_reason, engine.Abstention.NO_RELEVANT_PASSAGES
+        )
+        self.assertFalse(any("Enrolment Chart" in note for note in answer.notes))
+        self.assertIn(answer.abstention_reason, general.FALLBACK_REASONS)
+
+    def test_a_relevant_document_with_a_figure_still_relabels(self):
+        from unittest import mock
+
+        from documents.rag import engine
+        from documents.rag.llm import ABSTENTION_TEXT, LLMResponse
+
+        found_nothing = LLMResponse(
+            text=ABSTENTION_TEXT, abstained=True, model_name="extractive"
+        )
+        answerer = mock.Mock(answer=mock.Mock(return_value=found_nothing))
+        with mock.patch.object(engine, "get_answerer", return_value=answerer):
+            answer = self.ask(relevance_floor=0.0)
+
+        self.assertEqual(answer.abstention_reason, engine.Abstention.MAYBE_IN_A_FIGURE)
+        self.assertTrue(any("Enrolment Chart" in note for note in answer.notes))
 
     def test_no_documents_means_no_hint_to_give(self):
         from documents.rag import engine

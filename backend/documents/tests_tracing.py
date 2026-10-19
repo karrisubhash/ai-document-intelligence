@@ -99,12 +99,66 @@ class RequestSpanHookTests(SimpleTestCase):
         tracing._with_request_id(span, None, {"X-Request-ID": "abc123"})
         self.assertEqual(span.attributes["adi.request_id"], "abc123")
 
+    def test_the_request_id_is_found_before_the_header_is_set(self):
+        # Inside ObservabilityMiddleware, the hook sees the response before
+        # the middleware has added X-Request-ID to it.
+        from documents.observability.context import reset_request_id, set_request_id
+
+        span = self.recording_span()
+        set_request_id("from-context")
+        self.addCleanup(reset_request_id)
+        tracing._with_request_id(span, None, {})
+        self.assertEqual(span.attributes["adi.request_id"], "from-context")
+
+    def test_the_tracing_middleware_goes_inside_the_observability_one(self):
+        """At the instrumentation's default, position 0, its Host check ran
+        ahead of the shortcut that serves /metrics and the health checks to
+        internal callers - every scrape and every healthcheck was a 400."""
+        from django.conf import settings
+
+        position = tracing._middleware_position(settings.MIDDLEWARE)
+        self.assertEqual(
+            settings.MIDDLEWARE[position - 1], tracing.OBSERVABILITY_MIDDLEWARE
+        )
+
     def test_probes_are_not_traced(self):
         patterns = [re.compile(p) for p in tracing.UNTRACED_URLS.split(",")]
         for url in ("http://h/metrics", "http://h/health/", "http://h/ready/"):
             with self.subTest(url=url):
                 self.assertTrue(any(p.search(url) for p in patterns))
         self.assertFalse(any(p.search("http://h/api/v1/documents/") for p in patterns))
+
+
+@skipUnless(OTEL_INSTALLED, "the optional OpenTelemetry layer is not installed")
+class TracedProbeTests(SimpleTestCase):
+    def test_a_scrape_by_container_ip_still_answers_with_tracing_on(self):
+        """Prometheus scrapes each replica by its IP, which ALLOWED_HOSTS
+        does not list. With tracing on, that was a 400 on every scrape."""
+        from django.conf import settings
+        from django.test import Client, override_settings
+        from opentelemetry.instrumentation.celery import CeleryInstrumentor
+        from opentelemetry.instrumentation.django import DjangoInstrumentor
+        from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
+
+        with (
+            override_settings(
+                MIDDLEWARE=list(settings.MIDDLEWARE),
+                ALLOWED_HOSTS=["adi.example.edu"],
+            ),
+            mock.patch.dict(
+                os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"}
+            ),
+            mock.patch.object(tracing, "_tracer", None),
+        ):
+            try:
+                self.assertTrue(tracing.configure_tracing("test"))
+                response = Client().get("/metrics", HTTP_HOST="172.18.0.5:8000")
+            finally:
+                DjangoInstrumentor().uninstrument()
+                CeleryInstrumentor().uninstrument()
+                PsycopgInstrumentor().uninstrument()
+
+        self.assertEqual(response.status_code, 200)
 
 
 @skipUnless(OTEL_INSTALLED, "the optional OpenTelemetry layer is not installed")

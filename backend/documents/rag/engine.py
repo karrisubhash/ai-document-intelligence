@@ -201,6 +201,13 @@ def _figure_hints(document_ids) -> list:
     hint about a document you are not allowed to know exists is still a
     disclosure.
 
+    Callers pass only documents with a passage above the relevance floor.
+    Semantic retrieval returns its full depth for almost any question, so
+    "every reranked document" included ones the reranker had just judged
+    unrelated - and on a corpus with a logo in any of them, nearly every
+    unanswerable question became MAYBE_IN_A_FIGURE, which chat's
+    general-knowledge reply is not allowed to replace.
+
     Restricted to figures with no description. A described figure is
     readable, and its text would have been retrievable in the ordinary way.
     """
@@ -267,11 +274,15 @@ def _figure_hints(document_ids) -> list:
 
 def _abstain(question, reason, started, **extra) -> RagAnswer:
     notes = list(extra.pop("notes", []))
+    # Documents with a passage above the relevance floor - the only ones
+    # whose figures are evidence of where the answer is. Not stored on the
+    # answer: retrieved_document_ids already records the ranking.
+    relevant_document_ids = extra.pop("relevant_document_ids", None) or []
 
     # Checked for every abstention that had documents to abstain about, so
     # a new abstention path added later cannot quietly lose the hint.
     if reason not in (Abstention.NO_QUERY, Abstention.NO_DOCUMENTS):
-        hints = _figure_hints(extra.get("retrieved_document_ids") or [])
+        hints = _figure_hints(relevant_document_ids)
         if hints:
             notes += hints
             # UNGROUNDED means an answer WAS produced and failed verification
@@ -381,6 +392,8 @@ def _ask(
     relevant = [item for item in reranked if item.score >= floor]
 
     if not relevant:
+        # No relevant_document_ids: nothing passed the floor, so no figure
+        # here is evidence of anything.
         best = reranked[0].score if reranked else 0.0
         return _abstain(
             question,
@@ -425,6 +438,7 @@ def _ask(
             started,
             retrieved=len(retrieval.hits),
             retrieved_document_ids=ranked_document_ids(reranked),
+            relevant_document_ids=ranked_document_ids(relevant),
             reranked=len(reranked),
             reranker_name=reranker.name,
             semantic_retrieval=retrieval.semantic,
@@ -489,6 +503,7 @@ def _ask(
             Abstention.ANSWERER_FAILED if failed else Abstention.MODEL_ABSTAINED,
             started,
             notes=notes,
+            relevant_document_ids=ranked_document_ids(relevant),
             **common,
         )
 
@@ -511,6 +526,7 @@ def _ask(
             support_ratio=report.support_ratio,
             grounding_failures=list(report.failures),
             notes=notes,
+            relevant_document_ids=ranked_document_ids(relevant),
             **common,
         )
 
