@@ -144,6 +144,13 @@ that re-asked the previous turn.
   that reranks. Budget web workers accordingly, or use a smaller cross-encoder
   (`RAG_RERANKER_LOCAL_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2`, ~90 MB) after measuring
   its effect with the benchmark.
+- **Rerank cost.** The cross-encoder's forward pass is nearly all of a question's CPU time.
+  Each distinct passage is scored once per question, and each worker process remembers up
+  to `RAG_RERANKER_LOCAL_CACHE_SIZE` (4,096) scored pairs, per user, so a question a user
+  asks again of the same worker reranks in milliseconds; `0` turns that off. Scores are
+  never shared between users: a remembered one makes an answer seconds faster, which
+  would tell one user what another had asked. Measured in
+  [performance](../operations/performance.md#chat-latency-on-the-development-stack).
 - **Telemetry.** Per-stage timings (`retrieval`, `rerank`, `generation`, `grounding`) are
   returned with every answer and exported as `adi_rag_stage_duration_seconds{stage}`;
   answerer latency as `adi_llm_duration_seconds{model}`; tokens and characters per model;

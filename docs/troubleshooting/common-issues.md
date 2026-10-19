@@ -107,4 +107,9 @@ a 13.8 s answer ([performance](../operations/performance.md)).
 **Options.** `RAG_RERANKER_LOCAL_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2` reranks several
 times faster and retrieved better on the evaluation benchmark, at the cost of answering
 slightly fewer questions ([evaluation](../evaluation/README.md#calibration)); a GPU
-(`RAG_RERANKER_LOCAL_DEVICE`); or a smaller `RAG_RETRIEVAL_DEPTH` (not measured).
+(`RAG_RERANKER_LOCAL_DEVICE`); or a smaller `RAG_RETRIEVAL_DEPTH`, which should shorten
+reranking roughly in proportion (estimated, not measured) but changes the passages answers
+are built from: at 10, 6 of 20 measured answers would have been built from different ones
+([performance](../operations/performance.md#chat-latency-on-the-development-stack)).
+A question a user asks again of the same worker process does not pay for reranking twice:
+each process remembers, per user, the scores it computed (`RAG_RERANKER_LOCAL_CACHE_SIZE`).
