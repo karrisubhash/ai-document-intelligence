@@ -62,22 +62,25 @@ groups:
         annotations:
           summary: "Queue {{ $labels.queue }} has held over 100 tasks for 15 minutes"
 
-      # What is worth knowing about `index` is not its length but whether it
-      # drains: non-empty for the whole half hour and no shorter than half an
-      # hour ago means worker-index is up but not taking work. (ServiceDown
-      # covers worker-index being gone.) A trend over the window would fire
-      # for the first half hour of every large re-index, while the jump from
-      # zero is still inside it.
+      # What is worth knowing about `index` is not its length but whether
+      # worker-index makes progress: work waiting for the whole half hour
+      # and not one document indexed by worker-index in it means it is up
+      # but not taking work. (ServiceDown covers worker-index being gone.)
+      # Progress, not the queue's length: comparing the depth with half an
+      # hour ago fired on a busy worker whenever a second re-index was
+      # queued while the first drained, and a trend fires for the first half
+      # hour of every large re-index. `or vector(0)`: a worker-index that has
+      # indexed nothing since it started has no series yet.
+      # Tests: alerts.test.yml (promtool test rules).
       - alert: IndexQueueStalled
         expr: |
-          min by (queue) (min_over_time(adi_queue_depth{queue="index"}[30m])) > 0
-          and
-          max by (queue) (adi_queue_depth{queue="index"})
-            >= max by (queue) (adi_queue_depth{queue="index"} offset 30m)
+          (min by (queue) (min_over_time(adi_queue_depth{queue="index"}[30m])) > 0)
+          and on ()
+          ((sum(increase(adi_documents_indexed_total{service="worker-index"}[30m])) or vector(0)) == 0)
         for: 5m
         labels: {severity: warning}
         annotations:
-          summary: "Queue {{ $labels.queue }} has not drained in 30 minutes"
+          summary: "Queue {{ $labels.queue }} held work for 30 minutes and worker-index indexed nothing"
 
       - alert: PipelineFailureRate
         expr: |

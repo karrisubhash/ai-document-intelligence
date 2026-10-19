@@ -70,6 +70,19 @@ jobs:
       - name: Formatting
         run: ruff format --check backend ai
 
+      - name: Prometheus configuration and alert rules
+        # In the image the stack runs (docker-compose.prod.yml; keep the tag
+        # in step). The unit tests replay queue scenarios against the rules:
+        # before them, two rules could not fire and one paged on a busy
+        # worker, and nothing noticed.
+        run: |
+          docker run --rm -v "$PWD/infrastructure/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v2.54.1 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/infrastructure/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v2.54.1 \
+            test rules /etc/prometheus/alerts.test.yml
+
   tests:
     name: Tests (unit + integration)
     runs-on: ubuntu-latest

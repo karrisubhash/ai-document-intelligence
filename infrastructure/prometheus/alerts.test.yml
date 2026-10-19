@@ -1,0 +1,134 @@
+# Unit tests for the queue alerts in alerts.yml:
+#
+#   promtool test rules infrastructure/prometheus/alerts.test.yml
+#
+# (CI's lint job runs it in the prom/prometheus image the stack uses.)
+# Every scenario starts with the queue empty, as on a running deployment: the
+# rules look back 30 minutes, and a series that starts mid-backlog would make
+# that window hold only the backlog. Samples are one minute apart.
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # The case the queue-length rule got wrong: a second re-index queued while
+  # the first still drains. The queue is longer than half an hour earlier,
+  # but worker-index indexes 50 documents a minute throughout.
+  - name: a second re-index queued during the first does not fire
+    interval: 1m
+    input_series:
+      - series: 'adi_queue_depth{queue="index", service="worker-index"}'
+        values: '0x30 3000-50x25 3700-50x60'
+      - series: 'adi_documents_indexed_total{embedded="True", service="worker-index"}'
+        values: '0x30 0+50x86'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+      - eval_time: 110m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+
+  - name: one re-index draining steadily does not fire
+    interval: 1m
+    input_series:
+      - series: 'adi_queue_depth{queue="index", service="worker-index"}'
+        values: '0x30 3000-50x60 0x30'
+      - series: 'adi_documents_indexed_total{embedded="True", service="worker-index"}'
+        values: '0x30 0+50x60 3000x30'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+      - eval_time: 115m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+
+  # Up but not taking work. Two processes report the depth (it is the
+  # broker's number, so every worker reads the same one); the rule collapses
+  # them into one alert. Pending from 61m, when the window first holds no
+  # empty sample; firing after `for: 5m`.
+  - name: a wedged worker-index fires once the backlog has sat for 30 minutes
+    interval: 1m
+    input_series:
+      - series: 'adi_queue_depth{queue="index", service="worker-index"}'
+        values: '0x30 500x60'
+      - series: 'adi_queue_depth{queue="index", service="worker"}'
+        values: '0x30 500x60'
+      - series: 'adi_documents_indexed_total{embedded="True", service="worker-index"}'
+        values: '120x90'
+      # Uploads indexed by the ingest worker are not worker-index's progress.
+      - series: 'adi_documents_indexed_total{embedded="True", service="worker"}'
+        values: '0+3x90'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: IndexQueueStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              queue: index
+            exp_annotations:
+              summary: "Queue index held work for 30 minutes and worker-index indexed nothing"
+
+  # A worker-index that has indexed nothing since it started exports no
+  # counter at all.
+  - name: a stall with no worker-index counter yet fires
+    interval: 1m
+    input_series:
+      - series: 'adi_queue_depth{queue="index", service="worker-index"}'
+        values: '0x30 500x60'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: IndexQueueStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              queue: index
+            exp_annotations:
+              summary: "Queue index held work for 30 minutes and worker-index indexed nothing"
+
+  - name: a short re-index never fires
+    interval: 1m
+    input_series:
+      - series: 'adi_queue_depth{queue="index", service="worker-index"}'
+        values: '0x30 200-10x20 0x40'
+      - series: 'adi_documents_indexed_total{embedded="True", service="worker-index"}'
+        values: '0x30 0+10x20 200x40'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: IndexQueueStalled
+        exp_alerts: []
+
+  # Uploads only: a long `index` queue is a re-index, not people waiting.
+  - name: a backlog of uploads fires, a long index queue does not
+    interval: 1m
+    input_series:
+      - series: 'adi_queue_depth{queue="ingest", service="worker"}'
+        values: '0x30 150x30'
+      - series: 'adi_queue_depth{queue="index", service="worker-index"}'
+        values: '0x30 3000-50x30'
+      - series: 'adi_documents_indexed_total{embedded="True", service="worker-index"}'
+        values: '0x30 0+50x30'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: IngestQueueBacklog
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: IngestQueueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              queue: ingest
+            exp_annotations:
+              summary: "Queue ingest has held over 100 tasks for 15 minutes"
