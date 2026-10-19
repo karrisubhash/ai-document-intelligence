@@ -15,6 +15,8 @@ A cross-encoder is a settings change.
 
 import math
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -83,6 +85,29 @@ class Reranker(Protocol):
     semantic: bool
 
     def rerank(self, query: str, candidates: list) -> list: ...
+
+
+# Whose earlier questions a remembered relevance score may answer. A reranker
+# that remembers scores (local_rerank) keys them by this as well as by query
+# and passage, and remembers nothing while it is unset. Shared between users,
+# a remembered score is a timing signal: an answer seconds faster than usual
+# tells whoever asked that someone else recently asked the very same thing -
+# and a question is user content this system otherwise never records.
+_cache_scope = ContextVar("rerank_cache_scope", default=None)
+
+
+@contextmanager
+def cache_scope(scope):
+    """Let rerankers inside the block reuse scores computed for `scope`."""
+    token = _cache_scope.set(None if scope is None else str(scope))
+    try:
+        yield
+    finally:
+        _cache_scope.reset(token)
+
+
+def current_cache_scope():
+    return _cache_scope.get()
 
 
 def _terms(text: str) -> list:

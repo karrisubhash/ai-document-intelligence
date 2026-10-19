@@ -75,17 +75,30 @@ out-of-memory kill degrades result ORDERING, which is worth far less than
 taking search down. The degradation is recorded in every result's signals,
 because a quietly degraded ranking that does not say so is worse than a
 slow one.
+
+A PAIR IS SCORED ONCE PER USER AND PROCESS, within a bounded cache. The
+forward pass is the whole cost of this step, and the same question is asked
+again more often than it sounds: 7 of the 19 questions asked on the
+development stack from 10 to 17 October repeated an earlier one. A model in
+eval mode returns the same score for the same pair, so a remembered score is
+the score. Remembered per USER (reranking.cache_scope), never across users:
+a shared cache would answer one user's question seconds faster because
+another user asked it first, and that difference is visible. A caller that
+sets no scope gets no caching at all.
 """
 
+import hashlib
 import logging
 import math
 import threading
 import time
+from collections import OrderedDict
 
 from django.conf import settings
 
 from documents.processing.model_cache import load_cached_first
 
+from . import reranking
 from .reranking import LexicalReranker, RerankedChunk
 
 logger = logging.getLogger("adi.rerank")
@@ -180,9 +193,75 @@ MAX_LENGTH = 512
 # a query needs. Past it the tail of the passage is dropped silently.
 MAX_PASSAGE_CHARS = 1_800
 
+# Scored pairs remembered per process (RAG_RERANKER_LOCAL_CACHE_SIZE; 0 turns
+# the cache off), across all users. About 200 questions' worth at the default
+# retrieval depth, in 743 KiB when full (measured with tracemalloc): an entry
+# is a 16-byte digest and a float, never the passage itself.
+DEFAULT_SCORE_CACHE_SIZE = 4096
+
 
 class LocalRerankUnavailable(RuntimeError):
     """sentence-transformers is missing, or the model will not load."""
+
+
+class _ScoreCache:
+    """Scores this model already produced, by (user, query, passage), least
+    recently used out first. Thread-safe: gunicorn's threads share it."""
+
+    def __init__(self, size: int):
+        self.size = max(0, size)
+        self._scores = OrderedDict()
+        self._model = None
+        self._forgotten = False
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(scope: str, query: str, text: str) -> bytes:
+        # Length-prefixed, so no scope/query/passage split can collide.
+        joined = f"{len(scope)}:{scope}{len(query)}:{query}{text}".encode()
+        return hashlib.blake2b(joined, digest_size=16).digest()
+
+    def _usable(self, model, scope) -> bool:
+        """Under the lock. Whether this call may read or write the cache."""
+        if model is not self._model:
+            # Scores belong to the model that produced them; a different one
+            # (a reload, or a test's stand-in) starts empty.
+            self._scores.clear()
+            self._model = model
+            self._forgotten = False
+        return bool(self.size) and scope is not None and not self._forgotten
+
+    def lookup(self, model, scope, pairs) -> list:
+        """A score or None per pair, in order."""
+        keys = [self._key(scope or "", query, text) for query, text in pairs]
+        with self._lock:
+            if not self._usable(model, scope):
+                return [None] * len(pairs)
+            found = []
+            for key in keys:
+                score = self._scores.get(key)
+                if score is not None:
+                    self._scores.move_to_end(key)
+                found.append(score)
+        return found
+
+    def store(self, model, scope, pairs, scores) -> None:
+        keys = [self._key(scope or "", query, text) for query, text in pairs]
+        with self._lock:
+            if not self._usable(model, scope):
+                return
+            for key, score in zip(keys, scores, strict=True):
+                self._scores[key] = score
+                self._scores.move_to_end(key)
+            while len(self._scores) > self.size:
+                self._scores.popitem(last=False)
+
+    def forget(self, model) -> None:
+        """Drop everything `model` scored, and remember nothing more from it."""
+        with self._lock:
+            if model is self._model:
+                self._scores.clear()
+                self._forgotten = True
 
 
 def _sigmoid(value: float) -> float:
@@ -240,6 +319,11 @@ class LocalCrossEncoderReranker:
         self._fallback = LexicalReranker()
         self._model = None
         self._lock = threading.Lock()
+
+        size = getattr(settings, "RAG_RERANKER_LOCAL_CACHE_SIZE", None)
+        self._scores = _ScoreCache(
+            DEFAULT_SCORE_CACHE_SIZE if size is None else int(size)
+        )
 
     # --- model -----------------------------------------------------------
 
@@ -432,54 +516,33 @@ class LocalCrossEncoderReranker:
         repaired = False
 
         if pairs:
-            # A list of 2-tuples, never a bare ("query", "passage"): given a
-            # first element that is not itself a sequence of two, predict()
-            # reads the whole argument as ONE pair and returns a scalar,
-            # which then has no length to check and no order to preserve.
-            raw = model.predict(
-                pairs,
-                batch_size=self.batch_size,
-                # Defaults to None, which resolves to "on if logging is at
-                # INFO or DEBUG" - that is, a tqdm bar sprayed through the
-                # gunicorn logs on every single question asked.
-                show_progress_bar=False,
-                convert_to_numpy=True,
-            )
+            # Only the pairs not yet scored for this user reach the model.
+            scope = reranking.current_cache_scope()
+            scores = self._scores.lookup(model, scope, pairs)
+            unscored = [
+                position for position, score in enumerate(scores) if score is None
+            ]
+            if unscored:
+                fresh, repaired = self._predict(model, [pairs[p] for p in unscored])
+                if repaired:
+                    # The model emits logits. Nothing it scores can be
+                    # remembered - a later answer would carry repaired scores
+                    # without the flag - and scores remembered from it before
+                    # (in range, so taken as they came) are on the other
+                    # scale. Forget them, and score the whole set in one pass
+                    # so this ranking compares like with like.
+                    self._scores.forget(model)
+                    if len(unscored) < len(pairs):
+                        scores, _ = self._predict(model, pairs)
+                    else:
+                        scores = fresh
+                else:
+                    for position, score in zip(unscored, fresh, strict=True):
+                        scores[position] = score
+                    self._scores.store(
+                        model, scope, [pairs[p] for p in unscored], fresh
+                    )
 
-            scores = raw.tolist() if hasattr(raw, "tolist") else list(raw)
-            if not isinstance(scores, list) or len(scores) != len(pairs):
-                raise LocalRerankUnavailable(
-                    f"{self.model_id} returned {type(raw).__name__} for "
-                    f"{len(pairs)} pairs, which is not one score per pair."
-                )
-
-            # numpy float32 is not a float as far as round() and the JSON
-            # encoder behind the response are concerned.
-            scores = [float(value) for value in scores]
-
-            # The second half of the activation contract. _construct()
-            # catches a keyword that has been RENAMED, because that raises
-            # TypeError - but a version that accepted the argument and
-            # ignored it would raise nothing at all, and the only visible
-            # symptom would be a relevance floor that had quietly stopped
-            # being one. Comparing two floats per candidate is cheap enough
-            # that there is no reason to take the risk.
-            if any(value < 0.0 or value > 1.0 for value in scores):
-                repaired = True
-                logger.warning(
-                    "rerank.activation_repaired",
-                    extra={
-                        "model": self.model_id,
-                        "detail": (
-                            "scores arrived outside [0, 1] despite an "
-                            "explicit sigmoid; applying it here instead"
-                        ),
-                    },
-                )
-                scores = [_sigmoid(value) for value in scores]
-
-            # predict() sorts by length internally and un-sorts before
-            # returning, so this is the input order.
             by_index = {index: scores[position] for index, position in pair_of.items()}
 
         scored = []
@@ -523,3 +586,53 @@ class LocalCrossEncoderReranker:
         # relevance.
         scored.sort(key=lambda r: (-r.score, -r.retrieval_score, r.chunk.id))
         return scored
+
+    def _predict(self, model, pairs: list) -> tuple:
+        """(one score in [0, 1] per pair, in order; whether they were repaired)."""
+        # A list of 2-tuples, never a bare ("query", "passage"): given a
+        # first element that is not itself a sequence of two, predict()
+        # reads the whole argument as ONE pair and returns a scalar, which
+        # then has no length to check and no order to preserve.
+        raw = model.predict(
+            pairs,
+            batch_size=self.batch_size,
+            # Defaults to None, which resolves to "on if logging is at INFO
+            # or DEBUG" - that is, a tqdm bar sprayed through the gunicorn
+            # logs on every single question asked.
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )
+
+        scores = raw.tolist() if hasattr(raw, "tolist") else list(raw)
+        if not isinstance(scores, list) or len(scores) != len(pairs):
+            raise LocalRerankUnavailable(
+                f"{self.model_id} returned {type(raw).__name__} for "
+                f"{len(pairs)} pairs, which is not one score per pair."
+            )
+
+        # numpy float32 is not a float as far as round() and the JSON encoder
+        # behind the response are concerned.
+        scores = [float(value) for value in scores]
+
+        # The second half of the activation contract. _construct() catches a
+        # keyword that has been RENAMED, because that raises TypeError - but
+        # a version that accepted the argument and ignored it would raise
+        # nothing at all, and the only visible symptom would be a relevance
+        # floor that had quietly stopped being one. Comparing two floats per
+        # candidate is cheap enough that there is no reason to take the risk.
+        if any(value < 0.0 or value > 1.0 for value in scores):
+            logger.warning(
+                "rerank.activation_repaired",
+                extra={
+                    "model": self.model_id,
+                    "detail": (
+                        "scores arrived outside [0, 1] despite an explicit "
+                        "sigmoid; applying it here instead"
+                    ),
+                },
+            )
+            return [_sigmoid(value) for value in scores], True
+
+        # predict() sorts by length internally and un-sorts before
+        # returning, so this is the input order.
+        return scores, False
