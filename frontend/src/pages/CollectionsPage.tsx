@@ -10,12 +10,15 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   Field,
   PageHeader,
+  SelectBox,
   Skeleton,
   errorMessage,
+  plural,
   useDocumentTitle,
   useToast,
 } from "../components/ui";
@@ -25,8 +28,20 @@ import {
  * narrowed to. A collection never widens access - the server applies each
  * reader's document permissions first and the collection after.
  */
-function CollectionCard({ collection, onChanged }: { collection: Collection; onChanged: () => void }) {
+function CollectionCard({
+  collection,
+  selected,
+  onSelect,
+  onChanged,
+}: {
+  collection: Collection;
+  selected: boolean;
+  onSelect: (on: boolean) => void;
+  onChanged: () => void;
+}) {
   const toast = useToast();
+  // Members ticked for "Remove selected" - removal only, never deletion.
+  const [picked, setPicked] = useState<Set<number>>(() => new Set());
   // Candidates for "Add": the reader's documents in this collection's
   // department that are not members yet. The first page is enough for a
   // pilot-sized department; the server re-checks every id anyway.
@@ -52,12 +67,33 @@ function CollectionCard({ collection, onChanged }: { collection: Collection; onC
     const result = await change.run(ids, add);
     if (result.ok) {
       setPick("");
+      if (!add) {
+        setPicked((current) => {
+          const next = new Set(current);
+          for (const id of ids) next.delete(id);
+          return next;
+        });
+      }
       onChanged();
     }
   };
+  const allPicked =
+    collection.documents.length > 0 && collection.documents.every((doc) => picked.has(doc.id));
+  const pickMember = (id: number, on: boolean) =>
+    setPicked((current) => {
+      const next = new Set(current);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   return (
     <Card
+      leading={
+        collection.can_manage ? (
+          <SelectBox label={`Select ${collection.name}`} checked={selected} onChange={onSelect} />
+        ) : null
+      }
       title={
         <>
           {collection.name} <Badge>{collection.document_count} documents</Badge>
@@ -83,11 +119,45 @@ function CollectionCard({ collection, onChanged }: { collection: Collection; onC
       }
     >
       {collection.description ? <p className="muted">{collection.description}</p> : null}
+      {collection.can_manage && collection.documents.length > 1 ? (
+        <div className="member-select-bar">
+          <SelectBox
+            label={`Select all documents in ${collection.name}`}
+            checked={allPicked}
+            indeterminate={picked.size > 0 && !allPicked}
+            onChange={(on) =>
+              setPicked(on ? new Set(collection.documents.map((doc) => doc.id)) : new Set())
+            }
+          />
+          <span className="small muted" aria-live="polite">
+            {picked.size ? `${picked.size} selected` : "Select documents to remove"}
+          </span>
+          {picked.size ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={change.pending}
+              onClick={() => void update([...picked], false)}
+            >
+              Remove selected
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {collection.documents.length ? (
         <ul className="row-list">
           {collection.documents.map((doc) => (
             <li key={doc.id} className="row-item">
-              <Link to={`/documents/${doc.id}`}>{doc.title}</Link>
+              <span className="member">
+                {collection.can_manage && collection.documents.length > 1 ? (
+                  <SelectBox
+                    label={`Select ${doc.title} in ${collection.name}`}
+                    checked={picked.has(doc.id)}
+                    onChange={(on) => pickMember(doc.id, on)}
+                  />
+                ) : null}
+                <Link to={`/documents/${doc.id}`}>{doc.title}</Link>
+              </span>
               {collection.can_manage ? (
                 <Button variant="ghost" size="sm" onClick={() => void update([doc.id], false)}>
                   Remove
@@ -158,6 +228,55 @@ export default function CollectionsPage() {
   };
 
   const list = collections.data?.results ?? [];
+
+  // Collections ticked for deletion. Every collection is loaded at once
+  // (api.collections pages through them), so "all" is simply every one
+  // shown that the user may delete.
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const toast = useToast();
+  const deletable = list.filter((collection) => collection.can_manage);
+  const chosen = deletable.filter((collection) => selected.has(collection.id));
+  const select = (id: number, on: boolean) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const deleteChosen = async () => {
+    setDeleting(true);
+    const ids = chosen.map((collection) => collection.id);
+    const deleted: number[] = [];
+    let refused = 0;
+    try {
+      for (let start = 0; start < ids.length; start += 100) {
+        const result = await api.bulkDeleteCollections({ ids: ids.slice(start, start + 100) });
+        deleted.push(...result.deleted);
+        refused += (result.forbidden ?? []).length;
+      }
+      const left = refused
+        ? ` ${refused} you may not delete ${refused === 1 ? "was" : "were"} left in place.`
+        : "";
+      toast(
+        `Deleted ${deleted.length} ${plural(deleted.length, "collection")}.${left}`,
+        refused ? "warning" : "success",
+      );
+      setConfirmingDelete(false);
+    } catch (caught) {
+      toast(errorMessage(caught), "danger");
+    } finally {
+      setDeleting(false);
+      setSelected((current) => {
+        const next = new Set(current);
+        for (const id of deleted) next.delete(id);
+        return next;
+      });
+      if (deleted.length) collections.reload();
+    }
+  };
 
   return (
     <div className="page">
@@ -236,11 +355,67 @@ export default function CollectionsPage() {
             : "A faculty member or department administrator can create one."}
         </EmptyState>
       ) : null}
+      {deletable.length > 1 || chosen.length > 0 ? (
+        <div
+          className={chosen.length ? "bulk-bar" : "bulk-bar bulk-bar-idle"}
+          role="region"
+          aria-label="Selected collections"
+        >
+          <SelectBox
+            label="Select all collections"
+            checked={chosen.length > 0 && chosen.length === deletable.length}
+            indeterminate={chosen.length > 0 && chosen.length < deletable.length}
+            onChange={(on) =>
+              setSelected(on ? new Set(deletable.map((collection) => collection.id)) : new Set())
+            }
+          />
+          <span className="bulk-bar-count" aria-live="polite">
+            {chosen.length ? `${chosen.length} selected` : "Select collections to delete"}
+          </span>
+          {chosen.length ? (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                Clear selection
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                className="bulk-bar-action"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                {chosen.length === deletable.length && deletable.length > 1 ? "Delete all" : "Delete selected"}
+              </Button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
       <div className="stack">
         {list.map((collection) => (
-          <CollectionCard key={collection.id} collection={collection} onChanged={collections.reload} />
+          <CollectionCard
+            key={collection.id}
+            collection={collection}
+            selected={selected.has(collection.id)}
+            onSelect={(on) => select(collection.id, on)}
+            onChanged={collections.reload}
+          />
         ))}
       </div>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title={`Delete ${chosen.length} ${plural(chosen.length, "collection")}?`}
+        confirmLabel="Delete permanently"
+        pending={deleting}
+        onClose={() => {
+          if (!deleting) setConfirmingDelete(false);
+        }}
+        onConfirm={() => void deleteChosen()}
+      >
+        <p>
+          {chosen.length === 1 ? "The collection is" : "The collections are"} removed. Their
+          documents are not deleted and stay in Documents, Search and Ask.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

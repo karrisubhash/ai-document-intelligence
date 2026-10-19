@@ -85,6 +85,7 @@ the caller is refused.
 | POST | `/api/chat/stream/` | Same request and the same turn, as Server-Sent Events: `delta {text}` while the model writes (provisional), `reset {}` (discard what was shown), then `done {…the /chat/ payload}` (authoritative) or `error {detail}`. Validation, throttling and conversation ownership fail as ordinary JSON 4xx before streaming starts. Extractive answers send only `done` |
 | GET | `/api/chat/conversations/` | The caller's conversations, newest first |
 | GET · PATCH · DELETE | `/api/chat/conversations/{id}/` | Owner only; PATCH `{title}` |
+| POST | `/api/chat/conversations/bulk-delete/` | Owner only. JSON `{"ids": [...]}` (≤100) or `{"all": true}` (every one of the caller's). **200** `{deleted, not_found}`; another user's id is `not_found` |
 | POST | `/api/messages/{id}/feedback/` | `{rating: HELPFUL \| NOT_HELPFUL \| INCORRECT, comment?}`; owner of the conversation only |
 | GET | `/api/evaluations/…` | Evaluation runs and per-case results, scoped by dataset department |
 
@@ -103,6 +104,7 @@ department and holds only that department's documents.
 | GET | `/api/collections/` | signed in | Own department's collections, plus any the caller created; system admins see all. Each has `documents` (`{id, title}`, only those the caller may read), `document_count`, `can_manage` |
 | POST | `/api/collections/` | system admin, department admin, faculty (`capabilities.create_collections`) | `{name, description?}`; `department` honoured for system admins only, defaulting to their own (**400** if they have none). **201**; duplicate name in the department **400**. Audited |
 | GET · PATCH · DELETE | `/api/collections/{id}/` | read · manage | PATCH `{name?, description?}` (any other body is **400**). DELETE keeps the documents. Manage = creator, the department's admin, or a system admin. Invisible ids are **404** |
+| POST | `/api/collections/bulk-delete/` | manage (each) | JSON `{"ids": [...]}` (≤100) or `{"all": true}` (every collection the caller may manage). **200** `{deleted, forbidden, not_found}`; an invisible collection is `not_found`. `all` adds `skipped` (visible, not the caller's to manage). Documents are kept. Audited per collection with `bulk: true` |
 | POST · DELETE | `/api/collections/{id}/documents/` | manage | `{document_ids: [...]}` (≤500). Adding a document the caller cannot read, or from another department, is **404** naming the ids. Audited |
 
 ## Administration

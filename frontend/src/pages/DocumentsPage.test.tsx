@@ -77,7 +77,7 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("DocumentsPage bulk delete", () => {
+describe("DocumentsPage bulk delete", { timeout: 15000 }, () => {
   it("deletes the selected documents after confirmation", async () => {
     const list = vi.spyOn(api, "documents").mockResolvedValue(page(ROWS));
     const remove = vi

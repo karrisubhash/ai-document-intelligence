@@ -364,16 +364,10 @@ class DocumentListQuerySerializer(serializers.Serializer):
 BULK_DELETE_LIMIT = 100
 
 
-class BulkDeleteSerializer(serializers.Serializer):
-    """Body of POST /api/v1/documents/bulk-delete/.
-
-    Exactly one of:
-
-    * `ids` - the documents the caller selected;
-    * `all: true` - every document the caller may delete that matches
-      `filters`, which takes the listing's query parameters (validated by
-      DocumentListQuerySerializer, so "all" means what the listing showed).
-    """
+class BulkSelectionSerializer(serializers.Serializer):
+    """What a bulk action acts on: exactly one of `ids` (the rows the caller
+    selected, at most BULK_DELETE_LIMIT) or `all: true`. Shared by every
+    bulk-delete endpoint - documents, collections and conversations."""
 
     ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
@@ -382,13 +376,27 @@ class BulkDeleteSerializer(serializers.Serializer):
         max_length=BULK_DELETE_LIMIT,
     )
     all = serializers.BooleanField(required=False, default=False)
-    filters = serializers.DictField(required=False, default=dict)
 
     def validate(self, attrs):
         if bool(attrs.get("ids")) == attrs["all"]:
             raise serializers.ValidationError(
                 "Send either a list of ids or all: true, not both."
             )
+        return attrs
+
+
+class BulkDeleteSerializer(BulkSelectionSerializer):
+    """Body of POST /api/v1/documents/bulk-delete/.
+
+    With `all: true`, every document the caller may delete that matches
+    `filters`, which takes the listing's query parameters (validated by
+    DocumentListQuerySerializer, so "all" means what the listing showed).
+    """
+
+    filters = serializers.DictField(required=False, default=dict)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
         if attrs["all"]:
             query = DocumentListQuerySerializer(
                 data=attrs["filters"], context=self.context

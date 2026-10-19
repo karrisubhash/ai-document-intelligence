@@ -1,6 +1,6 @@
-"""POST /api/v1/documents/bulk-delete/ - deleting selected documents, or
-every document matching the listing's filters, under the same access rules
-and audit trail as a single DELETE."""
+"""Bulk delete: POST .../bulk-delete/ for documents, collections and chat
+conversations - deleting selected rows, or all of them, under the same
+access rules and audit trail as deleting one."""
 
 from unittest import mock
 
@@ -13,7 +13,14 @@ from rest_framework.test import APIClient
 from accounts.models import UserProfile
 from documents import authorization, services
 from documents.api import views
-from documents.models import AuditLog, Document, DocumentVersion
+from documents.models import (
+    AuditLog,
+    Collection,
+    Conversation,
+    Document,
+    DocumentVersion,
+    Message,
+)
 from documents.tests import MEDIA_ROOT, make_txt_file, make_user
 
 Role = UserProfile.Role
@@ -300,3 +307,157 @@ class ManageableDocumentsTests(BulkDeleteTestCase):
 
         flags = {row["id"]: row["can_manage"] for row in response.data["results"]}
         self.assertEqual(flags, {mine.id: True, colleagues.id: False})
+
+
+class CollectionBulkDeleteTests(BulkDeleteTestCase):
+    url = reverse("collection-bulk-delete")
+
+    def collection(self, name, creator, department=None):
+        return Collection.objects.create(
+            name=name,
+            created_by=creator,
+            department=creator.profile.department if department is None else department,
+        )
+
+    def test_selected_collections_go_and_their_documents_stay(self):
+        member = document(self.alice, "Fee schedule")
+        first = self.collection("Exam rules", self.alice)
+        first.documents.add(member)
+        second, kept = (
+            self.collection("Fees", self.alice),
+            self.collection("Kept", self.alice),
+        )
+
+        response = client_for(self.alice).post(
+            self.url, {"ids": [first.id, second.id]}, format="json"
+        )
+
+        self.assertEqual(
+            response.data,
+            {"deleted": [first.id, second.id], "forbidden": [], "not_found": []},
+        )
+        self.assertEqual(
+            list(Collection.objects.values_list("id", flat=True)), [kept.id]
+        )
+        self.assertTrue(Document.objects.filter(pk=member.id).exists())
+
+    def test_each_delete_is_audited_like_a_single_delete(self):
+        target = self.collection("Exam rules", self.alice)
+
+        client_for(self.alice).post(self.url, {"ids": [target.id]}, format="json")
+
+        row = AuditLog.objects.get(action=AuditLog.Action.COLLECTION_DELETE)
+        self.assertEqual(row.user, self.alice)
+        self.assertEqual(row.document_department, "Physics")
+        self.assertEqual(row.metadata["collection_id"], target.id)
+        self.assertTrue(row.metadata["bulk"])
+
+    def test_what_the_caller_may_not_delete_is_refused_and_left_alone(self):
+        mine = self.collection("Mine", self.alice)
+        colleagues = self.collection("Bob's", self.bob)  # visible, not manageable
+        outsiders = self.collection("Carol's", self.carol)  # not visible
+
+        response = client_for(self.alice).post(
+            self.url,
+            {"ids": [mine.id, colleagues.id, outsiders.id, 999999]},
+            format="json",
+        )
+
+        self.assertEqual(response.data["deleted"], [mine.id])
+        self.assertEqual(response.data["forbidden"], [colleagues.id])
+        self.assertEqual(response.data["not_found"], [outsiders.id, 999999])
+        self.assertEqual(Collection.objects.count(), 2)
+
+    def test_all_deletes_what_the_caller_manages_and_counts_the_rest(self):
+        mine = self.collection("Mine", self.alice)
+        colleagues = self.collection("Bob's", self.bob)
+        outsiders = self.collection("Carol's", self.carol)
+
+        response = client_for(self.alice).post(self.url, {"all": True}, format="json")
+
+        self.assertEqual(response.data["deleted"], [mine.id])
+        self.assertEqual(response.data["forbidden"], [])
+        self.assertEqual(response.data["skipped"], 1)
+        self.assertEqual(
+            set(Collection.objects.values_list("id", flat=True)),
+            {colleagues.id, outsiders.id},
+        )
+
+    def test_a_department_admin_deletes_their_departments_collections(self):
+        members = self.collection("Bob's", self.bob)
+        response = client_for(self.physics_admin).post(
+            self.url, {"all": True}, format="json"
+        )
+        self.assertEqual(response.data["deleted"], [members.id])
+
+    def test_the_request_is_validated(self):
+        client = client_for(self.alice)
+        for body in ({}, {"ids": []}, {"ids": [1], "all": True}):
+            response = client.post(self.url, body, format="json")
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, body)
+
+
+class ConversationBulkDeleteTests(BulkDeleteTestCase):
+    url = reverse("conversation-bulk-delete")
+
+    def conversation(self, owner, title="Attendance rules"):
+        conversation = Conversation.objects.create(owner=owner, title=title)
+        Message.objects.create(
+            conversation=conversation, role=Message.Role.USER, content="q"
+        )
+        return conversation
+
+    def test_selected_conversations_and_their_messages_go(self):
+        first, second = self.conversation(self.alice), self.conversation(self.alice)
+        kept = self.conversation(self.alice)
+
+        response = client_for(self.alice).post(
+            self.url, {"ids": [first.id, second.id]}, format="json"
+        )
+
+        self.assertEqual(
+            response.data, {"deleted": [first.id, second.id], "not_found": []}
+        )
+        self.assertEqual(
+            list(Conversation.objects.values_list("id", flat=True)), [kept.id]
+        )
+        self.assertFalse(
+            Message.objects.filter(conversation_id__in=[first.id, second.id]).exists()
+        )
+
+    def test_another_users_conversation_is_not_found_and_kept(self):
+        """Even a system administrator's: a conversation is its owner's."""
+        theirs = self.conversation(self.alice)
+
+        response = client_for(self.root).post(
+            self.url, {"ids": [theirs.id, 999999]}, format="json"
+        )
+
+        self.assertEqual(
+            response.data, {"deleted": [], "not_found": [theirs.id, 999999]}
+        )
+        self.assertTrue(Conversation.objects.filter(pk=theirs.id).exists())
+
+    def test_all_deletes_every_one_of_the_callers_conversations_only(self):
+        mine = [self.conversation(self.alice) for _ in range(3)]
+        theirs = self.conversation(self.bob)
+
+        response = client_for(self.alice).post(self.url, {"all": True}, format="json")
+
+        self.assertEqual(response.data["deleted"], [c.id for c in mine])
+        self.assertEqual(
+            list(Conversation.objects.values_list("id", flat=True)), [theirs.id]
+        )
+
+    def test_the_request_is_validated(self):
+        client = client_for(self.alice)
+        for body in ({}, {"ids": []}, {"ids": [1], "all": True}, {"ids": ["x"]}):
+            response = client.post(self.url, body, format="json")
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, body)
+
+    def test_a_signed_out_caller_is_refused(self):
+        response = APIClient().post(self.url, {"all": True}, format="json")
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )

@@ -5,6 +5,7 @@
     GET    /api/v1/collections/{id}/
     PATCH  /api/v1/collections/{id}/             rename / describe (managers)
     DELETE /api/v1/collections/{id}/             delete; documents are untouched
+    POST   /api/v1/collections/bulk-delete/      {"ids": [...]} or {"all": true}
     POST   /api/v1/collections/{id}/documents/   {"document_ids": [...]} add
     DELETE /api/v1/collections/{id}/documents/   {"document_ids": [...]} remove
 
@@ -20,6 +21,7 @@ from rest_framework.response import Response
 
 from accounts.services import UnknownDepartment, resolve_department
 from documents import authorization
+from documents.api.serializers import BulkSelectionSerializer
 from documents.audit import record_event
 from documents.models import AuditLog, Collection, Document
 
@@ -157,6 +159,48 @@ class CollectionViewSet(viewsets.ModelViewSet):
         self._audit(AuditLog.Action.COLLECTION_DELETE, collection)
         collection.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=["post"], url_path="bulk-delete")
+    def bulk_delete(self, request):
+        """Delete several collections, or every one the caller may manage.
+
+        Their documents are untouched, as with a single delete, and each
+        deletion is audited as one. A collection the caller cannot see is
+        `not_found` and one they can see but not manage is `forbidden` - the
+        404/403 split destroy makes. With `all`, collections the caller can
+        see but not manage are left and counted in `skipped`.
+        """
+        serializer = BulkSelectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        user = request.user
+
+        visible = authorization.visible_collections(user, Collection.objects.all())
+        if not data["all"]:
+            visible = visible.filter(pk__in=data["ids"])
+        found = {collection.pk: collection for collection in visible.order_by("pk")}
+        requested = sorted(found) if data["all"] else sorted(set(data["ids"]))
+
+        outcome = {"deleted": [], "forbidden": [], "not_found": []}
+        for pk in requested:
+            collection = found.get(pk)
+            if collection is None:
+                outcome["not_found"].append(pk)
+            elif not authorization.can_manage_collection(user, collection):
+                outcome["forbidden"].append(pk)
+            else:
+                with transaction.atomic():
+                    self._audit(
+                        AuditLog.Action.COLLECTION_DELETE, collection, bulk=True
+                    )
+                    collection.delete()
+                outcome["deleted"].append(pk)
+
+        if data["all"]:
+            # Not refusals - nobody asked for these by id.
+            outcome["skipped"] = len(outcome["forbidden"])
+            outcome["forbidden"] = []
+        return Response(outcome)
 
     @action(detail=True, methods=["post", "delete"])
     def documents(self, request, pk=None):

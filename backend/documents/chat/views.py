@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 
 from documents import agents
 from documents.agents.runner import PlannedAnswer
+from documents.api.serializers import BulkSelectionSerializer
 from documents.audit import record_event
 from documents.authorization import get_profile
 from documents.models import AuditLog, Conversation, Message
@@ -395,6 +396,32 @@ class ConversationListView(ListAPIView):
             .annotate(message_count=Count("messages"))
             .order_by("-updated_at", "-id")
         )
+
+
+class ConversationBulkDeleteView(APIView):
+    """Delete several of the caller's conversations, or all of them.
+
+    Only ever the caller's own: another user's id is `not_found`, exactly
+    like one that does not exist, as on ConversationDetailView. Documents
+    are not affected.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = BulkSelectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        mine = Conversation.objects.filter(owner=request.user)
+        if not data["all"]:
+            mine = mine.filter(pk__in=data["ids"])
+        with transaction.atomic():
+            deleted = sorted(mine.values_list("pk", flat=True))
+            Conversation.objects.filter(pk__in=deleted).delete()
+
+        not_found = [] if data["all"] else sorted(set(data["ids"]) - set(deleted))
+        return Response({"deleted": deleted, "not_found": not_found})
 
 
 class ConversationDetailView(APIView):

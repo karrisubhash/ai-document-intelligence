@@ -1828,6 +1828,21 @@ mark.evidence {
   opacity: 1;
 }
 
+.conversation-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 8px;
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+}
+
+.conversation-select {
+  display: flex;
+  padding-left: 10px;
+}
+
 .chat-main {
   display: flex;
   flex-direction: column;
@@ -2254,6 +2269,50 @@ mark.evidence {
 .collection-add .input {
   flex: 1 1 200px;
   min-width: 0;
+}
+
+/* Bulk selection: a card's checkbox beside its heading, and the bars that
+   act on what is ticked. */
+.card-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.card-heading .select-box {
+  margin: 0;
+}
+
+.bulk-bar-idle {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.bulk-bar-idle .bulk-bar-count {
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.member-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.member .select-box {
+  margin: 0;
+  flex: none;
 }
 
 /* Chat: the answer while it is being written - a caret after the last word. */

@@ -503,6 +503,12 @@ export const api = {
     request<Collection>("/api/v1/collections/", { method: "POST", body }),
   deleteCollection: (id: number) =>
     request<void>(`/api/v1/collections/${id}/`, { method: "DELETE" }),
+  /** At most 100 ids, or every collection the caller may manage. */
+  bulkDeleteCollections: (target: { ids: number[] } | { all: true }) =>
+    request<BulkDeleteResult>("/api/v1/collections/bulk-delete/", {
+      method: "POST",
+      body: target,
+    }),
   setCollectionDocuments: (id: number, documentIds: number[], add: boolean) =>
     request<Collection>(`/api/v1/collections/${id}/documents/`, {
       method: add ? "POST" : "DELETE",
@@ -524,6 +530,12 @@ export const api = {
     }),
   deleteConversation: (id: number) =>
     request<void>(`/api/v1/chat/conversations/${id}/`, { method: "DELETE" }),
+  /** At most 100 ids, or every one of the caller's conversations. */
+  bulkDeleteConversations: (target: { ids: number[] } | { all: true }) =>
+    request<BulkDeleteResult>("/api/v1/chat/conversations/bulk-delete/", {
+      method: "POST",
+      body: target,
+    }),
   feedback: (messageId: number, rating: FeedbackRating, comment = "") =>
     request<unknown>(`/api/v1/messages/${messageId}/feedback/`, {
       method: "POST",

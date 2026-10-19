@@ -209,22 +209,34 @@ export function PageHeader({
 
 export function Card({
   title,
+  leading,
   actions,
   children,
   className = "",
   padded = true,
 }: {
   title?: ReactNode;
+  /** Before the title, outside the heading - e.g. a selection checkbox,
+   *  which inside the <h2> would become part of the heading's name. */
+  leading?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
   padded?: boolean;
 }) {
+  const heading = title ? <h2 className="card-title">{title}</h2> : <span />;
   return (
     <section className={`card ${className}`.trim()}>
       {title || actions ? (
         <div className="card-header">
-          {title ? <h2 className="card-title">{title}</h2> : <span />}
+          {leading ? (
+            <div className="card-heading">
+              {leading}
+              {heading}
+            </div>
+          ) : (
+            heading
+          )}
           {actions ? <div className="card-actions">{actions}</div> : null}
         </div>
       ) : null}
@@ -563,6 +575,47 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 export function useToast() {
   return useContext(ToastContext);
+}
+
+// --- Selection -------------------------------------------------------------------------
+
+/** A row's checkbox for a bulk action; `indeterminate` for a "select all" box. */
+export function SelectBox({
+  label,
+  checked,
+  indeterminate = false,
+  disabled,
+  title,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onChange: (checked: boolean) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  // Only settable as a property - there is no indeterminate attribute.
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="select-box"
+      aria-label={label}
+      title={title}
+      checked={checked}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.checked)}
+    />
+  );
+}
+
+export function plural(count: number, word: string) {
+  return count === 1 ? word : `${word}s`;
 }
 
 // --- Misc ------------------------------------------------------------------------------

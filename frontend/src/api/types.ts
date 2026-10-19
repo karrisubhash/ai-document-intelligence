@@ -124,11 +124,11 @@ export interface DocumentSummary {
 
 export type DocumentDetail = DocumentSummary;
 
-/** POST /documents/bulk-delete/ - ids sorted into what happened to each. */
+/** POST .../bulk-delete/ - ids sorted into what happened to each. */
 export interface BulkDeleteResult {
   deleted: number[];
-  /** Visible to the caller, but not theirs to delete. */
-  forbidden: number[];
+  /** Visible to the caller, but not theirs to delete. Absent for conversations. */
+  forbidden?: number[];
   /** Gone already, or not visible to the caller - deliberately alike. */
   not_found: number[];
   /** With `all`: how many still match and may be deleted. Repeat until 0. */

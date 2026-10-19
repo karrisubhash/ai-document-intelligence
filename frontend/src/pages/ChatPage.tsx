@@ -19,8 +19,10 @@ import {
   Dialog,
   EmptyState,
   ErrorState,
+  SelectBox,
   Skeleton,
   errorMessage,
+  plural,
   useDocumentTitle,
   useToast,
 } from "../components/ui";
@@ -64,11 +66,93 @@ function ConversationList({
   const [title, setTitle] = useState("");
   const [pending, setPending] = useState(false);
 
+  // Multi-select for deleting several at once. `all` means every one of the
+  // user's conversations, including older ones not loaded yet.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [all, setAll] = useState(false);
+  const [confirmingBulk, setConfirmingBulk] = useState(false);
+  const loaded = conversations.data?.results ?? [];
+  const total = conversations.data?.count ?? 0;
+  const chosen = all ? total : selected.size;
+  const isChosen = (id: number) => all || selected.has(id);
+  const stopSelecting = () => {
+    setSelecting(false);
+    setSelected(new Set());
+    setAll(false);
+  };
+  const toggle = (id: number, on: boolean) => {
+    // Unticking one while "all" is on leaves every LOADED one but it.
+    const base = all ? new Set(loaded.map((item) => item.id)) : new Set(selected);
+    if (on) base.add(id);
+    else base.delete(id);
+    setAll(false);
+    setSelected(base);
+  };
+
+  const deleteChosen = async () => {
+    setPending(true);
+    try {
+      const deleted: number[] = [];
+      if (all) {
+        deleted.push(...(await api.bulkDeleteConversations({ all: true })).deleted);
+      } else {
+        const ids = [...selected];
+        for (let start = 0; start < ids.length; start += 100) {
+          const result = await api.bulkDeleteConversations({ ids: ids.slice(start, start + 100) });
+          deleted.push(...result.deleted);
+        }
+      }
+      if (activeId !== null && deleted.includes(activeId)) navigate("/ask", { replace: true });
+      toast(`Deleted ${deleted.length} ${plural(deleted.length, "conversation")}.`, "success");
+      setConfirmingBulk(false);
+      stopSelecting();
+      onChanged();
+    } catch (caught) {
+      toast(errorMessage(caught), "danger");
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
     <aside className="conversations" aria-label="Conversations">
       <Button variant="primary" className="btn-block" onClick={onNew}>
         New question
       </Button>
+      {loaded.length ? (
+        selecting ? (
+          <div className="conversation-select-bar">
+            <SelectBox
+              label="Select all conversations"
+              checked={all || (selected.size > 0 && loaded.every((item) => selected.has(item.id)))}
+              indeterminate={!all && selected.size > 0 && !loaded.every((item) => selected.has(item.id))}
+              onChange={(on) => {
+                setAll(on);
+                setSelected(new Set());
+              }}
+            />
+            <span className="small" aria-live="polite">
+              {all ? `All ${total}` : selected.size} selected
+            </span>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={chosen === 0}
+              onClick={() => setConfirmingBulk(true)}
+            >
+              Delete selected
+            </Button>
+            <Button variant="ghost" size="sm" onClick={stopSelecting}>
+              Done
+            </Button>
+          </div>
+        ) : (
+          <Button variant="ghost" size="sm" onClick={() => setSelecting(true)}>
+            Select conversations
+          </Button>
+        )
+      ) : null}
       {conversations.loading && !conversations.data ? (
         <Skeleton lines={5} />
       ) : conversations.error ? (
@@ -80,33 +164,46 @@ function ConversationList({
               key={conversation.id}
               className={`conversation${conversation.id === activeId ? " active" : ""}`}
             >
+              {selecting ? (
+                <span className="conversation-select">
+                  <SelectBox
+                    label={`Select ${conversation.title || "Untitled conversation"}`}
+                    checked={isChosen(conversation.id)}
+                    onChange={(on) => toggle(conversation.id, on)}
+                  />
+                </span>
+              ) : null}
               <Link to={`/ask/${conversation.id}`} className="conversation-link">
                 <span className="conversation-title">
                   {conversation.title || "Untitled conversation"}
                 </span>
                 <span className="conversation-meta">{formatRelative(conversation.updated_at)}</span>
               </Link>
-              <div className="conversation-actions">
-                <button
-                  type="button"
-                  className="icon-button icon-button-sm"
-                  aria-label={`Rename ${conversation.title || "conversation"}`}
-                  onClick={() => {
-                    setTitle(conversation.title);
-                    setRenaming(conversation);
-                  }}
-                >
-                  ✎
-                </button>
-                <button
-                  type="button"
-                  className="icon-button icon-button-sm"
-                  aria-label={`Delete ${conversation.title || "conversation"}`}
-                  onClick={() => setDeleting(conversation)}
-                >
-                  🗑
-                </button>
-              </div>
+              {/* Not rendered while selecting: a class's display: flex
+                  would override the hidden attribute. */}
+              {selecting ? null : (
+                <div className="conversation-actions">
+                  <button
+                    type="button"
+                    className="icon-button icon-button-sm"
+                    aria-label={`Rename ${conversation.title || "conversation"}`}
+                    onClick={() => {
+                      setTitle(conversation.title);
+                      setRenaming(conversation);
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button icon-button-sm"
+                    aria-label={`Delete ${conversation.title || "conversation"}`}
+                    onClick={() => setDeleting(conversation)}
+                  >
+                    🗑
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -186,6 +283,24 @@ function ConversationList({
         }}
       >
         <p>The questions and answers in it are removed. The documents are not affected.</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={confirmingBulk}
+        title={
+          all
+            ? `Delete all ${total} ${plural(total, "conversation")}?`
+            : `Delete ${chosen} ${plural(chosen, "conversation")}?`
+        }
+        confirmLabel={all ? "Delete all" : "Delete"}
+        pending={pending}
+        onClose={() => setConfirmingBulk(false)}
+        onConfirm={() => void deleteChosen()}
+      >
+        <p>
+          The questions and answers in {chosen === 1 ? "it are" : "them are"} removed permanently.
+          The documents are not affected.
+        </p>
       </ConfirmDialog>
     </aside>
   );

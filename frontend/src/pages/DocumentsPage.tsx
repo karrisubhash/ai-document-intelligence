@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, type DocumentQuery } from "../api/client";
@@ -13,8 +13,10 @@ import {
   ErrorState,
   PageHeader,
   Pagination,
+  SelectBox,
   Skeleton,
   StatusBadge,
+  plural,
   useDocumentTitle,
   useToast,
 } from "../components/ui";
@@ -400,44 +402,6 @@ export default function DocumentsPage() {
   );
 }
 
-function plural(count: number, word: string) {
-  return count === 1 ? word : `${word}s`;
-}
-
-function SelectBox({
-  label,
-  checked,
-  indeterminate = false,
-  disabled,
-  title,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  indeterminate?: boolean;
-  disabled?: boolean;
-  title?: string;
-  onChange: (checked: boolean) => void;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  // Only settable as a property - there is no indeterminate attribute.
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      className="select-box"
-      aria-label={label}
-      title={title}
-      checked={checked}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.checked)}
-    />
-  );
-}
-
 type DeleteTarget =
   | { ids: number[] }
   | { all: true; count: number; filters: Omit<DocumentQuery, "page" | "ordering"> };
@@ -502,7 +466,7 @@ function BulkDeleteDialog({
           });
           deleted.push(...result.deleted);
           setProgress(deleted.length);
-          refused += result.forbidden.length;
+          refused += (result.forbidden ?? []).length;
         }
       }
     } catch (caught) {
