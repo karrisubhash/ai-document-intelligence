@@ -4,6 +4,7 @@ import { ApiError, api } from "../../api/client";
 import { useAction, useResource } from "../../api/hooks";
 import type { AdminDepartment } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
+import { Icon } from "../../components/icons";
 import {
   Alert,
   Badge,
@@ -138,7 +139,7 @@ export default function DepartmentsPage() {
         description="Departments are the boundary for document access: members read their department's documents and nobody else's."
         actions={
           editable ? (
-            <Button variant="primary" onClick={() => setEditing("new")}>
+            <Button variant="primary" icon="plus" onClick={() => setEditing("new")}>
               New department
             </Button>
           ) : null
@@ -149,17 +150,23 @@ export default function DepartmentsPage() {
       ) : departments.loading && !departments.data ? (
         <Skeleton lines={5} />
       ) : !departments.data?.results.length ? (
-        <EmptyState title="No departments yet" icon="▦">
-          Create departments before assigning people to them.
-        </EmptyState>
+        <div className="card">
+          <EmptyState title="No departments yet" icon="building">
+            Create departments before assigning people to them.
+          </EmptyState>
+        </div>
       ) : (
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th scope="col">Department</th>
-                <th scope="col">Members</th>
-                <th scope="col">Documents</th>
+                <th scope="col" className="num">
+                  Members
+                </th>
+                <th scope="col" className="num">
+                  Documents
+                </th>
                 <th scope="col">Status</th>
                 {editable ? (
                   <th scope="col">
@@ -172,21 +179,31 @@ export default function DepartmentsPage() {
               {departments.data.results.map((department) => (
                 <tr key={department.id}>
                   <td>
-                    <span className="table-title">{department.name}</span>
-                    <span className="table-sub">
-                      {[department.code, department.description].filter(Boolean).join(" · ")}
-                    </span>
+                    <div className="cell-title">
+                      <span className="icon-tile" aria-hidden="true">
+                        <Icon name="building" />
+                      </span>
+                      <div className="cell-title-text">
+                        <span className="table-title">
+                          {department.name}{" "}
+                          {department.code ? <span className="code-chip">{department.code}</span> : null}
+                        </span>
+                        {department.description ? (
+                          <span className="table-sub">{department.description}</span>
+                        ) : null}
+                      </div>
+                    </div>
                   </td>
-                  <td>{department.member_count ?? "—"}</td>
-                  <td>{department.document_count ?? "—"}</td>
+                  <td className="num">{department.member_count ?? "—"}</td>
+                  <td className="num">{department.document_count ?? "—"}</td>
                   <td>
-                    <Badge tone={department.is_active ? "success" : "muted"}>
+                    <Badge tone={department.is_active ? "success" : "muted"} dot>
                       {department.is_active ? "Active" : "Inactive"}
                     </Badge>
                   </td>
                   {editable ? (
-                    <td>
-                      <Button size="sm" onClick={() => setEditing(department)}>
+                    <td className="cell-actions">
+                      <Button size="sm" icon="pencil" onClick={() => setEditing(department)}>
                         Edit
                       </Button>
                     </td>

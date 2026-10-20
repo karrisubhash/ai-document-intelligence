@@ -8,7 +8,8 @@ import { formatDateTime, formatDuration, formatPercent, formatRelative } from ".
 import { extensionOf, isPreviewable } from "../../lib/files";
 import { EVENT_TONE, STAGE_LABEL, humanize } from "../../lib/labels";
 import PageText from "../PageText";
-import { Alert, Badge, EmptyState, ErrorState, Skeleton, Spinner } from "../ui";
+import { Icon } from "../icons";
+import { Alert, Badge, Button, EmptyState, ErrorState, Skeleton, Spinner } from "../ui";
 
 // --- Text -------------------------------------------------------------------
 
@@ -30,7 +31,7 @@ export function ContentPanel({
   if (content.loading && !content.data) return <Skeleton lines={8} />;
   if (content.status === 404) {
     return (
-      <EmptyState title="No text yet" icon="⏳">
+      <EmptyState title="No text yet" icon="clock">
         {document.status === "FAILED" || document.status === "QUARANTINED"
           ? "Processing did not reach the text stage. The Processing tab says why."
           : "Text appears here once processing has read the document."}
@@ -64,32 +65,35 @@ export function ContentPanel({
           </select>
         </label>
         <div className="button-row">
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
+          <Button
+            size="sm"
+            icon="chevron-left"
             disabled={current.page_number <= pages[0].page_number}
             onClick={() => onPage(current.page_number - 1)}
           >
             Previous page
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
+          </Button>
+          <Button
+            size="sm"
+            iconEnd="chevron-right"
             disabled={current.page_number >= pages[pages.length - 1].page_number}
             onClick={() => onPage(current.page_number + 1)}
           >
             Next page
-          </button>
+          </Button>
         </div>
+        <span className="toolbar-spacer" />
         <Badge
           tone={current.extraction_method === "OCR" ? "warning" : "neutral"}
+          icon={current.extraction_method === "OCR" ? "scan" : "file-text"}
           title="How this page's text was obtained"
         >
           {current.extraction_method === "OCR" ? "Read by OCR" : humanize(current.extraction_method)}
         </Badge>
       </div>
       {current.extraction_method === "OCR" ? (
-        <p className="muted small">
+        <p className="panel-note">
+          <Icon name="info" size={14} />
           This page was scanned, so its text was recognised by OCR and may contain
           recognition errors. Check important figures against the original.
         </p>
@@ -120,34 +124,39 @@ function JobCard({ job, latest }: { job: ProcessingJob; latest: boolean }) {
   return (
     <details className="job" open={open} onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}>
       <summary className="job-summary">
-        <Badge tone={tone}>{humanize(job.status)}</Badge>
+        <Icon name="chevron-right" className="job-chevron" />
         <span className="job-title">
           Run #{job.id}
           {job.attempt > 1 ? ` · attempt ${job.attempt}` : ""}
         </span>
         <span className="muted small">{formatRelative(job.created_at)}</span>
+        <Badge tone={tone} dot>
+          {humanize(job.status)}
+        </Badge>
       </summary>
-      {job.error_code ? (
-        <Alert tone={job.error_code === "MALWARE_DETECTED" ? "warning" : "danger"} title={humanize(job.error_code)}>
-          {job.error_message || "No further detail was recorded."}
-        </Alert>
-      ) : null}
-      <ol className="timeline">
-        {events.map((event) => (
-          <li key={event.id} className={`timeline-item tone-${EVENT_TONE[event.status] ?? "neutral"}`}>
-            <div className="timeline-head">
-              <span className="timeline-stage">{STAGE_LABEL[event.stage] ?? event.stage}</span>
-              <Badge tone={EVENT_TONE[event.status] ?? "neutral"}>{humanize(event.status)}</Badge>
-              {typeof event.metadata?.duration_seconds === "number" ? (
-                <span className="muted small">
-                  {formatDuration((event.metadata.duration_seconds as number) * 1000)}
-                </span>
-              ) : null}
-            </div>
-            {event.message ? <p className="timeline-message">{event.message}</p> : null}
-          </li>
-        ))}
-      </ol>
+      <div className="job-body">
+        {job.error_code ? (
+          <Alert tone={job.error_code === "MALWARE_DETECTED" ? "warning" : "danger"} title={humanize(job.error_code)}>
+            {job.error_message || "No further detail was recorded."}
+          </Alert>
+        ) : null}
+        <ol className="timeline">
+          {events.map((event) => (
+            <li key={event.id} className={`timeline-item tone-${EVENT_TONE[event.status] ?? "neutral"}`}>
+              <div className="timeline-head">
+                <span className="timeline-stage">{STAGE_LABEL[event.stage] ?? event.stage}</span>
+                <Badge tone={EVENT_TONE[event.status] ?? "neutral"}>{humanize(event.status)}</Badge>
+                {typeof event.metadata?.duration_seconds === "number" ? (
+                  <span className="muted small">
+                    {formatDuration((event.metadata.duration_seconds as number) * 1000)}
+                  </span>
+                ) : null}
+              </div>
+              {event.message ? <p className="timeline-message">{event.message}</p> : null}
+            </li>
+          ))}
+        </ol>
+      </div>
     </details>
   );
 }
@@ -178,7 +187,7 @@ export function ProcessingPanel({
 
   if (jobs.loading && !jobs.data) return <Skeleton lines={6} />;
   if (jobs.error) return <ErrorState error={jobs.error} onRetry={jobs.reload} />;
-  if (!jobs.data?.length) return <EmptyState title="No processing runs yet" />;
+  if (!jobs.data?.length) return <EmptyState title="No processing runs yet" icon="activity" />;
 
   return (
     <div className="stack">
@@ -214,7 +223,7 @@ export function FieldsPanel({ document }: { document: DocumentDetail }) {
   const latest = results.data?.[0];
   if (!latest) {
     return (
-      <EmptyState title="No fields extracted" icon="🔎">
+      <EmptyState title="No fields extracted" icon="list-checks">
         Field extraction has not run on this version, or is not enabled on this
         installation. When it runs, every declared field is listed here — including the
         ones it could not find.
@@ -224,7 +233,8 @@ export function FieldsPanel({ document }: { document: DocumentDetail }) {
 
   return (
     <div className="stack">
-      <p className="muted small">
+      <p className="panel-note">
+        <Icon name="info" size={14} />
         {latest.found_count} of {latest.field_count} fields found by {latest.model_name}{" "}
         {latest.model_version} using the {latest.schema_name} schema. Every value links to
         the exact place it was read from.
@@ -283,7 +293,7 @@ export function TablesPanel({ document }: { document: DocumentDetail }) {
   if (tables.loading && !tables.data) return <Skeleton lines={6} />;
   if (tables.error) return <ErrorState error={tables.error} onRetry={tables.reload} />;
   if (!tables.data?.length) {
-    return <EmptyState title="No tables detected" icon="▦" />;
+    return <EmptyState title="No tables detected" icon="table" />;
   }
 
   return (
@@ -291,17 +301,23 @@ export function TablesPanel({ document }: { document: DocumentDetail }) {
       {tables.data.map((table) => (
         <section key={table.id} className="card">
           <div className="card-header">
-            <h3 className="card-title">
-              Table {table.table_index + 1}{" "}
-              <span className="muted small">
-                · {table.row_count} rows × {table.column_count} columns
+            <div className="card-heading">
+              <span className="card-icon" aria-hidden="true">
+                <Icon name="table" />
               </span>
-            </h3>
+              <div className="card-heading-text">
+                <h3 className="card-title">Table {table.table_index + 1}</h3>
+                <p className="card-description">
+                  {table.row_count} rows × {table.column_count} columns
+                </p>
+              </div>
+            </div>
             <Link
-              className="link"
+              className="link link-with-icon"
               to={`/documents/${document.id}?tab=text&page=${table.page_number}&start=${table.character_start}&end=${table.character_end}`}
             >
               Page {table.page_number}
+              <Icon name="arrow-right" size={14} />
             </Link>
           </div>
           <div className="table-wrap">
@@ -341,29 +357,39 @@ export function FiguresPanel({ document }: { document: DocumentDetail }) {
 
   if (figures.loading && !figures.data) return <Skeleton lines={4} />;
   if (figures.error) return <ErrorState error={figures.error} onRetry={figures.reload} />;
-  if (!figures.data?.length) return <EmptyState title="No figures found" icon="🖼" />;
+  if (!figures.data?.length) return <EmptyState title="No figures found" icon="image" />;
 
   return (
     <div className="stack">
-      <p className="muted small">
+      <p className="panel-note">
+        <Icon name="info" size={14} />
         Figures are located, not read: any text inside them was extracted by OCR, but charts
         and diagrams themselves are not interpreted. Questions about them may be answered
         with a pointer to the page instead.
       </p>
-      <ul className="row-list">
+      <ul className="row-list row-list-flush card">
         {figures.data.map((figure) => (
           <li key={figure.id} className="row-item">
             <div className="row-link">
-              <span className="row-title">
-                Figure {figure.figure_index + 1} on page {figure.page_number}
+              <span className="icon-tile" aria-hidden="true">
+                <Icon name="image" />
               </span>
-              <span className="row-meta">
-                {figure.width && figure.height ? `${figure.width} × ${figure.height} px · ` : ""}
-                {figure.description || "Not described"}
+              <span className="row-text">
+                <span className="row-title">
+                  Figure {figure.figure_index + 1} on page {figure.page_number}
+                </span>
+                <span className="row-meta">
+                  {figure.width && figure.height ? `${figure.width} × ${figure.height} px · ` : ""}
+                  {figure.description || "Not described"}
+                </span>
               </span>
             </div>
-            <Link className="link" to={`/documents/${document.id}?tab=text&page=${figure.page_number}`}>
+            <Link
+              className="link link-with-icon"
+              to={`/documents/${document.id}?tab=text&page=${figure.page_number}`}
+            >
               Open page
+              <Icon name="arrow-right" size={14} />
             </Link>
           </li>
         ))}
@@ -431,7 +457,7 @@ export function PreviewPanel({ document }: { document: DocumentDetail }) {
     };
   }, [document.id, versionId, fileName, kind, quarantined]);
 
-  if (!version) return <EmptyState title="No file" />;
+  if (!version) return <EmptyState title="No file" icon="file" />;
   if (document.status === "QUARANTINED") {
     return (
       <Alert tone="warning" title="Preview disabled">
@@ -442,7 +468,7 @@ export function PreviewPanel({ document }: { document: DocumentDetail }) {
   }
   if (!kind) {
     return (
-      <EmptyState title="No preview for this file type" icon="📎">
+      <EmptyState title="No preview for this file type" icon="eye">
         Word documents are not previewed in the browser. The Text tab shows everything that
         was extracted from it, and Download opens the original.
       </EmptyState>

@@ -14,6 +14,7 @@ import {
   TablesPanel,
 } from "../components/document/Panels";
 import VersionsPanel from "../components/document/VersionsPanel";
+import { FileTypeIcon, Icon } from "../components/icons";
 import {
   Alert,
   Badge,
@@ -24,6 +25,9 @@ import {
   Dialog,
   ErrorState,
   Field,
+  Menu,
+  MenuItem,
+  MenuSeparator,
   PageHeader,
   Skeleton,
   StatusBadge,
@@ -32,19 +36,20 @@ import {
   errorMessage,
   useDocumentTitle,
   useToast,
+  type TabItem,
 } from "../components/ui";
 import { formatBytes, formatDateTime, formatPercent } from "../lib/format";
 import { IN_FLIGHT, TYPE_LABEL, humanize } from "../lib/labels";
 
-const TABS = [
-  { id: "overview", label: "Overview" },
-  { id: "preview", label: "Preview" },
-  { id: "text", label: "Text" },
-  { id: "fields", label: "Fields" },
-  { id: "tables", label: "Tables" },
-  { id: "figures", label: "Figures" },
-  { id: "versions", label: "Versions" },
-  { id: "processing", label: "Processing" },
+const TABS: TabItem[] = [
+  { id: "overview", label: "Overview", icon: "info" },
+  { id: "preview", label: "Preview", icon: "eye" },
+  { id: "text", label: "Text", icon: "book-open" },
+  { id: "fields", label: "Fields", icon: "list-checks" },
+  { id: "tables", label: "Tables", icon: "table" },
+  { id: "figures", label: "Figures", icon: "image" },
+  { id: "versions", label: "Versions", icon: "layers" },
+  { id: "processing", label: "Processing", icon: "activity" },
 ];
 
 function Overview({ document }: { document: DocumentDetail }) {
@@ -57,7 +62,7 @@ function Overview({ document }: { document: DocumentDetail }) {
 
   return (
     <div className="grid-2">
-      <Card title="Details">
+      <Card title="Details" icon="info">
         <DescriptionList
           items={[
             ["Type", TYPE_LABEL[document.document_type]],
@@ -72,8 +77,8 @@ function Overview({ document }: { document: DocumentDetail }) {
           ]}
         />
       </Card>
-      <div className="stack">
-        <Card title="Current file">
+      <div className="stack-lg">
+        <Card title="Current file" icon="file">
           {version ? (
             <DescriptionList
               items={[
@@ -88,7 +93,7 @@ function Overview({ document }: { document: DocumentDetail }) {
             <p className="muted">No file has been uploaded.</p>
           )}
         </Card>
-        <Card title="Classification">
+        <Card title="Classification" icon="cpu">
           {classification.loading && !classification.data ? (
             <Skeleton lines={2} />
           ) : classification.error && !classification.data ? (
@@ -279,7 +284,8 @@ export default function DocumentDetailPage() {
           title="This document could not be opened"
         />
         <p>
-          <Link to="/documents" className="link">
+          <Link to="/documents" className="link link-with-icon">
+            <Icon name="chevron-left" size={14} />
             Back to documents
           </Link>
         </p>
@@ -316,8 +322,11 @@ export default function DocumentDetailPage() {
   return (
     <div className="page">
       <nav aria-label="Breadcrumb" className="breadcrumb">
-        <Link to="/documents">Documents</Link>
-        <span aria-hidden="true">/</span>
+        <Link to="/documents">
+          <Icon name="files" size={14} />
+          Documents
+        </Link>
+        <Icon name="chevron-right" size={14} />
         <span aria-current="page">{document.title}</span>
       </nav>
 
@@ -331,24 +340,34 @@ export default function DocumentDetailPage() {
       ) : null}
 
       <PageHeader
+        icon={<FileTypeIcon fileName={version?.file_name} size="lg" />}
         title={document.title}
         description={
-          <span className="badge-row">
+          <span className="doc-meta">
             <StatusBadge status={document.status} />
             <Badge tone="neutral">{TYPE_LABEL[document.document_type]}</Badge>
-            {document.department ? <Badge tone="neutral">{document.department}</Badge> : null}
-            {document.is_archived ? <Badge tone="muted">Archived</Badge> : null}
+            {document.department ? (
+              <Badge tone="neutral" icon="building">
+                {document.department}
+              </Badge>
+            ) : null}
+            {document.is_archived ? (
+              <Badge tone="muted" icon="archive">
+                Archived
+              </Badge>
+            ) : null}
             {version ? (
-              <span className="muted small">
+              <span className="doc-meta-file">
                 {version.file_name} · v{version.version_number} · {formatBytes(version.file_size)}
               </span>
             ) : null}
           </span>
         }
         actions={
-          <div className="button-row">
+          <>
             <Button
               variant="primary"
+              icon="sparkles"
               disabled={document.status !== "COMPLETED" || document.is_archived}
               title={
                 document.is_archived
@@ -364,6 +383,7 @@ export default function DocumentDetailPage() {
               Ask about this document
             </Button>
             <Button
+              icon="download"
               onClick={download}
               loading={downloading}
               disabled={!version || quarantineBlocksDownload}
@@ -376,24 +396,35 @@ export default function DocumentDetailPage() {
               Download
             </Button>
             {document.can_manage ? (
-              <>
-                <Button onClick={() => setEditing(true)}>Edit</Button>
-                <Button
-                  onClick={runReprocess}
-                  loading={reprocess.pending}
-                  disabled={document.is_archived || !version}
+              <Menu
+                trigger={<Icon name="more" />}
+                triggerClassName="btn btn-secondary btn-icon"
+                triggerLabel="More actions"
+              >
+                <MenuItem icon="pencil" onSelect={() => setEditing(true)}>
+                  Edit details
+                </MenuItem>
+                <MenuItem
+                  icon="refresh"
+                  onSelect={runReprocess}
+                  disabled={document.is_archived || !version || reprocess.pending}
+                  title={document.is_archived ? "Restore the document first" : undefined}
                 >
                   Reprocess
-                </Button>
-                <Button onClick={() => setConfirm("archive")}>
+                </MenuItem>
+                <MenuItem
+                  icon={document.is_archived ? "restore" : "archive"}
+                  onSelect={() => setConfirm("archive")}
+                >
                   {document.is_archived ? "Restore" : "Archive"}
-                </Button>
-                <Button variant="danger" onClick={() => setConfirm("delete")}>
-                  Delete
-                </Button>
-              </>
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem icon="trash" tone="danger" onSelect={() => setConfirm("delete")}>
+                  Delete permanently
+                </MenuItem>
+              </Menu>
             ) : null}
-          </div>
+          </>
         }
       />
 
@@ -429,34 +460,36 @@ export default function DocumentDetailPage() {
         </Alert>
       ) : null}
 
-      <Tabs tabs={TABS} selected={tab} onSelect={selectTab} label="Document sections" />
-      <TabPanel id={tab}>
-        {tab === "overview" ? <Overview document={document} /> : null}
-        {tab === "preview" ? <PreviewPanel document={document} /> : null}
-        {tab === "text" ? (
-          <ContentPanel
-            document={document}
-            page={page}
-            start={start}
-            end={end}
-            onPage={(next) => {
-              const nextParams = new URLSearchParams();
-              nextParams.set("tab", "text");
-              nextParams.set("page", String(next));
-              setParams(nextParams, { replace: true });
-            }}
-          />
-        ) : null}
-        {tab === "fields" ? <FieldsPanel document={document} /> : null}
-        {tab === "tables" ? <TablesPanel document={document} /> : null}
-        {tab === "figures" ? <FiguresPanel document={document} /> : null}
-        {tab === "versions" ? (
-          <VersionsPanel document={document} onChanged={resource.reload} />
-        ) : null}
-        {tab === "processing" ? (
-          <ProcessingPanel document={document} onSettled={resource.reload} />
-        ) : null}
-      </TabPanel>
+      <div>
+        <Tabs tabs={TABS} selected={tab} onSelect={selectTab} label="Document sections" />
+        <TabPanel id={tab}>
+          {tab === "overview" ? <Overview document={document} /> : null}
+          {tab === "preview" ? <PreviewPanel document={document} /> : null}
+          {tab === "text" ? (
+            <ContentPanel
+              document={document}
+              page={page}
+              start={start}
+              end={end}
+              onPage={(next) => {
+                const nextParams = new URLSearchParams();
+                nextParams.set("tab", "text");
+                nextParams.set("page", String(next));
+                setParams(nextParams, { replace: true });
+              }}
+            />
+          ) : null}
+          {tab === "fields" ? <FieldsPanel document={document} /> : null}
+          {tab === "tables" ? <TablesPanel document={document} /> : null}
+          {tab === "figures" ? <FiguresPanel document={document} /> : null}
+          {tab === "versions" ? (
+            <VersionsPanel document={document} onChanged={resource.reload} />
+          ) : null}
+          {tab === "processing" ? (
+            <ProcessingPanel document={document} onSettled={resource.reload} />
+          ) : null}
+        </TabPanel>
+      </div>
 
       {editing ? (
         <EditDialog

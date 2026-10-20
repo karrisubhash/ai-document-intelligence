@@ -99,9 +99,11 @@ export default function ProcessingPage() {
       ) : jobs.loading && !jobs.data ? (
         <Skeleton lines={6} />
       ) : !jobs.data?.results.length ? (
-        <EmptyState title="Nothing here" icon="✓">
-          {view === "failed" ? "No failed runs. Everything processed cleanly." : "No runs in this view."}
-        </EmptyState>
+        <div className="card">
+          <EmptyState title="Nothing here" icon="check-circle">
+            {view === "failed" ? "No failed runs. Everything processed cleanly." : "No runs in this view."}
+          </EmptyState>
+        </div>
       ) : (
         <div className="table-wrap">
           <table className="table">
@@ -131,7 +133,7 @@ export default function ProcessingPage() {
                     </span>
                   </td>
                   <td>
-                    <Badge tone={statusTone(job)}>
+                    <Badge tone={statusTone(job)} dot>
                       {job.is_stalled ? "Stalled" : humanize(job.status)}
                     </Badge>
                   </td>
@@ -148,11 +150,12 @@ export default function ProcessingPage() {
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td>{formatRelative(job.updated_at)}</td>
-                  <td>
+                  <td className="nowrap muted">{formatRelative(job.updated_at)}</td>
+                  <td className="cell-actions">
                     {(job.status === "FAILED" || job.is_stalled) && job.is_current_version ? (
                       <Button
                         size="sm"
+                        icon="refresh"
                         loading={retrying === job.id}
                         onClick={() => retry(job)}
                         disabled={job.error_code === "MALWARE_DETECTED"}

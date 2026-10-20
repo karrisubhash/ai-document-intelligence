@@ -5,6 +5,7 @@ import { ApiError, api } from "../api/client";
 import { useAction, useResource } from "../api/hooks";
 import type { Collection } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { Icon } from "../components/icons";
 import {
   Alert,
   Badge,
@@ -19,6 +20,7 @@ import {
   useDocumentTitle,
   useToast,
 } from "../components/ui";
+import { pluralize } from "../lib/format";
 
 /**
  * Collections (spec 14): named sets of documents that Search and Ask can be
@@ -58,15 +60,20 @@ function CollectionCard({ collection, onChanged }: { collection: Collection; onC
 
   return (
     <Card
+      icon="folder"
       title={
         <>
-          {collection.name} <Badge>{collection.document_count} documents</Badge>
+          {collection.name}
+          <Badge>{pluralize(collection.document_count, "document")}</Badge>
         </>
       }
+      description={collection.department || undefined}
       actions={
         collection.can_manage ? (
           <Button
             variant="ghost"
+            size="sm"
+            icon="trash"
             loading={remove.pending}
             onClick={async () => {
               if (!window.confirm(`Delete “${collection.name}”? Its documents are not deleted.`)) return;
@@ -84,10 +91,17 @@ function CollectionCard({ collection, onChanged }: { collection: Collection; onC
     >
       {collection.description ? <p className="muted">{collection.description}</p> : null}
       {collection.documents.length ? (
-        <ul className="row-list">
+        <ul className="row-list collection-docs">
           {collection.documents.map((doc) => (
             <li key={doc.id} className="row-item">
-              <Link to={`/documents/${doc.id}`}>{doc.title}</Link>
+              <Link to={`/documents/${doc.id}`} className="row-link">
+                <span className="icon-tile" aria-hidden="true">
+                  <Icon name="file-text" />
+                </span>
+                <span className="row-text">
+                  <span className="row-title">{doc.title}</span>
+                </span>
+              </Link>
               {collection.can_manage ? (
                 <Button variant="ghost" size="sm" onClick={() => void update([doc.id], false)}>
                   Remove
@@ -114,7 +128,12 @@ function CollectionCard({ collection, onChanged }: { collection: Collection; onC
               </option>
             ))}
           </select>
-          <Button disabled={!pick} loading={change.pending} onClick={() => void update([Number(pick)], true)}>
+          <Button
+            icon="plus"
+            disabled={!pick}
+            loading={change.pending}
+            onClick={() => void update([Number(pick)], true)}
+          >
             Add
           </Button>
         </div>
@@ -167,80 +186,100 @@ export default function CollectionsPage() {
       />
 
       {can("create_collections") ? (
-        <Card title="New collection">
+        <Card
+          title="New collection"
+          icon="folder-plus"
+          description="A collection only ever narrows what Search and Ask look at - it never shows anyone a document they cannot already read."
+        >
           <form className="stack" onSubmit={submit} noValidate>
-            <Field label="Name" error={errors.name} required>
-              {(props) => (
-                <input
-                  {...props}
-                  className="input"
-                  value={name}
-                  maxLength={120}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              )}
-            </Field>
-            <Field label="Description" error={errors.description}>
-              {(props) => (
-                <input
-                  {...props}
-                  className="input"
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                />
-              )}
-            </Field>
-            {anyDepartment ? (
-              <Field
-                label="Department"
-                error={errors.department}
-                hint="Who can see it. It holds only that department's documents."
-              >
+            <div className="create-form">
+              <Field label="Name" error={errors.name} required>
                 {(props) => (
-                  <select
+                  <input
                     {...props}
                     className="input"
-                    value={department}
-                    onChange={(event) => setDepartment(event.target.value)}
-                  >
-                    <option value="">
-                      {me?.department ? `Your own (${me.department})` : "Choose a department…"}
-                    </option>
-                    {(departments.data ?? []).map((item) => (
-                      <option key={item.id} value={item.name}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
+                    value={name}
+                    maxLength={120}
+                    onChange={(event) => setName(event.target.value)}
+                  />
                 )}
               </Field>
-            ) : null}
+              <Field label="Description" error={errors.description}>
+                {(props) => (
+                  <input
+                    {...props}
+                    className="input"
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                  />
+                )}
+              </Field>
+              {anyDepartment ? (
+                <Field
+                  label="Department"
+                  error={errors.department}
+                  hint="Who can see it. It holds only that department's documents."
+                >
+                  {(props) => (
+                    <select
+                      {...props}
+                      className="input"
+                      value={department}
+                      onChange={(event) => setDepartment(event.target.value)}
+                    >
+                      <option value="">
+                        {me?.department ? `Your own (${me.department})` : "Choose a department…"}
+                      </option>
+                      {(departments.data ?? []).map((item) => (
+                        <option key={item.id} value={item.name}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+              ) : null}
+              <div className="create-form-submit">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  icon="plus"
+                  loading={create.pending}
+                  disabled={!name.trim()}
+                >
+                  Create
+                </Button>
+              </div>
+            </div>
             {create.error && !Object.keys(errors).length ? (
               <Alert tone="danger">{errorMessage(create.error)}</Alert>
             ) : null}
-            <div>
-              <Button type="submit" variant="primary" loading={create.pending} disabled={!name.trim()}>
-                Create
-              </Button>
-            </div>
           </form>
         </Card>
       ) : null}
 
       {collections.error ? <ErrorState error={collections.error} title="Could not load collections" /> : null}
-      {collections.loading && !collections.data ? <Skeleton lines={4} /> : null}
-      {collections.data && !list.length ? (
-        <EmptyState title="No collections yet">
-          {can("create_collections")
-            ? "Create one above, then add documents to it."
-            : "A faculty member or department administrator can create one."}
-        </EmptyState>
+      {collections.loading && !collections.data ? (
+        <div className="card card-body">
+          <Skeleton lines={4} />
+        </div>
       ) : null}
-      <div className="stack">
-        {list.map((collection) => (
-          <CollectionCard key={collection.id} collection={collection} onChanged={collections.reload} />
-        ))}
-      </div>
+      {collections.data && !list.length ? (
+        <div className="card">
+          <EmptyState title="No collections yet" icon="folder">
+            {can("create_collections")
+              ? "Create one above, then add documents to it."
+              : "A faculty member or department administrator can create one."}
+          </EmptyState>
+        </div>
+      ) : null}
+      {list.length ? (
+        <div className="collections-grid">
+          {list.map((collection) => (
+            <CollectionCard key={collection.id} collection={collection} onChanged={collections.reload} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

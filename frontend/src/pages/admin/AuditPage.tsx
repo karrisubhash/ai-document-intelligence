@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api/client";
 import { useResource } from "../../api/hooks";
 import {
+  Avatar,
   Badge,
   EmptyState,
   ErrorState,
@@ -109,7 +110,9 @@ export default function AuditPage() {
       ) : entries.loading && !entries.data ? (
         <Skeleton lines={8} />
       ) : !entries.data?.results.length ? (
-        <EmptyState title="No matching audit entries" icon="☰" />
+        <div className="card">
+          <EmptyState title="No matching audit entries" icon="scroll" />
+        </div>
       ) : (
         <div className="table-wrap">
           <table className="table table-compact">
@@ -127,10 +130,22 @@ export default function AuditPage() {
               {entries.data.results.map((entry) => (
                 <tr key={entry.id}>
                   <td className="nowrap">{formatDateTime(entry.created_at)}</td>
-                  <td>{entry.username || <span className="muted">unknown</span>}</td>
+                  <td>
+                    {entry.username ? (
+                      <span className="cell-person">
+                        <Avatar name={entry.username} size="sm" />
+                        {entry.username}
+                      </span>
+                    ) : (
+                      <span className="muted">unknown</span>
+                    )}
+                  </td>
                   <td>{AUDIT_ACTION_LABEL[entry.action] ?? entry.action}</td>
                   <td>
-                    <Badge tone={entry.result === "ALLOWED" ? "success" : "danger"}>
+                    <Badge
+                      tone={entry.result === "ALLOWED" ? "success" : "danger"}
+                      icon={entry.result === "ALLOWED" ? "check" : "x"}
+                    >
                       {entry.result === "ALLOWED" ? "Allowed" : "Denied"}
                     </Badge>
                   </td>
