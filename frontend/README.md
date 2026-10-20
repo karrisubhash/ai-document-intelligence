@@ -7,7 +7,9 @@ departments and processing.
 React 19 + TypeScript + Vite, no UI framework. It talks to the Django API on the **same
 origin**: Vite proxies `/api` in development and nginx does the same in production, so
 the browser holds an httpOnly session cookie that no script can read, and every unsafe
-request carries Django's CSRF token. Nothing credential-like is stored in `localStorage`.
+request carries Django's CSRF token. Nothing credential-like is stored in `localStorage`;
+the only things kept there are two display preferences (the colour theme and a collapsed
+sidebar), and the app works the same when storage is blocked.
 
 ---
 
@@ -55,11 +57,29 @@ E2E_PASSWORD=... npx playwright test
 | **Sign in** | Session login with CSRF; explains an expired session, a throttled attempt or an unreachable server differently. |
 | **Dashboard** | Counts over the documents the user may open, recent documents, failures they can act on, recent conversations, and a question box. |
 | **Documents** | Search titles, filter by status/type/department/owner, archived toggle, sort, paginate; state lives in the URL. Polls only while something is processing. |
-| **Document** | Overview and classification; Preview (PDF and images, never for quarantined files); Text by page with OCR flagged; Fields with their source spans; Tables; Figures; Versions with per-version download; Processing timeline. Edit, new version, reprocess, archive/restore and delete for those who may manage it. |
+| **Document** | Overview and classification; Preview (PDF and images, never for quarantined files); Text by page with OCR flagged; Fields with their source spans; Tables; Figures; Versions with per-version download; Processing timeline. Ask and Download up front; edit, reprocess, archive/restore and delete under **More actions** for those who may manage it, and new versions on the Versions tab. |
 | **Search** | Hybrid search with the query kept out of the URL (the API takes it by POST for the same reason). Results highlight matched terms and open the document at the exact passage. |
 | **Ask** | Conversations with history, rename and delete; answers with numbered citations that open the exact evidence — the cited passage tinted, the quoted words marked, and a warning when the document has changed since. Abstentions are explained in plain language; follow-ups show how they were read; injection warnings and multi-part plans are surfaced. Feedback per answer. |
 | **Account** | Profile and password change. |
 | **Administration** | Users (scoped for department admins), Departments (registry with cascading rename), Processing (failed/running/stalled runs with retry), Audit log, System status. Each screen appears only for the capabilities `/api/auth/me/` reports — and the API enforces the same rules regardless. |
+| **Quick find** | **Ctrl+K** (**⌘K** on a Mac), or the search box in the top bar: jump to any screen, open a document by title, send what you typed to Search or Ask, upload, switch theme, sign out. What is typed travels to Search and Ask in history state, never in the URL. |
+
+## Design system
+
+Everything visual comes from the tokens at the top of `src/styles.css` — colours, radii,
+shadows, type sizes, a 4px spacing grid — so a component never invents its own values.
+
+- **Light and dark themes.** Dark follows the operating system unless the reader picks
+  Light, Dark or System from the account menu (or the top-bar toggle). The choice is applied
+  before the first paint by `public/theme-init.js`: an external file, because the
+  Content-Security-Policy allows no inline script. `src/lib/theme.ts` owns the preference.
+- **Inter, bundled.** The font ships with the app (`@fontsource-variable/inter`, OFL); the
+  CSP allows fonts from this origin only, and no request goes to a font CDN.
+- **Icons are inline SVG** (`src/components/icons.tsx`, geometry from Lucide, ISC licence):
+  no icon font, no image requests. They are decoration — every icon-only control has an
+  accessible name.
+- **Primitives live in `src/components/ui.tsx`**: buttons, badges, alerts, cards, tabs,
+  native `<dialog>` modals and drawers, an accessible menu button, toasts, avatars.
 
 ## Layout
 
@@ -67,10 +87,13 @@ E2E_PASSWORD=... npx playwright test
 src/
   api/           client (same-origin fetch, CSRF, upload progress), types, hooks
   auth/          session context and capability checks
-  components/    layout, UI primitives, upload dialog, page text viewer,
-                 document panels, chat answer + source inspector
-  lib/           formatting, labels, highlighting, safe Markdown, upload checks
+  components/    layout and navigation, quick find, UI primitives, icons, upload
+                 dialog, page text viewer, document panels, chat answer + source
+                 inspector
+  lib/           formatting, labels, highlighting, safe Markdown, upload checks,
+                 theme preference, example questions
   pages/         one file per screen; admin/ for administration
+public/          theme-init.js (applies the saved theme before the first paint)
 e2e/             Playwright specs and fixtures (need a running stack)
 ```
 
