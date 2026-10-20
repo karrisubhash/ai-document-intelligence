@@ -508,9 +508,10 @@ SEARCH_CANDIDATES = int(os.getenv("SEARCH_CANDIDATES", "50"))
 # every query sat above exact matches, and a query nothing answered still
 # got a full page. With the bundled lexical reranker the fused order is
 # kept - lexical reranking measured worse than fusion. 0 turns reranking off
-# everywhere. Costs one cross-encoder pass per search; see
-# docs/evaluation/search-relevance.md for the measured latency.
-SEARCH_RERANK_DEPTH = int(os.getenv("SEARCH_RERANK_DEPTH", "30"))
+# everywhere. Costs one cross-encoder pass over this many passages per
+# search; 20 was chosen on measured quality and cost, 15 is the cheaper
+# option (ranking.DEFAULT_RERANK_DEPTH, docs/evaluation/search-relevance.md).
+SEARCH_RERANK_DEPTH = int(os.getenv("SEARCH_RERANK_DEPTH", "20"))
 
 # Unset means the floor calibrated for search for the configured
 # cross-encoder (ranking.CALIBRATED_FLOORS), or no floor at all - reorder,

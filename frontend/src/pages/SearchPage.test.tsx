@@ -136,16 +136,16 @@ describe("SearchPage", () => {
     // Weaker matches asked for are appended beyond the limit, so the response
     // can hold `limit` passages while every match is already on screen.
     const three = [1, 2, 3].map((chunk) => hit(chunk, `Match ${chunk}`, "late fine"));
-    const weaker = Array.from({ length: 9 }, (_, index) => hit(10 + index, `Weak ${index}`, "fine", true));
+    const weaker = Array.from({ length: 27 }, (_, index) => hit(10 + index, `Weak ${index}`, "fine", true));
     vi.spyOn(api, "search")
-      .mockResolvedValueOnce(response(three, 9, { limit: 10 }))
-      .mockResolvedValueOnce(response([...three, ...weaker], 9, { limit: 10 }));
+      .mockResolvedValueOnce(response(three, 27, { limit: 10 }))
+      .mockResolvedValueOnce(response([...three, ...weaker], 27, { limit: 10 }));
     renderSearch();
     await searchFor("late fine");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Show 9 weaker matches" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Show 27 weaker matches" }));
 
-    expect(await screen.findByRole("list", { name: "Weaker matches" })).toHaveTextContent("Weak 8");
+    expect(await screen.findByRole("list", { name: "Weaker matches" })).toHaveTextContent("Weak 26");
     expect(screen.queryByRole("button", { name: "Show more results" })).not.toBeInTheDocument();
   });
 

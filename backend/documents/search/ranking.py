@@ -72,11 +72,18 @@ from . import service
 
 logger = logging.getLogger("adi.search")
 
-# How many fused candidates the cross-encoder reads (at least `limit`). It
-# can only promote what it is shown, so this bounds recall; it is also the
-# per-search CPU cost. On the benchmark the first relevant passage sat at
-# fused rank 7 or better whenever retrieval found it at all.
-DEFAULT_RERANK_DEPTH = 30
+# How many fused candidates the cross-encoder reads (at least `limit`), and
+# so the per-search CPU cost: one pair per candidate. Deeper is not safer.
+# The cross-encoder only promotes what it is shown, but it also overrates
+# some deep OCR junk that fusion had rightly put low. Replaying one MiniLM
+# pass per query at each depth on the benchmark's DEV split (the pairs are
+# scored independently, and the replay reproduced the measured depth-30
+# results exactly): MRR and nDCG@5 were as good or better at 20 than at 30
+# on both corpora, best at 15, and recall started to fall at 10 - the
+# deepest relevant passage sat at fused rank 11. 20 rather than 15 keeps
+# headroom for larger corpora, which push relevant passages deeper, at two
+# thirds of 30's cost. docs/evaluation/search-relevance.md has the table.
+DEFAULT_RERANK_DEPTH = 20
 
 # Search relevance floors per cross-encoder model (the reranker's `version`
 # is its model id). Chosen on the dev split of

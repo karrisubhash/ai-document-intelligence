@@ -552,16 +552,17 @@ class RankingAuthorizationTests(TestCase):
     MEDIA_ROOT=MEDIA_ROOT,
     DOCUMENT_EMBEDDING_PROVIDER=PROVIDER,
     RAG_RERANKER=FAKE_MINILM,
-    SEARCH_RERANK_DEPTH=30,
 )
 class PilotDefaultsTests(TestCase):
-    """The pilot's relevance floor and fallback, at their shipped defaults.
+    """The pilot's relevance floor, fallback and rerank depth, at their
+    shipped defaults.
 
     Nothing here is patched or overridden. CI's search gate runs the lexical
     reranker, which keeps retrieval order and never reaches the floor, and
     the other ranking tests patch a fake model's floor or override the
-    fallback - so without these, MiniLM's floor (0.03, chosen on the dev
-    split) or the fallback (3) could change and every gate would pass.
+    fallback and depth - so without these, MiniLM's floor (0.03), the
+    fallback (3) or the depth (20), each chosen on the dev split, could
+    change and every gate would pass.
     """
 
     def setUp(self):
@@ -595,6 +596,13 @@ class PilotDefaultsTests(TestCase):
         """The defaults in the code, whatever this environment configured."""
         del settings.SEARCH_RELEVANCE_FLOOR
         del settings.SEARCH_FALLBACK_RESULTS
+        del settings.SEARCH_RERANK_DEPTH
+
+    @override_settings()
+    def test_the_reranker_reads_the_top_twenty_fused_candidates(self):
+        self.use_code_defaults()
+
+        self.assertEqual(ranking.rerank_depth(), 20)
 
     @override_settings()
     def test_the_minilm_floor_admits_0_05_and_not_0_02(self):
@@ -623,12 +631,14 @@ class PilotDefaultsTests(TestCase):
         )
 
     @unittest.skipIf(
-        {"SEARCH_RELEVANCE_FLOOR", "SEARCH_FALLBACK_RESULTS"} & set(os.environ),
+        {"SEARCH_RELEVANCE_FLOOR", "SEARCH_FALLBACK_RESULTS", "SEARCH_RERANK_DEPTH"}
+        & set(os.environ),
         "this environment overrides the shipped defaults",
     )
     def test_the_settings_ship_the_same_defaults(self):
         self.assertIsNone(settings.SEARCH_RELEVANCE_FLOOR)
         self.assertEqual(settings.SEARCH_FALLBACK_RESULTS, 3)
+        self.assertEqual(settings.SEARCH_RERANK_DEPTH, 20)
 
 
 @override_settings(
