@@ -19,6 +19,7 @@ import type {
   ChatResponse,
   ClassificationResult,
   AnswerSource,
+  BulkDeleteResult,
   Collection,
   Conversation,
   ConversationSummary,
@@ -457,6 +458,14 @@ export const api = {
     return request<DocumentDetail>(doc(id), { method: "PATCH", body: form });
   },
   deleteDocument: (id: number) => request<void>(doc(id), { method: "DELETE" }),
+  /** At most 100 ids; `all` takes the listing's filters and deletes ≤100 per call. */
+  bulkDeleteDocuments: (
+    target: { ids: number[] } | { all: true; filters: Omit<DocumentQuery, "page" | "ordering"> },
+  ) =>
+    request<BulkDeleteResult>("/api/v1/documents/bulk-delete/", {
+      method: "POST",
+      body: target,
+    }),
   archive: (id: number) => request<DocumentDetail>(doc(id, "archive/"), { method: "POST" }),
   restore: (id: number) => request<DocumentDetail>(doc(id, "restore/"), { method: "POST" }),
   reprocess: (id: number) =>

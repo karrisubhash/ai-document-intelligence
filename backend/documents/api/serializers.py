@@ -199,6 +199,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
     current_version = DocumentVersionSummarySerializer(read_only=True)
     owner_username = serializers.SerializerMethodField()
     is_archived = serializers.BooleanField(read_only=True)
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
@@ -213,6 +214,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
             "current_version",
             "is_archived",
             "archived_at",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
@@ -220,6 +222,14 @@ class DocumentListSerializer(serializers.ModelSerializer):
 
     def get_owner_username(self, document):
         return document.owner.get_username() if document.owner_id else ""
+
+    def get_can_manage(self, document):
+        # Which rows the listing offers to select for bulk delete - a UI
+        # hint only, as on DocumentSerializer; the delete decides again.
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return authorization.can_manage_document(request.user, document)
 
 
 class DocumentListQuerySerializer(serializers.Serializer):
@@ -345,6 +355,52 @@ class DocumentListQuerySerializer(serializers.Serializer):
         validated = super().to_internal_value(data)
         validated["owner_id"] = validated.pop("owner")
         return validated
+
+
+# One request deletes at most this many documents. A document's delete
+# cascades through its versions, pages, chunks and embeddings, so an
+# unbounded request could outlive the worker timeout half-way through;
+# "delete everything matching" is a client loop over `remaining` instead.
+BULK_DELETE_LIMIT = 100
+
+
+class BulkDeleteSerializer(serializers.Serializer):
+    """Body of POST /api/v1/documents/bulk-delete/.
+
+    Exactly one of:
+
+    * `ids` - the documents the caller selected;
+    * `all: true` - every document the caller may delete that matches
+      `filters`, which takes the listing's query parameters (validated by
+      DocumentListQuerySerializer, so "all" means what the listing showed).
+    """
+
+    ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=False,
+        max_length=BULK_DELETE_LIMIT,
+    )
+    all = serializers.BooleanField(required=False, default=False)
+    filters = serializers.DictField(required=False, default=dict)
+
+    def validate(self, attrs):
+        if bool(attrs.get("ids")) == attrs["all"]:
+            raise serializers.ValidationError(
+                "Send either a list of ids or all: true, not both."
+            )
+        if attrs["all"]:
+            query = DocumentListQuerySerializer(
+                data=attrs["filters"], context=self.context
+            )
+            if not query.is_valid():
+                raise serializers.ValidationError({"filters": query.errors})
+            attrs["filters"] = query.validated_data
+        elif attrs["filters"]:
+            raise serializers.ValidationError(
+                {"filters": ["Only applies with all: true."]}
+            )
+        return attrs
 
 
 class UploadSerializer(serializers.Serializer):

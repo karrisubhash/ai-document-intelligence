@@ -116,12 +116,25 @@ export interface DocumentSummary {
   current_version: DocumentVersion | null;
   is_archived: boolean;
   archived_at: string | null;
+  /** Whether the caller may edit, archive or delete it - a UI hint only. */
+  can_manage: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export interface DocumentDetail extends DocumentSummary {
-  can_manage: boolean;
+export type DocumentDetail = DocumentSummary;
+
+/** POST /documents/bulk-delete/ - ids sorted into what happened to each. */
+export interface BulkDeleteResult {
+  deleted: number[];
+  /** Visible to the caller, but not theirs to delete. */
+  forbidden: number[];
+  /** Gone already, or not visible to the caller - deliberately alike. */
+  not_found: number[];
+  /** With `all`: how many still match and may be deleted. Repeat until 0. */
+  remaining?: number;
+  /** With `all`: how many match that the caller may see but not delete. */
+  skipped?: number;
 }
 
 export interface ProcessingEvent {

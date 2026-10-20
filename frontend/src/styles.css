@@ -1941,6 +1941,55 @@ select.input-sm {
   flex-wrap: nowrap;
 }
 
+/* Bulk actions on the documents list: the bar that appears with a
+   selection, the selection column, and the selected rows. */
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  box-shadow: var(--shadow-xs);
+}
+
+.bulk-bar-count {
+  margin-right: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
+.bulk-bar-action {
+  margin-left: auto;
+}
+
+.table .table-select {
+  width: 1%;
+  padding-right: 0;
+}
+
+.select-box {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.select-box:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.table tbody tr.selected,
+.table tbody tr.selected:hover {
+  background: var(--accent-soft);
+}
+
 .table-wrap {
   overflow-x: auto;
   background: var(--surface);

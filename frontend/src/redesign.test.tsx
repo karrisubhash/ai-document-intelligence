@@ -48,6 +48,7 @@ function document(id: number, title: string): DocumentSummary {
     archived_at: null,
     created_at: "2026-10-05T10:00:00Z",
     updated_at: "2026-10-05T10:00:00Z",
+    can_manage: false,
   };
 }
 
