@@ -231,7 +231,18 @@ describe("ChatPage bulk delete", { timeout: 15000 }, () => {
     });
     const remove = vi
       .spyOn(api, "bulkDeleteConversations")
-      .mockResolvedValue({ deleted: Array.from({ length: 120 }, (_, n) => n + 1), not_found: [] });
+      .mockResolvedValueOnce({
+        deleted: Array.from({ length: 100 }, (_, n) => n + 1),
+        not_found: [],
+        remaining: 20,
+        as_of: "2026-10-20T09:00:00Z",
+      })
+      .mockResolvedValueOnce({
+        deleted: Array.from({ length: 20 }, (_, n) => n + 101),
+        not_found: [],
+        remaining: 0,
+        as_of: "2026-10-20T09:00:00Z",
+      });
     renderAt("/ask");
 
     await userEvent.click(
@@ -244,8 +255,66 @@ describe("ChatPage bulk delete", { timeout: 15000 }, () => {
     const dialog = screen.getByRole("dialog", { name: "Delete all 120 conversations?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));
 
-    expect(remove).toHaveBeenCalledWith({ all: true });
+    expect(remove).toHaveBeenCalledTimes(2);
+    // The second round keeps to the first answer's snapshot.
+    expect(remove).toHaveBeenLastCalledWith({ all: true, as_of: "2026-10-20T09:00:00Z" });
     expect(await screen.findByText("Deleted 120 conversations.")).toBeInTheDocument();
+  });
+
+  it("deletes exactly the conversations shown when all of them are loaded", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue({
+      count: 3,
+      next: null,
+      previous: null,
+      results: THREE,
+    });
+    const remove = vi
+      .spyOn(api, "bulkDeleteConversations")
+      .mockResolvedValue({ deleted: [7, 8, 9], not_found: [] });
+    renderAt("/ask");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select conversations" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all conversations" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete all 3 conversations?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));
+
+    // Ids, not all: true - a conversation started in another tab since is
+    // not on screen, so it is not deleted.
+    expect(remove).toHaveBeenCalledWith({ ids: [7, 8, 9] });
+  });
+
+  it("keeps the dialog open with the error, and cannot be cancelled mid-run", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue({
+      count: 3,
+      next: null,
+      previous: null,
+      results: THREE,
+    });
+    let fail: (error: Error) => void = () => undefined;
+    vi.spyOn(api, "bulkDeleteConversations").mockImplementation(
+      () => new Promise((_, reject) => (fail = reject)),
+    );
+    renderAt("/ask");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select conversations" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Exam dates" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 1 conversation?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    // While it runs, Cancel is disabled and Escape does not close it.
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Delete 1 conversation?" })).toBeInTheDocument();
+
+    fail(new Error("Server unavailable"));
+    expect(await within(dialog).findByText("That did not work")).toBeInTheDocument();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 
   it("narrows 'all' back to the loaded ones when one is unticked", async () => {

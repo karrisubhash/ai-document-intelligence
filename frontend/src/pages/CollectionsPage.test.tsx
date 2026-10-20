@@ -172,15 +172,35 @@ describe("CollectionsPage bulk actions", { timeout: 15000 }, () => {
     expect(screen.getByText("1 selected")).toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "Select Theirs" })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("checkbox", { name: "Select all collections" }));
+    // "Theirs" is not the user's to delete, so this is not "all collections".
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Select all collections you can delete" }),
+    );
     expect(screen.getByText("2 selected")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Delete all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
 
     const dialog = screen.getByRole("dialog", { name: "Delete 2 collections?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
 
     expect(remove).toHaveBeenCalledWith({ ids: [7, 8] });
     expect(await screen.findByText("Deleted 2 collections.")).toBeInTheDocument();
+  });
+
+  it("shows a failed delete inside the dialog", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    vi.spyOn(api, "collections").mockResolvedValue(
+      page([collection(7, "Exam rules"), collection(8, "Fees")]),
+    );
+    vi.spyOn(api, "bulkDeleteCollections").mockRejectedValue(new Error("Server unavailable"));
+    renderAt("/collections");
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select all collections" }, LOADED));
+    await userEvent.click(screen.getByRole("button", { name: "Delete all" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 collections?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+
+    // A toast would sit under the modal's backdrop, unannounced.
+    expect(await within(dialog).findByText("That did not work")).toBeInTheDocument();
   });
 
   it("removes the selected documents from a collection in one request", async () => {

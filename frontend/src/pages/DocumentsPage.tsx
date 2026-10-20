@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, type DocumentQuery } from "../api/client";
@@ -93,6 +93,7 @@ export default function DocumentsPage() {
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [allMatching, setAllMatching] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const selectAllBox = useRef<HTMLInputElement>(null);
   const listing = JSON.stringify([page, search, status, documentType, department, ordering, archived, mine]);
   useEffect(() => {
     setSelected(new Set());
@@ -100,19 +101,31 @@ export default function DocumentsPage() {
   }, [listing]);
 
   const selectable = rows.filter((row) => row.can_manage);
+  // A reload (polling, another tab's change) can drop a selected row from
+  // this page; it is dropped from the selection too, so what is deleted is
+  // always what is ticked on screen.
+  useEffect(() => {
+    const onScreen = new Set(selectable.map((row) => row.id));
+    setSelected((current) =>
+      [...current].every((id) => onScreen.has(id))
+        ? current
+        : new Set([...current].filter((id) => onScreen.has(id))),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documents.data]);
+
   const pageSelected = selectable.length > 0 && selectable.every((row) => selected.has(row.id));
   const someSelected = selectable.some((row) => selected.has(row.id));
   const showSelection = selectable.length > 0 || selected.size > 0;
   const total = documents.data?.count ?? 0;
 
   const toggle = (id: number, on: boolean) => {
+    // Unticking one while "all matching" is on keeps the rest of the page.
+    const next = new Set(allMatching ? selectable.map((row) => row.id) : selected);
+    if (on) next.add(id);
+    else next.delete(id);
     setAllMatching(false);
-    setSelected((current) => {
-      const next = new Set(current);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
+    setSelected(next);
   };
   const togglePage = (on: boolean) => {
     setAllMatching(false);
@@ -125,9 +138,22 @@ export default function DocumentsPage() {
       return next;
     });
   };
+  // The buttons that cleared the selection go with it; focus stays put.
   const clearSelection = () => {
     setSelected(new Set());
     setAllMatching(false);
+    selectAllBox.current?.focus();
+  };
+  const afterDelete = (answered: number[], completed: boolean) => {
+    const gone = new Set(answered);
+    setSelected((current) => new Set([...current].filter((id) => !gone.has(id))));
+    if (completed) setAllMatching(false);
+    // After the dialog has closed: while it is modal, the page is inert.
+    window.setTimeout(() => selectAllBox.current?.focus(), 0);
+    // Leave the page only if deleting emptied it.
+    const emptied = rows.every((row) => gone.has(row.id));
+    if (page > 1 && (emptied || (completed && allMatching))) update({ page: "" });
+    else documents.reload();
   };
 
   const filters: Omit<DocumentQuery, "page" | "ordering"> = {
@@ -272,29 +298,42 @@ export default function DocumentsPage() {
         </EmptyState>
       ) : (
         <>
-        {selected.size > 0 || allMatching ? (
-          <div className="bulk-bar" role="region" aria-label="Selected documents">
+        {/* Mounted whenever rows can be selected - appearing on the first
+            tick, it pushed the table down by a row under the pointer. */}
+        {showSelection ? (
+          <div
+            className={selected.size > 0 || allMatching ? "bulk-bar" : "bulk-bar bulk-bar-idle"}
+            role="region"
+            aria-label="Selected documents"
+          >
             <span className="bulk-bar-count" aria-live="polite">
               {allMatching
-                ? `All ${total} matching ${plural(total, "document")} selected`
-                : `${selected.size} selected`}
+                ? `All matching documents selected (${total})`
+                : selected.size
+                  ? `${selected.size} selected`
+                  : "Select documents to delete them"}
             </span>
-            {!allMatching && total > selected.size ? (
+            {/* Only when there is more than this page to select. */}
+            {selected.size > 0 && !allMatching && total > rows.length ? (
               <Button variant="ghost" size="sm" onClick={() => setAllMatching(true)}>
                 Select all {total} matching
               </Button>
             ) : null}
-            <Button variant="ghost" size="sm" onClick={clearSelection}>
-              Clear selection
-            </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              className="bulk-bar-action"
-              onClick={() => setConfirmingDelete(true)}
-            >
-              {allMatching ? "Delete all" : "Delete selected"}
-            </Button>
+            {selected.size > 0 || allMatching ? (
+              <>
+                <Button variant="ghost" size="sm" onClick={clearSelection}>
+                  Clear selection
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  className="bulk-bar-action"
+                  onClick={() => setConfirmingDelete(true)}
+                >
+                  {allMatching ? "Delete all…" : "Delete selected"}
+                </Button>
+              </>
+            ) : null}
           </div>
         ) : null}
         <div className="table-wrap" aria-busy={documents.loading}>
@@ -305,6 +344,7 @@ export default function DocumentsPage() {
                 {showSelection ? (
                   <th scope="col" className="table-select">
                     <SelectBox
+                      inputRef={selectAllBox}
                       label="Select all on this page"
                       checked={allMatching || pageSelected}
                       indeterminate={!allMatching && someSelected && !pageSelected}
@@ -382,20 +422,11 @@ export default function DocumentsPage() {
 
       <BulkDeleteDialog
         open={confirmingDelete}
-        target={allMatching ? { all: true, count: total, filters } : { ids: [...selected] }}
-        someNotManageable={rows.some((row) => !row.can_manage)}
+        target={allMatching ? { all: true, filters } : { ids: [...selected] }}
         onClose={() => setConfirmingDelete(false)}
-        onDone={(deleted) => {
-          setConfirmingDelete(false);
-          setSelected((current) => {
-            const next = new Set(current);
-            for (const id of deleted) next.delete(id);
-            return next;
-          });
-          setAllMatching(false);
-          // Deleting can empty the page being looked at.
-          if (page > 1 && deleted.length > 0) update({ page: "" });
-          else documents.reload();
+        onFinished={(answered, completed) => {
+          if (completed) setConfirmingDelete(false);
+          afterDelete(answered, completed);
         }}
       />
     </div>
@@ -404,90 +435,151 @@ export default function DocumentsPage() {
 
 type DeleteTarget =
   | { ids: number[] }
-  | { all: true; count: number; filters: Omit<DocumentQuery, "page" | "ordering"> };
+  | { all: true; filters: Omit<DocumentQuery, "page" | "ordering"> };
 
 /** What the server takes per request; larger selections are sent in batches. */
 const BATCH = 100;
 const CONFIRM_WORD = "DELETE";
 
+interface Preview {
+  /** Matching documents the user may delete, as of `asOf`. */
+  count: number;
+  /** Matching documents the user may see but not delete. */
+  skipped: number;
+  /** The server's snapshot: documents created later are never included. */
+  asOf: string;
+}
+
 function BulkDeleteDialog({
   open,
   target,
-  someNotManageable,
   onClose,
-  onDone,
+  onFinished,
 }: {
   open: boolean;
   target: DeleteTarget;
-  someNotManageable: boolean;
   onClose: () => void;
-  onDone: (deleted: number[]) => void;
+  /**
+   * The ids the server answered for (deleted, or already gone), and whether
+   * the run completed. Called after a failure too - what was deleted before
+   * it is gone, and the listing must say so.
+   */
+  onFinished: (answered: number[], completed: boolean) => void;
 }) {
   const toast = useToast();
   const [typed, setTyped] = useState("");
   const [pending, setPending] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<unknown>(null);
+  // What the user confirms is fixed when the dialog opens; polling and other
+  // tabs keep changing the listing underneath it.
+  const [job, setJob] = useState<DeleteTarget>(target);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewError, setPreviewError] = useState<unknown>(null);
+  // Leaving the page stops the run between requests, and nothing touches
+  // the page (or the URL) after that.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   useEffect(() => {
-    if (open) {
-      setTyped("");
-      setProgress(0);
-      setError(null);
-    }
+    if (!open) return;
+    setTyped("");
+    setProgress(0);
+    setError(null);
+    setPreview(null);
+    setPreviewError(null);
+    setJob(target);
+    if (!("all" in target)) return;
+    // "All matching" is counted by the server, not taken from the listing:
+    // the listing counts documents the user may not delete, and the count
+    // comes with the snapshot the delete then keeps to.
+    let current = true;
+    api
+      .bulkDeleteDocuments({ all: true, filters: target.filters, preview: true })
+      .then((result) => {
+        if (current)
+          setPreview({
+            count: result.remaining ?? 0,
+            skipped: result.skipped ?? 0,
+            asOf: result.as_of ?? "",
+          });
+      })
+      .catch((caught: unknown) => {
+        if (current) setPreviewError(caught);
+      });
+    return () => {
+      current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const all = "all" in target;
-  const count = all ? target.count : target.ids.length;
+  const all = "all" in job;
+  const count = all ? (preview?.count ?? 0) : job.ids.length;
   const noun = plural(count, "document");
-  const armed = !all || typed.trim().toUpperCase() === CONFIRM_WORD;
+  const ready = all ? preview !== null && preview.count > 0 : count > 0;
+  const armed = ready && (!all || typed.trim().toUpperCase() === CONFIRM_WORD);
 
   const run = async () => {
     setPending(true);
     setError(null);
-    const deleted: number[] = [];
+    const answered: number[] = [];
+    const failed = new Set<number>();
+    let deleted = 0;
     let refused = 0;
+    let completed = false;
     try {
-      if (all) {
-        // The server deletes a bounded batch per request and says how many
-        // still match; stop too if a round deletes nothing, so a document
-        // that keeps failing cannot spin this forever.
+      if ("all" in job) {
+        // Rounds of at most BATCH, all within the preview's snapshot. Stop
+        // when nothing remains, or when a round deletes nothing - documents
+        // that keep failing must not spin this forever.
         for (;;) {
-          const result = await api.bulkDeleteDocuments({ all: true, filters: target.filters });
-          deleted.push(...result.deleted);
-          setProgress(deleted.length);
+          const result = await api.bulkDeleteDocuments({
+            all: true,
+            filters: job.filters,
+            as_of: preview?.asOf,
+          });
+          answered.push(...result.deleted, ...result.not_found);
+          for (const id of result.failed ?? []) failed.add(id);
+          deleted += result.deleted.length;
           refused = result.skipped ?? 0;
-          if (!result.remaining || result.deleted.length === 0) break;
+          if (alive.current) setProgress(deleted);
+          if (!alive.current || !result.remaining || result.deleted.length === 0) break;
         }
       } else {
-        for (let start = 0; start < target.ids.length; start += BATCH) {
+        for (let start = 0; start < job.ids.length && alive.current; start += BATCH) {
           const result = await api.bulkDeleteDocuments({
-            ids: target.ids.slice(start, start + BATCH),
+            ids: job.ids.slice(start, start + BATCH),
           });
-          deleted.push(...result.deleted);
-          setProgress(deleted.length);
-          refused += (result.forbidden ?? []).length;
+          const forbidden = result.forbidden ?? [];
+          answered.push(...result.deleted, ...result.not_found, ...forbidden);
+          for (const id of result.failed ?? []) failed.add(id);
+          deleted += result.deleted.length;
+          refused += forbidden.length;
+          if (alive.current) setProgress(deleted);
         }
       }
+      completed = true;
     } catch (caught) {
-      setError(caught);
-      setPending(false);
-      if (deleted.length > 0) {
-        toast(`Deleted ${deleted.length} ${plural(deleted.length, "document")} before the error.`, "warning");
-      }
-      return;
+      if (alive.current) setError(caught);
     }
+    if (!alive.current) return;
     setPending(false);
 
-    if (deleted.length === 0 && refused > 0) {
+    const parts = [`Deleted ${deleted} ${plural(deleted, "document")}.`];
+    if (!completed) parts[0] = `Deleted ${deleted} ${plural(deleted, "document")} before deleting stopped.`;
+    if (refused) parts.push(`${refused} you may not delete ${refused === 1 ? "was" : "were"} left in place.`);
+    if (failed.size) parts.push(`${failed.size} could not be deleted - try again.`);
+    if (completed && deleted === 0 && refused > 0 && !failed.size) {
       toast("Nothing was deleted: you may not delete these documents.", "warning");
-    } else {
-      const left = refused
-        ? ` ${refused} you may not delete ${refused === 1 ? "was" : "were"} left in place.`
-        : "";
-      toast(`Deleted ${deleted.length} ${plural(deleted.length, "document")}.${left}`, refused ? "warning" : "success");
+    } else if (completed || deleted > 0) {
+      toast(parts.join(" "), completed && !refused && !failed.size ? "success" : "warning");
     }
-    onDone(deleted);
+    onFinished(answered, completed);
   };
 
   return (
@@ -496,7 +588,13 @@ function BulkDeleteDialog({
       onClose={() => {
         if (!pending) onClose();
       }}
-      title={all ? `Delete all ${count} matching ${noun}?` : `Delete ${count} ${noun}?`}
+      title={
+        all
+          ? preview
+            ? `Delete ${count} matching ${noun}?`
+            : "Delete all matching documents?"
+          : `Delete ${count} ${noun}?`
+      }
       size="sm"
       footer={
         <>
@@ -516,15 +614,29 @@ function BulkDeleteDialog({
         </p>
         {all ? (
           <p>
-            This includes every document matching the current search and filters, on every page -
-            not only the ones shown.
+            That is every document matching the current search and filters that you may delete, on
+            every page - not only the ones shown. Documents added from now on are not included.
           </p>
         ) : null}
-        {all && someNotManageable ? (
-          <p className="muted">Documents you may not delete are skipped.</p>
+        {all && !preview && !previewError ? (
+          <p className="muted" role="status">
+            Counting the matching documents…
+          </p>
+        ) : null}
+        {preview && preview.skipped > 0 ? (
+          <p className="muted">
+            {preview.skipped} matching {plural(preview.skipped, "document")} you may not delete{" "}
+            {preview.skipped === 1 ? "is" : "are"} left in place.
+          </p>
+        ) : null}
+        {preview && preview.count === 0 ? (
+          <p role="status">None of the matching documents are yours to delete.</p>
+        ) : null}
+        {previewError ? (
+          <ErrorState error={previewError} title="Could not count the matching documents" />
         ) : null}
         <p className="muted">To take documents out of search without losing them, archive them instead.</p>
-        {all ? (
+        {all && preview && preview.count > 0 ? (
           <label className="field">
             <span className="field-label">Type {CONFIRM_WORD} to confirm</span>
             <input
@@ -542,7 +654,17 @@ function BulkDeleteDialog({
             Deleted {progress} of {count}…
           </p>
         ) : null}
-        {error ? <ErrorState error={error} title="Deleting stopped" /> : null}
+        {error ? (
+          <>
+            <ErrorState error={error} title="Deleting stopped" />
+            {progress > 0 ? (
+              <p>
+                {progress} {plural(progress, "document")} {progress === 1 ? "was" : "were"} deleted
+                before it stopped; the list has been refreshed.
+              </p>
+            ) : null}
+          </>
+        ) : null}
       </div>
     </Dialog>
   );

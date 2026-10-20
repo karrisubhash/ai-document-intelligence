@@ -1053,6 +1053,12 @@ textarea.input {
   background: var(--accent-soft);
 }
 
+/* --text-3 on the tint is under 4.5:1 in the light theme. */
+.table tbody tr.selected .table-sub,
+.table tbody tr.selected .muted {
+  color: var(--text-2);
+}
+
 .table-wrap {
   overflow-x: auto;
   background: var(--surface);
@@ -1371,6 +1377,13 @@ a.table-title:hover {
 .toast-danger {
   background: var(--danger);
   color: #fff;
+}
+
+/* Partly done: some left in place, refused or failed. */
+.toast-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
 }
 
 /* --- Login ------------------------------------------------------------------------------ */
@@ -1838,6 +1851,10 @@ mark.evidence {
   border-radius: var(--radius-sm);
 }
 
+.conversation-select-idle {
+  display: flex;
+}
+
 .conversation-select {
   display: flex;
   padding-left: 10px;
@@ -2291,7 +2308,7 @@ mark.evidence {
 
 .bulk-bar-idle .bulk-bar-count {
   font-weight: 500;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 .member-select-bar {

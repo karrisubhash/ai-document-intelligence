@@ -14,6 +14,7 @@ Search and chat take `collection_id` to narrow to one collection.
 
 from django.db import IntegrityError, transaction
 from django.db.models import Prefetch
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied
@@ -21,7 +22,7 @@ from rest_framework.response import Response
 
 from accounts.services import UnknownDepartment, resolve_department
 from documents import authorization
-from documents.api.serializers import BulkSelectionSerializer
+from documents.api.serializers import BULK_DELETE_LIMIT, BulkSelectionSerializer
 from documents.audit import record_event
 from documents.models import AuditLog, Collection, Document
 
@@ -167,8 +168,10 @@ class CollectionViewSet(viewsets.ModelViewSet):
         Their documents are untouched, as with a single delete, and each
         deletion is audited as one. A collection the caller cannot see is
         `not_found` and one they can see but not manage is `forbidden` - the
-        404/403 split destroy makes. With `all`, collections the caller can
-        see but not manage are left and counted in `skipped`.
+        404/403 split destroy makes. `all` works like documents' (see
+        BulkSelectionSerializer): at most BULK_DELETE_LIMIT per request,
+        `remaining`, `as_of`, and `skipped` for the visible ones the caller
+        may not manage.
         """
         serializer = BulkSelectionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -176,30 +179,39 @@ class CollectionViewSet(viewsets.ModelViewSet):
         user = request.user
 
         visible = authorization.visible_collections(user, Collection.objects.all())
-        if not data["all"]:
-            visible = visible.filter(pk__in=data["ids"])
-        found = {collection.pk: collection for collection in visible.order_by("pk")}
-        requested = sorted(found) if data["all"] else sorted(set(data["ids"]))
+        if data["all"]:
+            as_of = data.get("as_of") or timezone.now()
+            visible = visible.filter(created_at__lte=as_of)
+            targets = authorization.manageable_collections(user, visible)
+            requested = list(
+                targets.order_by("pk").values_list("pk", flat=True)[:BULK_DELETE_LIMIT]
+            )
+        else:
+            requested = sorted(set(data["ids"]))
 
         outcome = {"deleted": [], "forbidden": [], "not_found": []}
         for pk in requested:
-            collection = found.get(pk)
-            if collection is None:
-                outcome["not_found"].append(pk)
-            elif not authorization.can_manage_collection(user, collection):
-                outcome["forbidden"].append(pk)
-            else:
-                with transaction.atomic():
+            with transaction.atomic():
+                # Locked and re-read here, not taken from a snapshot: a
+                # collection someone else deleted meanwhile is not_found,
+                # never a second audited delete that did nothing.
+                collection = visible.select_for_update().filter(pk=pk).first()
+                if collection is None:
+                    result = "not_found"
+                elif not authorization.can_manage_collection(user, collection):
+                    result = "forbidden"
+                else:
                     self._audit(
                         AuditLog.Action.COLLECTION_DELETE, collection, bulk=True
                     )
                     collection.delete()
-                outcome["deleted"].append(pk)
+                    result = "deleted"
+            outcome[result].append(pk)
 
         if data["all"]:
-            # Not refusals - nobody asked for these by id.
-            outcome["skipped"] = len(outcome["forbidden"])
-            outcome["forbidden"] = []
+            outcome["remaining"] = targets.count()
+            outcome["skipped"] = visible.exclude(pk__in=targets.values("pk")).count()
+            outcome["as_of"] = as_of
         return Response(outcome)
 
     @action(detail=True, methods=["post", "delete"])

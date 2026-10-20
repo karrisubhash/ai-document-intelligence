@@ -134,6 +134,17 @@ def visible_collections(user, queryset):
     return queryset.filter(visible)
 
 
+def manageable_collections(user, queryset):
+    """can_manage_collection as a filter, for bulk actions."""
+    if is_system_admin(user):
+        return queryset
+    profile = get_profile(user)
+    manageable = Q(created_by=user)
+    if profile.role == UserProfile.Role.DEPARTMENT_ADMIN and profile.department:
+        manageable |= Q(department=profile.department)
+    return queryset.filter(manageable)
+
+
 def can_manage_collection(user, collection) -> bool:
     """Rename, delete, or change membership."""
     if is_system_admin(user):

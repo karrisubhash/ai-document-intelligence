@@ -1,6 +1,9 @@
-from django.db import transaction
+import logging
+
+from django.db import DatabaseError, transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -48,6 +51,8 @@ from .serializers import (
     ExtractionResultSerializer,
     ProcessingJobSerializer,
 )
+
+logger = logging.getLogger("adi.documents")
 
 
 def _live_content(version):
@@ -147,6 +152,9 @@ class DocumentViewSet(viewsets.ModelViewSet):
             self.action == "versions" and self.request.method == "POST"
         ):
             self.throttle_scope = "upload"
+        elif self.action == "bulk_delete":
+            # Up to BULK_DELETE_LIMIT transactions and audit rows a request.
+            self.throttle_scope = "bulk_delete"
         else:
             self.throttle_scope = None
         return super().get_throttles()
@@ -548,9 +556,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         Each document is decided and audited exactly as a single DELETE is
         (see _bulk_delete_one). With `all`, only documents the caller may
-        delete are taken, at most BULK_DELETE_LIMIT per request; `remaining`
+        delete are taken, at most BULK_DELETE_LIMIT per request, and only
+        ones created by `as_of` (see BulkSelectionSerializer); `remaining`
         says how many still match, so a client repeats until it is 0, and
         `skipped` how many match that the caller may see but not delete.
+        `preview` answers those counts without deleting anything.
         """
         serializer = BulkDeleteSerializer(
             data=request.data, context={"request": request}
@@ -559,26 +569,48 @@ class DocumentViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
         user = request.user
 
+        outcome = {"deleted": [], "forbidden": [], "not_found": [], "failed": []}
         if data["all"]:
+            as_of = data.get("as_of") or timezone.now()
             # Scoped by authorization first, then narrowed - the same
             # boundary the listing relies on (see discovery.py).
             matching = discovery.apply(
                 authorization.visible_documents(user, Document.objects.all()),
                 data["filters"],
-            )
+            ).filter(created_at__lte=as_of)
             targets = authorization.manageable_documents(user, matching)
-            ids = list(targets.values_list("pk", flat=True)[:BULK_DELETE_LIMIT])
+            ids = (
+                []
+                if data["preview"]
+                else list(targets.values_list("pk", flat=True)[:BULK_DELETE_LIMIT])
+            )
         else:
             ids = data["ids"]
 
-        outcome = {"deleted": [], "forbidden": [], "not_found": []}
         # Ascending, so two overlapping requests lock rows in the same order.
         for pk in sorted(set(ids)):
-            outcome[_bulk_delete_one(user, pk)].append(pk)
+            try:
+                result = _bulk_delete_one(user, pk)
+            except DatabaseError:
+                # Its own transaction has rolled back and there is no outer
+                # one, so the rest of the batch can go on - and the deletes
+                # already committed are still reported, not lost in a 500.
+                # (A document still being processed can fail its delete:
+                # the pipeline keeps writing rows that reference it.)
+                logger.warning(
+                    "documents.bulk_delete_failed",
+                    extra={"document_id": pk},
+                    exc_info=True,
+                )
+                result = "failed"
+            outcome[result].append(pk)
 
         if data["all"]:
             outcome["remaining"] = targets.count()
-            outcome["skipped"] = matching.count() - outcome["remaining"]
+            # Counted directly, not as a difference of two counts taken at
+            # different moments - a concurrent delete made that negative.
+            outcome["skipped"] = matching.exclude(pk__in=targets.values("pk")).count()
+            outcome["as_of"] = as_of
         return Response(outcome)
 
     @action(detail=True, methods=["post"])

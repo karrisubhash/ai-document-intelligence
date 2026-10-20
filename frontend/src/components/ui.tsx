@@ -11,6 +11,8 @@ import {
   type KeyboardEvent,
   type ReactElement,
   type ReactNode,
+  type Ref,
+  type RefObject,
 } from "react";
 
 import { ApiError } from "../api/client";
@@ -34,6 +36,8 @@ export function Button({
   variant?: Variant;
   size?: "sm";
   loading?: boolean;
+  /** A plain prop in React 19, passed through to the <button>. */
+  ref?: Ref<HTMLButtonElement>;
 }) {
   return (
     <button
@@ -439,6 +443,8 @@ export function Dialog({
   const ref = useRef<HTMLDialogElement>(null);
   const pressedOnBackdrop = useRef(false);
   const titleId = useId();
+  const wantsOpen = useRef(open);
+  wantsOpen.current = open;
 
   useEffect(() => {
     const dialog = ref.current;
@@ -460,6 +466,17 @@ export function Dialog({
       onCancel={(event) => {
         event.preventDefault();
         onClose();
+      }}
+      onClose={() => {
+        // The browser can close a modal dialog itself: Chromium lets a
+        // second Escape through without a cancelable cancel event. While
+        // the page still says open (an action is running), it reopens -
+        // otherwise its state and the screen disagree and it never opens
+        // again.
+        const dialog = ref.current;
+        if (wantsOpen.current && dialog && !dialog.open && typeof dialog.showModal === "function") {
+          dialog.showModal();
+        }
       }}
       onMouseDown={(event) => {
         pressedOnBackdrop.current = event.target === ref.current;
@@ -511,15 +528,20 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  // Not closable while its action runs: closing would look like cancelling,
+  // and the action would carry on regardless.
+  const close = () => {
+    if (!pending) onClose();
+  };
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={title}
       size="sm"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={close} disabled={pending}>
             Cancel
           </Button>
           <Button variant={tone} onClick={onConfirm} loading={pending}>
@@ -586,6 +608,7 @@ export function SelectBox({
   indeterminate = false,
   disabled,
   title,
+  inputRef,
   onChange,
 }: {
   label: string;
@@ -593,6 +616,8 @@ export function SelectBox({
   indeterminate?: boolean;
   disabled?: boolean;
   title?: string;
+  /** For moving focus here, e.g. once the controls that had it are gone. */
+  inputRef?: RefObject<HTMLInputElement | null>;
   onChange: (checked: boolean) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -602,7 +627,10 @@ export function SelectBox({
   }, [indeterminate]);
   return (
     <input
-      ref={ref}
+      ref={(node) => {
+        ref.current = node;
+        if (inputRef) inputRef.current = node;
+      }}
       type="checkbox"
       className="select-box"
       aria-label={label}

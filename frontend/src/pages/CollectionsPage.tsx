@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
@@ -64,21 +64,27 @@ function CollectionCard({
   );
 
   const update = async (ids: number[], add: boolean) => {
-    const result = await change.run(ids, add);
-    if (result.ok) {
+    let done = 0;
+    // The membership endpoint takes at most 500 ids a request.
+    for (let start = 0; start < ids.length; start += 500) {
+      const result = await change.run(ids.slice(start, start + 500), add);
+      if (!result.ok) break;
+      done = start + 500;
+    }
+    if (done > 0) {
       setPick("");
       if (!add) {
-        setPicked((current) => {
-          const next = new Set(current);
-          for (const id of ids) next.delete(id);
-          return next;
-        });
+        const gone = new Set(ids.slice(0, done));
+        setPicked((current) => new Set([...current].filter((id) => !gone.has(id))));
       }
       onChanged();
     }
   };
+  // Only picks still in the collection count: membership can change
+  // underneath (another curator, a deleted document).
+  const pickedNow = collection.documents.filter((doc) => picked.has(doc.id)).map((doc) => doc.id);
   const allPicked =
-    collection.documents.length > 0 && collection.documents.every((doc) => picked.has(doc.id));
+    collection.documents.length > 0 && pickedNow.length === collection.documents.length;
   const pickMember = (id: number, on: boolean) =>
     setPicked((current) => {
       const next = new Set(current);
@@ -124,20 +130,20 @@ function CollectionCard({
           <SelectBox
             label={`Select all documents in ${collection.name}`}
             checked={allPicked}
-            indeterminate={picked.size > 0 && !allPicked}
+            indeterminate={pickedNow.length > 0 && !allPicked}
             onChange={(on) =>
               setPicked(on ? new Set(collection.documents.map((doc) => doc.id)) : new Set())
             }
           />
           <span className="small muted" aria-live="polite">
-            {picked.size ? `${picked.size} selected` : "Select documents to remove"}
+            {pickedNow.length ? `${pickedNow.length} selected` : "Select documents to remove"}
           </span>
-          {picked.size ? (
+          {pickedNow.length ? (
             <Button
               variant="ghost"
               size="sm"
               loading={change.pending}
-              onClick={() => void update([...picked], false)}
+              onClick={() => void update(pickedNow, false)}
             >
               Remove selected
             </Button>
@@ -236,8 +242,11 @@ export default function CollectionsPage() {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const toast = useToast();
+  const [deleteError, setDeleteError] = useState<unknown>(null);
+  const selectAllBox = useRef<HTMLInputElement>(null);
   const deletable = list.filter((collection) => collection.can_manage);
   const chosen = deletable.filter((collection) => selected.has(collection.id));
+  const everyOne = chosen.length > 1 && chosen.length === list.length;
   const select = (id: number, on: boolean) =>
     setSelected((current) => {
       const next = new Set(current);
@@ -248,33 +257,35 @@ export default function CollectionsPage() {
 
   const deleteChosen = async () => {
     setDeleting(true);
+    setDeleteError(null);
     const ids = chosen.map((collection) => collection.id);
-    const deleted: number[] = [];
+    const answered: number[] = [];
+    let deleted = 0;
     let refused = 0;
     try {
       for (let start = 0; start < ids.length; start += 100) {
         const result = await api.bulkDeleteCollections({ ids: ids.slice(start, start + 100) });
-        deleted.push(...result.deleted);
-        refused += (result.forbidden ?? []).length;
+        const forbidden = result.forbidden ?? [];
+        answered.push(...result.deleted, ...result.not_found, ...forbidden);
+        deleted += result.deleted.length;
+        refused += forbidden.length;
       }
       const left = refused
         ? ` ${refused} you may not delete ${refused === 1 ? "was" : "were"} left in place.`
         : "";
       toast(
-        `Deleted ${deleted.length} ${plural(deleted.length, "collection")}.${left}`,
+        `Deleted ${deleted} ${plural(deleted, "collection")}.${left}`,
         refused ? "warning" : "success",
       );
       setConfirmingDelete(false);
+      window.setTimeout(() => selectAllBox.current?.focus(), 0);
     } catch (caught) {
-      toast(errorMessage(caught), "danger");
+      // Shown in the dialog: a toast would sit under its backdrop.
+      setDeleteError(caught);
     } finally {
       setDeleting(false);
-      setSelected((current) => {
-        const next = new Set(current);
-        for (const id of deleted) next.delete(id);
-        return next;
-      });
-      if (deleted.length) collections.reload();
+      setSelected((current) => new Set([...current].filter((id) => !answered.includes(id))));
+      if (answered.length) collections.reload();
     }
   };
 
@@ -362,7 +373,12 @@ export default function CollectionsPage() {
           aria-label="Selected collections"
         >
           <SelectBox
-            label="Select all collections"
+            inputRef={selectAllBox}
+            label={
+              deletable.length < list.length
+                ? "Select all collections you can delete"
+                : "Select all collections"
+            }
             checked={chosen.length > 0 && chosen.length === deletable.length}
             indeterminate={chosen.length > 0 && chosen.length < deletable.length}
             onChange={(on) =>
@@ -374,16 +390,27 @@ export default function CollectionsPage() {
           </span>
           {chosen.length ? (
             <>
-              <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSelected(new Set());
+                  selectAllBox.current?.focus();
+                }}
+              >
                 Clear selection
               </Button>
               <Button
                 variant="danger"
                 size="sm"
                 className="bulk-bar-action"
-                onClick={() => setConfirmingDelete(true)}
+                onClick={() => {
+                  setDeleteError(null);
+                  setConfirmingDelete(true);
+                }}
               >
-                {chosen.length === deletable.length && deletable.length > 1 ? "Delete all" : "Delete selected"}
+                {/* "All" only when it is all: not when some are someone else's. */}
+                {everyOne ? "Delete all" : "Delete selected"}
               </Button>
             </>
           ) : null}
@@ -406,9 +433,8 @@ export default function CollectionsPage() {
         title={`Delete ${chosen.length} ${plural(chosen.length, "collection")}?`}
         confirmLabel="Delete permanently"
         pending={deleting}
-        onClose={() => {
-          if (!deleting) setConfirmingDelete(false);
-        }}
+        error={deleteError}
+        onClose={() => setConfirmingDelete(false)}
         onConfirm={() => void deleteChosen()}
       >
         <p>

@@ -2,17 +2,23 @@
 conversations - deleting selected rows, or all of them, under the same
 access rules and audit trail as deleting one."""
 
+from datetime import datetime, timedelta
 from unittest import mock
 
+from django.core.cache import cache
+from django.db import DatabaseError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
+from rest_framework.throttling import SimpleRateThrottle
 
 from accounts.models import UserProfile
 from documents import authorization, services
 from documents.api import views
+from documents.chat import views as chat_views
+from documents.collections import views as collection_views
 from documents.models import (
     AuditLog,
     Collection,
@@ -66,7 +72,12 @@ class SelectedIdsTests(BulkDeleteTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             response.data,
-            {"deleted": [first.id, second.id], "forbidden": [], "not_found": []},
+            {
+                "deleted": [first.id, second.id],
+                "forbidden": [],
+                "not_found": [],
+                "failed": [],
+            },
         )
         self.assertEqual(list(Document.objects.values_list("id", flat=True)), [kept.id])
 
@@ -205,20 +216,104 @@ class AllMatchingTests(BulkDeleteTestCase):
     def test_all_works_through_a_large_set_in_bounded_requests(self):
         docs = [document(self.alice, f"Doc {n}") for n in range(5)]
 
+        deleted, remaining = [], []
         with mock.patch.object(views, "BULK_DELETE_LIMIT", 2):
-            first = self.post(self.alice, {"all": True})
-            self.assertEqual(len(first.data["deleted"]), 2)
-            self.assertEqual(first.data["remaining"], 3)
-
-            deleted = list(first.data["deleted"])
-            while True:
+            # Bounded: a `remaining` that never reaches 0 fails, not hangs.
+            for _ in range(3):
                 response = self.post(self.alice, {"all": True})
                 deleted += response.data["deleted"]
-                if response.data["remaining"] == 0:
-                    break
+                remaining.append(response.data["remaining"])
 
+        self.assertEqual(remaining, [3, 1, 0])
         self.assertEqual(sorted(deleted), [d.id for d in docs])
         self.assertFalse(Document.objects.exists())
+
+    def test_preview_counts_without_deleting(self):
+        mine, colleagues = document(self.alice, "Mine"), document(self.bob, "Bob's")
+
+        response = self.post(self.alice, {"all": True, "preview": True})
+
+        self.assertEqual(response.data["deleted"], [])
+        self.assertEqual(response.data["remaining"], 1)
+        self.assertEqual(response.data["skipped"], 1)
+        self.assertIn("as_of", response.data)
+        self.assertEqual(
+            Document.objects.filter(pk__in=[mine.id, colleagues.id]).count(), 2
+        )
+
+    def test_documents_created_after_as_of_are_left_alone(self):
+        """The snapshot a confirmation was given for: a colleague's upload
+        landing between the preview and the delete is not swept up."""
+        early = document(self.alice, "Early")
+        as_of = timezone.now()
+        late = document(self.alice, "Late")
+        Document.objects.filter(pk=late.pk).update(
+            created_at=as_of + timedelta(seconds=1)
+        )
+
+        response = self.post(self.alice, {"all": True, "as_of": as_of.isoformat()})
+
+        self.assertEqual(response.data["deleted"], [early.id])
+        self.assertEqual(response.data["remaining"], 0)
+        self.assertTrue(Document.objects.filter(pk=late.id).exists())
+
+    def test_the_snapshot_round_trips_as_the_client_sends_it_back(self):
+        """The rendered `as_of` - not the datetime in response.data - is what
+        a client has; it must parse back into the same snapshot."""
+        early = document(self.alice, "Early")
+        before = timezone.now()
+
+        preview = self.post(self.alice, {"all": True, "preview": True}).json()
+        as_of = datetime.fromisoformat(preview["as_of"].replace("Z", "+00:00"))
+        self.assertGreaterEqual(as_of, before)
+        late = document(self.alice, "Late")
+        Document.objects.filter(pk=late.pk).update(
+            created_at=as_of + timedelta(seconds=1)
+        )
+
+        response = self.post(self.alice, {"all": True, "as_of": preview["as_of"]})
+
+        self.assertEqual(response.data["deleted"], [early.id])
+        self.assertTrue(Document.objects.filter(pk=late.id).exists())
+
+    def test_a_document_that_fails_does_not_lose_the_rest_of_the_batch(self):
+        first, broken, last = (
+            document(self.alice),
+            document(self.alice),
+            document(self.alice),
+        )
+        real = views._bulk_delete_one
+
+        def flaky(user, pk):
+            if pk == broken.id:
+                raise DatabaseError("simulated")
+            return real(user, pk)
+
+        with (
+            mock.patch.object(views, "_bulk_delete_one", side_effect=flaky),
+            self.assertLogs("adi.documents", "WARNING"),
+        ):
+            response = self.post(self.alice, {"ids": [first.id, broken.id, last.id]})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["deleted"], [first.id, last.id])
+        self.assertEqual(response.data["failed"], [broken.id])
+        self.assertTrue(Document.objects.filter(pk=broken.id).exists())
+
+    def test_bulk_delete_has_a_rate_limit_of_its_own(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        targets = [document(self.alice), document(self.alice)]
+
+        with mock.patch.dict(
+            SimpleRateThrottle.THROTTLE_RATES, {"bulk_delete": "1/hour"}
+        ):
+            first = self.post(self.alice, {"ids": [targets[0].id]})
+            second = self.post(self.alice, {"ids": [targets[1].id]})
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(Document.objects.filter(pk=targets[1].id).exists())
 
     def test_only_mine_narrows_a_department_admins_all(self):
         own = document(self.physics_admin, "Own")
@@ -262,6 +357,17 @@ class RequestValidationTests(BulkDeleteTestCase):
 
     def test_filters_only_apply_to_all(self):
         self.assertRefused({"ids": [1], "filters": {"search": "x"}}, "filters")
+        self.assertRefused({"ids": [1], "preview": True}, "preview")
+        self.assertRefused({"ids": [1], "as_of": "2026-01-01T00:00:00Z"}, "as_of")
+
+    def test_an_unknown_filter_is_refused_not_ignored(self):
+        """Ignored, `q` (the web app's own URL name for search) would leave
+        no filter at all - every document the caller may delete."""
+        self.assertRefused({"all": True, "filters": {"q": "draft"}}, "filters")
+        self.assertRefused({"all": True, "filters": {"page": 2}}, "filters")
+
+    def test_an_unknown_field_is_refused_not_ignored(self):
+        self.assertRefused({"all": True, "filter": {"search": "draft"}}, "filter")
 
     def test_a_signed_out_caller_is_refused(self):
         target = document(self.alice)
@@ -396,6 +502,93 @@ class CollectionBulkDeleteTests(BulkDeleteTestCase):
             response = client.post(self.url, body, format="json")
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, body)
 
+    def test_filters_are_refused_here_not_ignored(self):
+        """Collections take no filters; ignored, a 'delete all in X' would
+        have deleted every collection the caller manages."""
+        target = self.collection("Mine", self.alice)
+
+        response = client_for(self.alice).post(
+            self.url, {"all": True, "filters": {"department": "X"}}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("filters", response.data)
+        self.assertTrue(Collection.objects.filter(pk=target.id).exists())
+
+    def test_all_works_through_a_large_set_in_bounded_requests(self):
+        mine = [self.collection(f"Mine {n}", self.alice) for n in range(3)]
+        theirs = self.collection("Bob's", self.bob)
+
+        deleted, remaining = [], []
+        with mock.patch.object(collection_views, "BULK_DELETE_LIMIT", 2):
+            for _ in range(2):
+                response = client_for(self.alice).post(
+                    self.url, {"all": True}, format="json"
+                )
+                deleted += response.data["deleted"]
+                remaining.append(response.data["remaining"])
+
+        self.assertEqual(remaining, [1, 0])
+        self.assertEqual(sorted(deleted), [c.id for c in mine])
+        self.assertTrue(Collection.objects.filter(pk=theirs.id).exists())
+
+    def test_a_collection_deleted_part_way_through_is_not_found(self):
+        """Someone else deletes the second collection while this request is
+        on the first. It must not be audited as a delete this request did."""
+        first, second = (
+            self.collection("First", self.alice),
+            self.collection("Second", self.alice),
+        )
+        real_audit = collection_views.CollectionViewSet._audit
+
+        def audit_then_race(viewset, action, collection, **metadata):
+            real_audit(viewset, action, collection, **metadata)
+            if collection.pk == first.pk:
+                Collection.objects.filter(pk=second.pk).delete()
+
+        with mock.patch.object(
+            collection_views.CollectionViewSet,
+            "_audit",
+            autospec=True,
+            side_effect=audit_then_race,
+        ):
+            response = client_for(self.alice).post(
+                self.url, {"ids": [first.id, second.id]}, format="json"
+            )
+
+        self.assertEqual(response.data["deleted"], [first.id])
+        self.assertEqual(response.data["not_found"], [second.id])
+        audited = AuditLog.objects.filter(action=AuditLog.Action.COLLECTION_DELETE)
+        self.assertEqual([row.metadata["collection_id"] for row in audited], [first.id])
+
+    def test_the_queryset_scope_agrees_with_the_per_collection_rule(self):
+        no_department_admin = make_user("bulk_nodept_cadmin", Role.DEPARTMENT_ADMIN, "")
+        users = [
+            self.root,
+            self.physics_admin,
+            self.alice,
+            self.carol,
+            no_department_admin,
+        ]
+        collections = [
+            self.collection("A", self.alice),
+            self.collection("C", self.carol),
+            self.collection("N", no_department_admin, department="Physics"),
+        ]
+
+        for user in users:
+            expected = {
+                c.id
+                for c in collections
+                if authorization.can_manage_collection(user, c)
+            }
+            scoped = authorization.manageable_collections(
+                user, Collection.objects.all()
+            )
+            self.assertEqual(
+                set(scoped.values_list("id", flat=True)), expected, user.username
+            )
+
 
 class ConversationBulkDeleteTests(BulkDeleteTestCase):
     url = reverse("conversation-bulk-delete")
@@ -449,9 +642,47 @@ class ConversationBulkDeleteTests(BulkDeleteTestCase):
             list(Conversation.objects.values_list("id", flat=True)), [theirs.id]
         )
 
+    def test_all_works_through_a_large_set_in_bounded_requests(self):
+        mine = [self.conversation(self.alice) for _ in range(3)]
+
+        deleted, remaining = [], []
+        with mock.patch.object(chat_views, "BULK_DELETE_LIMIT", 2):
+            for _ in range(2):
+                response = client_for(self.alice).post(
+                    self.url, {"all": True}, format="json"
+                )
+                deleted += response.data["deleted"]
+                remaining.append(response.data["remaining"])
+
+        self.assertEqual(remaining, [1, 0])
+        self.assertEqual(sorted(deleted), [c.id for c in mine])
+
+    def test_conversations_started_after_as_of_are_left_alone(self):
+        early = self.conversation(self.alice)
+        as_of = timezone.now()
+        late = self.conversation(self.alice)
+        Conversation.objects.filter(pk=late.pk).update(
+            created_at=as_of + timedelta(seconds=1)
+        )
+
+        response = client_for(self.alice).post(
+            self.url, {"all": True, "as_of": as_of.isoformat()}, format="json"
+        )
+
+        self.assertEqual(response.data["deleted"], [early.id])
+        self.assertTrue(Conversation.objects.filter(pk=late.id).exists())
+
     def test_the_request_is_validated(self):
         client = client_for(self.alice)
-        for body in ({}, {"ids": []}, {"ids": [1], "all": True}, {"ids": ["x"]}):
+        bodies = (
+            {},
+            {"ids": []},
+            {"ids": [1], "all": True},
+            {"ids": ["x"]},
+            {"all": True, "filters": {"search": "x"}},
+            {"ids": [1], "as_of": "2026-01-01T00:00:00Z"},
+        )
+        for body in bodies:
             response = client.post(self.url, body, format="json")
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, body)
 

@@ -118,10 +118,19 @@ describe("DocumentsPage bulk delete", { timeout: 15000 }, () => {
     expect(screen.queryByRole("checkbox", { name: /^Select/ })).not.toBeInTheDocument();
   });
 
-  it("deletes every matching document, in batches, once DELETE is typed", async () => {
+  it("deletes every matching document it may, within the counted snapshot", async () => {
     vi.spyOn(api, "documents").mockResolvedValue(page(ROWS, 150));
     const remove = vi
       .spyOn(api, "bulkDeleteDocuments")
+      // The preview: what "all" means is counted by the server.
+      .mockResolvedValueOnce({
+        deleted: [],
+        forbidden: [],
+        not_found: [],
+        remaining: 140,
+        skipped: 10,
+        as_of: "2026-10-20T09:00:00Z",
+      })
       .mockResolvedValueOnce({
         deleted: Array.from({ length: 100 }, (_, n) => n + 10),
         forbidden: [],
@@ -140,27 +149,31 @@ describe("DocumentsPage bulk delete", { timeout: 15000 }, () => {
 
     await userEvent.click(await screen.findByRole("checkbox", { name: "Select Fee schedule" }, LOADED));
     await userEvent.click(screen.getByRole("button", { name: "Select all 150 matching" }));
-    expect(screen.getByText("All 150 matching documents selected")).toBeInTheDocument();
+    expect(screen.getByText("All matching documents selected (150)")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete all" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete all 150 matching documents?" });
+    await userEvent.click(screen.getByRole("button", { name: "Delete all…" }));
+    const filters = {
+      search: "",
+      status: "COMPLETED",
+      document_type: "",
+      department: "",
+      archived: "false",
+      owner: "me",
+    };
+    expect(remove).toHaveBeenCalledWith({ all: true, filters, preview: true });
+    // The title counts what will be deleted, not the listing's 150.
+    const dialog = await screen.findByRole("dialog", { name: "Delete 140 matching documents?" });
+    expect(
+      within(dialog).getByText("10 matching documents you may not delete are left in place."),
+    ).toBeInTheDocument();
     const confirm = within(dialog).getByRole("button", { name: "Delete all permanently" });
     expect(confirm).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText("Type DELETE to confirm"), "delete");
     await userEvent.click(confirm);
 
-    expect(remove).toHaveBeenCalledTimes(2);
-    expect(remove).toHaveBeenCalledWith({
-      all: true,
-      filters: {
-        search: "",
-        status: "COMPLETED",
-        document_type: "",
-        department: "",
-        archived: "false",
-        owner: "me",
-      },
-    });
+    expect(remove).toHaveBeenCalledTimes(3);
+    // Every round keeps to the preview's snapshot.
+    expect(remove).toHaveBeenLastCalledWith({ all: true, filters, as_of: "2026-10-20T09:00:00Z" });
     expect(
       await screen.findByText("Deleted 140 documents. 10 you may not delete were left in place."),
     ).toBeInTheDocument();
@@ -178,5 +191,49 @@ describe("DocumentsPage bulk delete", { timeout: 15000 }, () => {
 
     expect(await within(dialog).findByText("Deleting stopped")).toBeInTheDocument();
     expect(screen.getByText("1 selected")).toBeInTheDocument();
+  });
+
+  it("refreshes the list after a failure part-way, since earlier batches were deleted", async () => {
+    const many = Array.from({ length: 120 }, (_, n) => row(n + 1, `Doc ${n + 1}`));
+    const list = vi
+      .spyOn(api, "documents")
+      .mockResolvedValueOnce(page(many))
+      .mockResolvedValue(page(many.slice(100)));
+    vi.spyOn(api, "bulkDeleteDocuments")
+      .mockResolvedValueOnce({
+        deleted: many.slice(0, 100).map((doc) => doc.id),
+        forbidden: [],
+        not_found: [],
+      })
+      .mockRejectedValueOnce(new Error("Gateway timeout"));
+    renderAt("/documents");
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select all on this page" }, LOADED));
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 120 documents?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+
+    expect(await within(dialog).findByText("Deleting stopped")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/100 documents were deleted before it stopped/),
+    ).toBeInTheDocument();
+    expect(list).toHaveBeenCalledTimes(2);
+    // The 100 deleted are no longer selected; the 20 not reached still are.
+    expect(await screen.findByText("20 selected")).toBeInTheDocument();
+  });
+
+  it("keeps the rest of the page when one row is unticked from 'all matching'", async () => {
+    vi.spyOn(api, "documents").mockResolvedValue(page(ROWS, 150));
+    renderAt("/documents");
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select Fee schedule" }, LOADED));
+    await userEvent.click(screen.getByRole("button", { name: "Select all 150 matching" }));
+    // The one ticked before "all" is the one unticked: the rest of the
+    // page, shown ticked under "all", must stay ticked.
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Fee schedule" }));
+
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select Leave policy" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Select Fee schedule" })).not.toBeChecked();
   });
 });

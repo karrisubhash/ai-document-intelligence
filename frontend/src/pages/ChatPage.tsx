@@ -72,6 +72,8 @@ function ConversationList({
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [all, setAll] = useState(false);
   const [confirmingBulk, setConfirmingBulk] = useState(false);
+  const [bulkError, setBulkError] = useState<unknown>(null);
+  const modeButton = useRef<HTMLButtonElement>(null);
   const loaded = conversations.data?.results ?? [];
   const total = conversations.data?.count ?? 0;
   const chosen = all ? total : selected.size;
@@ -92,26 +94,40 @@ function ConversationList({
 
   const deleteChosen = async () => {
     setPending(true);
+    setBulkError(null);
+    // Outside the try: what was deleted before a failure is still gone.
+    const deleted: number[] = [];
     try {
-      const deleted: number[] = [];
-      if (all) {
-        deleted.push(...(await api.bulkDeleteConversations({ all: true })).deleted);
+      if (all && loaded.length < total) {
+        // Older ones are not loaded: the server deletes them in rounds,
+        // within the snapshot of the first answer.
+        let asOf: string | undefined;
+        for (;;) {
+          const result = await api.bulkDeleteConversations({ all: true, as_of: asOf });
+          deleted.push(...result.deleted);
+          asOf = result.as_of;
+          if (!result.remaining || result.deleted.length === 0) break;
+        }
       } else {
-        const ids = [...selected];
+        // Exactly the ones on screen - never one started since in another tab.
+        const ids = all ? loaded.map((item) => item.id) : [...selected];
         for (let start = 0; start < ids.length; start += 100) {
           const result = await api.bulkDeleteConversations({ ids: ids.slice(start, start + 100) });
           deleted.push(...result.deleted);
         }
       }
-      if (activeId !== null && deleted.includes(activeId)) navigate("/ask", { replace: true });
       toast(`Deleted ${deleted.length} ${plural(deleted.length, "conversation")}.`, "success");
       setConfirmingBulk(false);
       stopSelecting();
-      onChanged();
+      window.setTimeout(() => modeButton.current?.focus(), 0);
     } catch (caught) {
-      toast(errorMessage(caught), "danger");
+      // Shown in the dialog: a toast would sit under its backdrop.
+      setBulkError(caught);
+      setSelected((current) => new Set([...current].filter((id) => !deleted.includes(id))));
     } finally {
       setPending(false);
+      if (activeId !== null && deleted.includes(activeId)) navigate("/ask", { replace: true });
+      if (deleted.length) onChanged();
     }
   };
 
@@ -121,37 +137,44 @@ function ConversationList({
         New question
       </Button>
       {loaded.length ? (
-        selecting ? (
-          <div className="conversation-select-bar">
-            <SelectBox
-              label="Select all conversations"
-              checked={all || (selected.size > 0 && loaded.every((item) => selected.has(item.id)))}
-              indeterminate={!all && selected.size > 0 && !loaded.every((item) => selected.has(item.id))}
-              onChange={(on) => {
-                setAll(on);
-                setSelected(new Set());
-              }}
-            />
-            <span className="small" aria-live="polite">
-              {all ? `All ${total}` : selected.size} selected
-            </span>
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={chosen === 0}
-              onClick={() => setConfirmingBulk(true)}
-            >
-              Delete selected
-            </Button>
-            <Button variant="ghost" size="sm" onClick={stopSelecting}>
-              Done
-            </Button>
-          </div>
-        ) : (
-          <Button variant="ghost" size="sm" onClick={() => setSelecting(true)}>
-            Select conversations
+        <div className={selecting ? "conversation-select-bar" : "conversation-select-idle"}>
+          {selecting ? (
+            <>
+              <SelectBox
+                label="Select all conversations"
+                checked={all || (selected.size > 0 && loaded.every((item) => selected.has(item.id)))}
+                indeterminate={!all && selected.size > 0 && !loaded.every((item) => selected.has(item.id))}
+                onChange={(on) => {
+                  setAll(on);
+                  setSelected(new Set());
+                }}
+              />
+              <span className="small" aria-live="polite">
+                {all ? `All ${total}` : selected.size} selected
+              </span>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={chosen === 0}
+                onClick={() => {
+                  setBulkError(null);
+                  setConfirmingBulk(true);
+                }}
+              >
+                Delete selected
+              </Button>
+            </>
+          ) : null}
+          {/* One button for both, so focus stays on it as the mode flips. */}
+          <Button
+            ref={modeButton}
+            variant="ghost"
+            size="sm"
+            onClick={selecting ? stopSelecting : () => setSelecting(true)}
+          >
+            {selecting ? "Done" : "Select conversations"}
           </Button>
-        )
+        </div>
       ) : null}
       {conversations.loading && !conversations.data ? (
         <Skeleton lines={5} />
@@ -294,6 +317,7 @@ function ConversationList({
         }
         confirmLabel={all ? "Delete all" : "Delete"}
         pending={pending}
+        error={bulkError}
         onClose={() => setConfirmingBulk(false)}
         onConfirm={() => void deleteChosen()}
       >

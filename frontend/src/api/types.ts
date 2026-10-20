@@ -131,10 +131,14 @@ export interface BulkDeleteResult {
   forbidden?: number[];
   /** Gone already, or not visible to the caller - deliberately alike. */
   not_found: number[];
+  /** Documents only: the delete itself failed (e.g. still being processed). */
+  failed?: number[];
   /** With `all`: how many still match and may be deleted. Repeat until 0. */
   remaining?: number;
   /** With `all`: how many match that the caller may see but not delete. */
   skipped?: number;
+  /** With `all`: the snapshot instant to send back with each next request. */
+  as_of?: string;
 }
 
 export interface ProcessingEvent {

@@ -460,7 +460,15 @@ export const api = {
   deleteDocument: (id: number) => request<void>(doc(id), { method: "DELETE" }),
   /** At most 100 ids; `all` takes the listing's filters and deletes ≤100 per call. */
   bulkDeleteDocuments: (
-    target: { ids: number[] } | { all: true; filters: Omit<DocumentQuery, "page" | "ordering"> },
+    target:
+      | { ids: number[] }
+      | {
+          all: true;
+          filters: Omit<DocumentQuery, "page" | "ordering">;
+          /** Count only, delete nothing - the confirmation's numbers and snapshot. */
+          preview?: boolean;
+          as_of?: string;
+        },
   ) =>
     request<BulkDeleteResult>("/api/v1/documents/bulk-delete/", {
       method: "POST",
@@ -504,7 +512,7 @@ export const api = {
   deleteCollection: (id: number) =>
     request<void>(`/api/v1/collections/${id}/`, { method: "DELETE" }),
   /** At most 100 ids, or every collection the caller may manage. */
-  bulkDeleteCollections: (target: { ids: number[] } | { all: true }) =>
+  bulkDeleteCollections: (target: { ids: number[] } | { all: true; as_of?: string }) =>
     request<BulkDeleteResult>("/api/v1/collections/bulk-delete/", {
       method: "POST",
       body: target,
@@ -531,7 +539,7 @@ export const api = {
   deleteConversation: (id: number) =>
     request<void>(`/api/v1/chat/conversations/${id}/`, { method: "DELETE" }),
   /** At most 100 ids, or every one of the caller's conversations. */
-  bulkDeleteConversations: (target: { ids: number[] } | { all: true }) =>
+  bulkDeleteConversations: (target: { ids: number[] } | { all: true; as_of?: string }) =>
     request<BulkDeleteResult>("/api/v1/chat/conversations/bulk-delete/", {
       method: "POST",
       body: target,

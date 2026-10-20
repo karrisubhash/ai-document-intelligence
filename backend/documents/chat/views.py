@@ -9,6 +9,7 @@ from django.db import connections, transaction
 from django.db.models import Count
 from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import ListAPIView
 from rest_framework.permissions import IsAuthenticated
@@ -17,7 +18,7 @@ from rest_framework.views import APIView
 
 from documents import agents
 from documents.agents.runner import PlannedAnswer
-from documents.api.serializers import BulkSelectionSerializer
+from documents.api.serializers import BULK_DELETE_LIMIT, BulkSelectionSerializer
 from documents.audit import record_event
 from documents.authorization import get_profile
 from documents.models import AuditLog, Conversation, Message
@@ -403,7 +404,10 @@ class ConversationBulkDeleteView(APIView):
 
     Only ever the caller's own: another user's id is `not_found`, exactly
     like one that does not exist, as on ConversationDetailView. Documents
-    are not affected.
+    are not affected. `all` works like documents' (see
+    BulkSelectionSerializer): at most BULK_DELETE_LIMIT per request - each
+    takes its messages and their feedback with it - with `remaining` and
+    `as_of`.
     """
 
     permission_classes = [IsAuthenticated]
@@ -414,14 +418,31 @@ class ConversationBulkDeleteView(APIView):
         data = serializer.validated_data
 
         mine = Conversation.objects.filter(owner=request.user)
-        if not data["all"]:
-            mine = mine.filter(pk__in=data["ids"])
+        if data["all"]:
+            as_of = data.get("as_of") or timezone.now()
+            mine = mine.filter(created_at__lte=as_of)
+            chosen = list(
+                mine.order_by("pk").values_list("pk", flat=True)[:BULK_DELETE_LIMIT]
+            )
+        else:
+            chosen = data["ids"]
         with transaction.atomic():
-            deleted = sorted(mine.values_list("pk", flat=True))
+            # Locked, so what is reported deleted is what this request deleted.
+            deleted = sorted(
+                mine.filter(pk__in=chosen)
+                .select_for_update()
+                .values_list("pk", flat=True)
+            )
             Conversation.objects.filter(pk__in=deleted).delete()
 
-        not_found = [] if data["all"] else sorted(set(data["ids"]) - set(deleted))
-        return Response({"deleted": deleted, "not_found": not_found})
+        body = {
+            "deleted": deleted,
+            "not_found": [] if data["all"] else sorted(set(chosen) - set(deleted)),
+        }
+        if data["all"]:
+            body["remaining"] = mine.count()
+            body["as_of"] = as_of
+        return Response(body)
 
 
 class ConversationDetailView(APIView):
