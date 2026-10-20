@@ -97,7 +97,9 @@ export default function ProcessingPage() {
       {jobs.error && !jobs.data ? (
         <ErrorState error={jobs.error} onRetry={jobs.reload} />
       ) : jobs.loading && !jobs.data ? (
-        <Skeleton lines={6} />
+        <div className="card card-body">
+          <Skeleton lines={6} />
+        </div>
       ) : !jobs.data?.results.length ? (
         <div className="card">
           <EmptyState title="Nothing here" icon="check-circle">

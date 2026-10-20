@@ -402,7 +402,9 @@ export default function UsersPage() {
       {users.error && !users.data ? (
         <ErrorState error={users.error} onRetry={users.reload} />
       ) : users.loading && !users.data ? (
-        <Skeleton lines={6} />
+        <div className="card card-body">
+          <Skeleton lines={6} />
+        </div>
       ) : !users.data?.results.length ? (
         <div className="card">
           <EmptyState title="No accounts match" icon="users" />
@@ -430,7 +432,10 @@ export default function UsersPage() {
                       <Avatar name={displayName(user)} />
                       <div className="cell-title-text">
                         <span className="table-title">{displayName(user)}</span>
-                        <span className="table-sub">
+                        <span
+                          className="table-sub table-sub-truncate"
+                          title={user.email ? `${user.username} · ${user.email}` : undefined}
+                        >
                           {user.username}
                           {user.email ? ` · ${user.email}` : ""}
                         </span>

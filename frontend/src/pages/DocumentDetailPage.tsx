@@ -372,9 +372,13 @@ export default function DocumentDetailPage() {
               title={
                 document.is_archived
                   ? "Archived documents are not searched"
-                  : document.status !== "COMPLETED"
-                    ? "Available once processing has finished"
-                    : undefined
+                  : document.status === "FAILED"
+                    ? "Processing failed, so there is no text to ask about yet"
+                    : document.status === "QUARANTINED"
+                      ? "Quarantined documents are not searched"
+                      : document.status !== "COMPLETED"
+                        ? "Available once processing has finished"
+                        : undefined
               }
               onClick={() =>
                 navigate("/ask", { state: { documentId: document.id, documentTitle: document.title } })
@@ -397,9 +401,16 @@ export default function DocumentDetailPage() {
             </Button>
             {document.can_manage ? (
               <Menu
-                trigger={<Icon name="more" />}
+                trigger={
+                  reprocess.pending ? (
+                    <span className="spinner spinner-inline" aria-hidden="true" />
+                  ) : (
+                    <Icon name="more" />
+                  )
+                }
                 triggerClassName="btn btn-secondary btn-icon"
                 triggerLabel="More actions"
+                busy={reprocess.pending}
               >
                 <MenuItem icon="pencil" onSelect={() => setEditing(true)}>
                   Edit details
@@ -450,7 +461,28 @@ export default function DocumentDetailPage() {
           but is not searchable or previewable.
         </Alert>
       ) : document.status === "FAILED" ? (
-        <Alert tone="danger" title="Processing failed">
+        <Alert
+          tone="danger"
+          title="Processing failed"
+          action={
+            <div className="button-row">
+              <Button size="sm" icon="activity" onClick={() => selectTab("processing")}>
+                See what failed
+              </Button>
+              {document.can_manage ? (
+                <Button
+                  size="sm"
+                  icon="refresh"
+                  onClick={runReprocess}
+                  loading={reprocess.pending}
+                  disabled={document.is_archived || !version}
+                >
+                  Reprocess
+                </Button>
+              ) : null}
+            </div>
+          }
+        >
           The Processing tab shows which stage failed and why.
           {document.can_manage ? " You can reprocess it after fixing the cause." : ""}
         </Alert>

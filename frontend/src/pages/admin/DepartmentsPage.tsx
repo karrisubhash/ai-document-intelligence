@@ -148,7 +148,9 @@ export default function DepartmentsPage() {
       {departments.error ? (
         <ErrorState error={departments.error} onRetry={departments.reload} />
       ) : departments.loading && !departments.data ? (
-        <Skeleton lines={5} />
+        <div className="card card-body">
+          <Skeleton lines={5} />
+        </div>
       ) : !departments.data?.results.length ? (
         <div className="card">
           <EmptyState title="No departments yet" icon="building">

@@ -92,6 +92,8 @@ export default function DashboardPage() {
   const total = data?.documents.total ?? 0;
   const ready = counts.COMPLETED ?? 0;
   const failed = (counts.FAILED ?? 0) + (counts.QUARANTINED ?? 0);
+  // Until the counts arrive, a caption must not claim anything about them.
+  const pending = dashboard.error ? "Unavailable" : "Loading…";
 
   const ask = (event: FormEvent) => {
     event.preventDefault();
@@ -171,28 +173,34 @@ export default function DashboardPage() {
         <Stat
           label="Documents"
           value={data ? total : undefined}
-          caption="In your library"
+          caption={data ? "In your library" : pending}
           icon="files"
           tone="neutral"
         />
         <Stat
           label="Ready"
           value={data ? ready : undefined}
-          caption={total ? `${Math.round((ready / total) * 100)}% searchable` : "Searchable once processed"}
+          caption={
+            !data
+              ? pending
+              : total
+                ? `${Math.round((ready / total) * 100)}% searchable`
+                : "Searchable once processed"
+          }
           icon="check-circle"
           tone="success"
         />
         <Stat
           label="Processing"
           value={data ? inFlight : undefined}
-          caption={inFlight ? "Updates automatically" : "Nothing in the queue"}
+          caption={!data ? pending : inFlight ? "Updates automatically" : "Nothing in the queue"}
           icon="activity"
           tone="info"
         />
         <Stat
           label="Failed"
           value={data ? failed : undefined}
-          caption={failed ? "Open one to see why" : "Nothing needs attention"}
+          caption={!data ? pending : failed ? "Open one to see why" : "Nothing needs attention"}
           icon="alert-triangle"
           tone={failed ? "danger" : "neutral"}
         />
@@ -214,7 +222,9 @@ export default function DashboardPage() {
             <div className="card-body">
               <Skeleton lines={4} />
             </div>
-          ) : data?.recent_documents.length ? (
+          ) : !data ? (
+            <p className="card-empty">Recent documents could not be loaded.</p>
+          ) : data.recent_documents.length ? (
             <DocumentRows rows={data.recent_documents} />
           ) : (
             <EmptyState
@@ -258,7 +268,9 @@ export default function DashboardPage() {
               <div className="card-body">
                 <Skeleton lines={3} />
               </div>
-            ) : data?.recent_conversations.length ? (
+            ) : !data ? (
+              <p className="card-empty">Recent conversations could not be loaded.</p>
+            ) : data.recent_conversations.length ? (
               <ul className="row-list row-list-flush">
                 {data.recent_conversations.map((conversation) => (
                   <li key={conversation.id} className="row-item">

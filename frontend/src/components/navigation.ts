@@ -66,7 +66,7 @@ export function sectionFor(
   const administration = match(admin);
   if (administration) return { group: "Administration", item: administration };
   if (pathname === "/account") {
-    return { group: "Account", item: { to: "/account", label: "Account and password", icon: "user" } };
+    return { group: "Settings", item: { to: "/account", label: "Account", icon: "user" } };
   }
   return null;
 }

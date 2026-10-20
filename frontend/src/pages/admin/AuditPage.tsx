@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../../api/client";
 import { useResource } from "../../api/hooks";
+import { Icon } from "../../components/icons";
 import {
   Avatar,
   Badge,
@@ -108,7 +109,9 @@ export default function AuditPage() {
       {entries.error && !entries.data ? (
         <ErrorState error={entries.error} onRetry={entries.reload} />
       ) : entries.loading && !entries.data ? (
-        <Skeleton lines={8} />
+        <div className="card card-body">
+          <Skeleton lines={8} />
+        </div>
       ) : !entries.data?.results.length ? (
         <div className="card">
           <EmptyState title="No matching audit entries" icon="scroll" />
@@ -137,7 +140,12 @@ export default function AuditPage() {
                         {entry.username}
                       </span>
                     ) : (
-                      <span className="muted">unknown</span>
+                      <span className="cell-person">
+                        <span className="avatar avatar-sm avatar-unknown" aria-hidden="true">
+                          <Icon name="user" size={12} />
+                        </span>
+                        <span className="muted">unknown</span>
+                      </span>
                     )}
                   </td>
                   <td>{AUDIT_ACTION_LABEL[entry.action] ?? entry.action}</td>

@@ -34,7 +34,9 @@ export default function SystemPage() {
       {status.error && !data ? (
         <ErrorState error={status.error} onRetry={status.reload} />
       ) : !data ? (
-        <Skeleton lines={8} />
+        <div className="card card-body">
+          <Skeleton lines={8} />
+        </div>
       ) : (
         <div className="stack">
           {data.debug ? (
@@ -61,7 +63,11 @@ export default function SystemPage() {
                   </Badge>
                 </div>
                 <span className="health-detail">
-                  {component.error ? component.error : `${component.latency_ms} ms`}
+                  {component.error
+                    ? component.error
+                    : component.status === "skipped"
+                      ? "Not checked on this installation"
+                      : `${component.latency_ms} ms`}
                 </span>
               </div>
             ))}

@@ -246,7 +246,9 @@ export function FieldsPanel({ document }: { document: DocumentDetail }) {
               <th scope="col">Field</th>
               <th scope="col">Value</th>
               <th scope="col">Status</th>
-              <th scope="col">Confidence</th>
+              <th scope="col" className="num">
+                Confidence
+              </th>
               <th scope="col">Source</th>
             </tr>
           </thead>
@@ -265,7 +267,7 @@ export function FieldsPanel({ document }: { document: DocumentDetail }) {
                       </span>
                     ) : null}
                   </td>
-                  <td>{field.status === "FOUND" ? formatPercent(field.confidence) : "—"}</td>
+                  <td className="num">{field.status === "FOUND" ? formatPercent(field.confidence) : "—"}</td>
                   <td>
                     {link ? (
                       <Link to={link} className="link">

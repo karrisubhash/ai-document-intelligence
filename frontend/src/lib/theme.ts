@@ -33,6 +33,19 @@ function apply(preference: ThemePreference) {
   else root.setAttribute("data-theme", preference);
 }
 
+if (typeof window !== "undefined") {
+  // theme-init.js normally did this before the first paint; this covers a
+  // page where it did not run.
+  apply(current);
+  // A choice made in another tab of the app applies here too.
+  window.addEventListener("storage", (event) => {
+    if (event.key !== KEY && event.key !== null) return;
+    current = read();
+    apply(current);
+    listeners.forEach((listener) => listener());
+  });
+}
+
 export function setTheme(preference: ThemePreference) {
   current = preference;
   try {

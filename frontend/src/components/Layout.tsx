@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth, useMe } from "../auth/AuthContext";
@@ -57,7 +57,9 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   const me = useMe();
   const navigate = useNavigate();
   const [theme] = useTheme();
+  const themeLabel = useId();
   const name = displayName(me);
+  const role = me.role ? ROLE_LABEL[me.role] : "No role";
 
   return (
     <Menu
@@ -70,10 +72,7 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
           <Avatar name={name} />
           <span className="user-text">
             <span className="user-name">{name}</span>
-            <span className="user-meta">
-              {me.role ? ROLE_LABEL[me.role] : "No role"}
-              {me.department ? ` · ${me.department}` : ""}
-            </span>
+            <span className="user-meta">{role}</span>
           </span>
           <Icon name="chevrons-up-down" className="user-chevron" />
         </>
@@ -81,21 +80,24 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
     >
       <MenuLabel>
         Signed in as <strong>{me.username}</strong>
+        {me.department ? ` · ${me.department}` : ""}
       </MenuLabel>
       <MenuItem icon="key" onSelect={() => navigate("/account")}>
         Account and password
       </MenuItem>
       <MenuSeparator />
-      <MenuLabel>Theme</MenuLabel>
-      <MenuRadioItem icon="sun" checked={theme === "light"} onSelect={() => setTheme("light")}>
-        Light
-      </MenuRadioItem>
-      <MenuRadioItem icon="moon" checked={theme === "dark"} onSelect={() => setTheme("dark")}>
-        Dark
-      </MenuRadioItem>
-      <MenuRadioItem icon="monitor" checked={theme === "system"} onSelect={() => setTheme("system")}>
-        System
-      </MenuRadioItem>
+      <div role="group" aria-labelledby={themeLabel}>
+        <MenuLabel id={themeLabel}>Theme</MenuLabel>
+        <MenuRadioItem icon="sun" checked={theme === "light"} onSelect={() => setTheme("light")}>
+          Light
+        </MenuRadioItem>
+        <MenuRadioItem icon="moon" checked={theme === "dark"} onSelect={() => setTheme("dark")}>
+          Dark
+        </MenuRadioItem>
+        <MenuRadioItem icon="monitor" checked={theme === "system"} onSelect={() => setTheme("system")}>
+          System
+        </MenuRadioItem>
+      </div>
       <MenuSeparator />
       <MenuItem icon="log-out" onSelect={onSignOut}>
         Sign out
@@ -111,6 +113,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [navOpen, setNavOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const navToggle = useRef<HTMLButtonElement>(null);
   const resolvedTheme = useResolvedTheme();
   const location = useLocation();
   const admin = adminItems(can);
@@ -127,6 +130,34 @@ export default function Layout({ children }: { children: ReactNode }) {
     document.getElementById("main")?.focus({ preventScroll: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
+
+  // The drawer exists on narrow screens only. Widening the window closes it,
+  // or it would reappear already open the next time the window narrows.
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const wide = window.matchMedia("(min-width: 861px)");
+    const onChange = () => {
+      if (wide.matches) setNavOpen(false);
+    };
+    wide.addEventListener?.("change", onChange);
+    return () => wide.removeEventListener?.("change", onChange);
+  }, []);
+
+  // While the drawer is open, focus moves into it, the page behind it is
+  // inert (see the workspace below), and Escape closes it and returns focus
+  // to the button that opened it.
+  useEffect(() => {
+    if (!navOpen) return;
+    document.querySelector<HTMLElement>(".sidebar .nav-link")?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector("dialog[open]")) return;
+      setNavOpen(false);
+      navToggle.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
 
   // Ctrl+K (Cmd+K on a Mac) opens quick find from anywhere.
   useEffect(() => {
@@ -193,9 +224,10 @@ export default function Layout({ children }: { children: ReactNode }) {
 
       <div className="scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />
 
-      <div className="workspace">
+      <div className="workspace" inert={navOpen || undefined}>
         <header className="topbar">
           <button
+            ref={navToggle}
             type="button"
             className="icon-button nav-toggle"
             aria-label={navOpen ? "Close navigation" : "Open navigation"}

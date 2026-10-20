@@ -29,6 +29,12 @@ import { EXAMPLE_QUESTIONS } from "../lib/examples";
 import { formatRelative } from "../lib/format";
 import { Markdown } from "../lib/markdown";
 
+function fitComposer(box: HTMLTextAreaElement | null) {
+  if (!box) return;
+  box.style.height = "auto";
+  box.style.height = `${Math.min(box.scrollHeight, 220)}px`;
+}
+
 interface Turn {
   key: string;
   question: string;
@@ -250,6 +256,17 @@ export default function ChatPage() {
   // then sent to the wrong one.
   const shown = useRef(conversationId);
   const view = useRef(0);
+  // Quick find hands Ask a new question by REPLACING this page. An answer
+  // the replaced page was still waiting for must then do nothing at all: it
+  // used to move the URL back to its own conversation, out from under the
+  // new question.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (shown.current === conversationId) return;
@@ -286,13 +303,22 @@ export default function ChatPage() {
     thread.current?.scrollTo({ top: thread.current.scrollHeight, behavior: "smooth" });
   }, [turns]);
 
-  // The composer grows with what is typed, up to its maximum height.
+  // The composer grows with what is typed, up to its maximum height - and
+  // refits when its width changes, which re-wraps the text.
+  useEffect(() => fitComposer(composer.current), [draft]);
   useEffect(() => {
     const box = composer.current;
-    if (!box) return;
-    box.style.height = "auto";
-    box.style.height = `${Math.min(box.scrollHeight, 220)}px`;
-  }, [draft]);
+    if (!box || typeof ResizeObserver !== "function") return;
+    let width = box.clientWidth;
+    const observer = new ResizeObserver(() => {
+      // Width only: refitting changes the height, which must not loop.
+      if (box.clientWidth === width) return;
+      width = box.clientWidth;
+      fitComposer(box);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
 
   // A question handed over from the dashboard or search is sent at once -
   // and cleared from the history entry FIRST, or a reload or a remount of
@@ -334,6 +360,7 @@ export default function ChatPage() {
             patch((turn) => ({ ...turn, streaming: "", streamingSource: source })),
         },
       );
+      if (!mounted.current) return;
       if (view.current !== askedIn) {
         // Saved in its own conversation, which the list now shows; not
         // displayed over the one the user moved to.
@@ -559,9 +586,11 @@ export default function ChatPage() {
                 </Button>
               </div>
             </div>
-            <p className="composer-hint">
-              Follow-up questions like “what about MECH?” use this conversation for context.
-            </p>
+            {turns.length ? (
+              <p className="composer-hint">
+                Follow-up questions like “what about MECH?” use this conversation for context.
+              </p>
+            ) : null}
           </div>
         </form>
       </section>

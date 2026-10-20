@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import { useDebouncedValue, useResource } from "../api/hooks";
@@ -51,16 +51,23 @@ export default function CommandPalette({
   const input = useRef<HTMLInputElement>(null);
   const pressedOnBackdrop = useRef(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const { can } = useAuth();
   const [theme] = useTheme();
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
+  // The highlighted option is remembered by id, not position: document
+  // results arrive after a delay and are inserted above the rest, and an
+  // index would silently move the highlight - and what Enter runs.
+  const [activeId, setActiveId] = useState<string | null>(null);
   const listId = useId();
 
   const trimmed = query.trim();
   const debounced = useDebouncedValue(trimmed, 200);
+  // Only for what is typed now: reopening with a stale debounced value
+  // neither re-sends the last search nor shows its results.
+  const currentQuery = debounced.length >= 2 && debounced === trimmed;
   const documents = useResource(() => api.documents({ search: debounced }), [debounced], {
-    enabled: open && debounced.length >= 2,
+    enabled: open && currentQuery,
   });
 
   useEffect(() => {
@@ -68,13 +75,18 @@ export default function CommandPalette({
     if (!dialog) return;
     if (open && !dialog.open) {
       setQuery("");
-      setActive(0);
+      setActiveId(null);
       if (typeof dialog.showModal === "function") dialog.showModal();
       else dialog.setAttribute("open", "");
       input.current?.focus();
     } else if (!open && dialog.open) {
       if (typeof dialog.close === "function") dialog.close();
       else dialog.removeAttribute("open");
+      // The dialog hands focus back to what had it before - unless that is
+      // gone (the page was replaced), which would leave it on <body>.
+      if (!document.activeElement || document.activeElement === document.body) {
+        document.getElementById("main")?.focus({ preventScroll: true });
+      }
     }
   }, [open]);
 
@@ -93,7 +105,6 @@ export default function CommandPalette({
         </>
       ),
       text: trimmed,
-      meta: "Cited answer",
       run: () =>
         navigate("/ask", { state: { question: trimmed, handoff: String(Date.now()) } }),
     });
@@ -107,12 +118,11 @@ export default function CommandPalette({
         </>
       ),
       text: trimmed,
-      meta: "Wording and meaning",
       run: () => navigate("/search", { state: { query: trimmed, handoff: String(Date.now()) } }),
     });
   }
 
-  if (debounced.length >= 2 && trimmed.length >= 2) {
+  if (currentQuery) {
     for (const doc of documents.data?.results.slice(0, 6) ?? []) {
       commands.push({
         id: `document-${doc.id}`,
@@ -145,7 +155,15 @@ export default function CommandPalette({
       icon: "upload",
       title: "Upload a document",
       text: "Upload a document",
-      run: () => navigate("/documents", { state: { upload: true, handoff: String(Date.now()) } }),
+      // On Documents already, its filters stay as they were.
+      run: () =>
+        navigate(
+          {
+            pathname: "/documents",
+            search: location.pathname === "/documents" ? location.search : "",
+          },
+          { state: { upload: true, handoff: String(Date.now()) } },
+        ),
     });
   }
 
@@ -183,7 +201,8 @@ export default function CommandPalette({
     });
   }
 
-  const current = commands.length ? Math.min(active, commands.length - 1) : -1;
+  const found = commands.findIndex((command) => command.id === activeId);
+  const current = commands.length ? (found >= 0 ? found : 0) : -1;
   const optionId = (index: number) => `${listId}-option-${index}`;
 
   useEffect(() => {
@@ -191,19 +210,21 @@ export default function CommandPalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current]);
 
+  // Closed first, run after: a page that the command replaces then mounts
+  // with the dialog gone, so its own focus (Search's query box) can land.
   const execute = (command: Command) => {
     onClose();
-    command.run();
+    window.setTimeout(command.run, 0);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (!commands.length) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActive((current + 1) % commands.length);
+      setActiveId(commands[(current + 1) % commands.length].id);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActive((current - 1 + commands.length) % commands.length);
+      setActiveId(commands[(current - 1 + commands.length) % commands.length].id);
     } else if (event.key === "Enter" && !event.nativeEvent.isComposing) {
       event.preventDefault();
       if (current >= 0) execute(commands[current]);
@@ -249,11 +270,11 @@ export default function CommandPalette({
               spellCheck={false}
               onChange={(event) => {
                 setQuery(event.target.value);
-                setActive(0);
+                setActiveId(null);
               }}
               onKeyDown={onKeyDown}
             />
-            {documents.loading && debounced.length >= 2 ? (
+            {documents.loading && currentQuery ? (
               <span className="spinner spinner-inline" aria-hidden="true" />
             ) : null}
             <Kbd>Esc</Kbd>
@@ -275,7 +296,7 @@ export default function CommandPalette({
                   aria-selected={index === current}
                   className={`palette-option${index === current ? " active" : ""}`}
                   onMouseMove={() => {
-                    if (index !== current) setActive(index);
+                    if (index !== current) setActiveId(command.id);
                   }}
                   onClick={() => execute(command)}
                 >

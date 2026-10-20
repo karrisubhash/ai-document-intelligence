@@ -413,6 +413,38 @@ export function Tabs({
   label: string;
 }) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const list = useRef<HTMLDivElement>(null);
+  // More tabs than fit: the row scrolls, and fades at the edge that has more.
+  const [more, setMore] = useState(false);
+
+  useEffect(() => {
+    const element = list.current;
+    if (!element) return;
+    const update = () =>
+      setMore(element.scrollLeft + element.clientWidth < element.scrollWidth - 1);
+    update();
+    element.addEventListener("scroll", update, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
+    observer?.observe(element);
+    return () => {
+      element.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, [tabs.length]);
+
+  // The selected tab is never left scrolled out of sight - horizontally only,
+  // so the page itself does not jump.
+  useEffect(() => {
+    const element = list.current;
+    const tab = refs.current[selected];
+    if (!element || !tab) return;
+    const left = tab.offsetLeft - element.offsetLeft;
+    const right = left + tab.offsetWidth;
+    if (left < element.scrollLeft) element.scrollLeft = Math.max(0, left - 16);
+    else if (right > element.scrollLeft + element.clientWidth) {
+      element.scrollLeft = right - element.clientWidth + 16;
+    }
+  }, [selected]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const index = tabs.findIndex((tab) => tab.id === selected);
@@ -429,7 +461,14 @@ export function Tabs({
   };
 
   return (
-    <div className="tabs" role="tablist" aria-label={label} onKeyDown={onKeyDown}>
+    <div
+      ref={list}
+      className="tabs"
+      role="tablist"
+      aria-label={label}
+      data-more={more || undefined}
+      onKeyDown={onKeyDown}
+    >
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -519,6 +558,7 @@ export function Menu({
   align = "end",
   side = "bottom",
   className = "",
+  busy = false,
   children,
 }: {
   /** The trigger's content. */
@@ -529,6 +569,8 @@ export function Menu({
   align?: "start" | "end";
   side?: "bottom" | "top";
   className?: string;
+  /** An action chosen from the menu is still running. */
+  busy?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -548,8 +590,10 @@ export function Menu({
     const onPointer = (event: MouseEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false);
     };
+    // Only an Escape pressed inside the menu is the menu's: one pressed in
+    // quick find, opened over it, closes quick find first.
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && root.current?.contains(document.activeElement)) {
         event.preventDefault();
         close();
       }
@@ -580,7 +624,18 @@ export function Menu({
   };
 
   return (
-    <div className={`menu-root ${className}`.trim()} ref={root}>
+    <div
+      className={`menu-root ${className}`.trim()}
+      ref={root}
+      onBlur={(event) => {
+        // Focus moved somewhere else on the page (not just a click, which
+        // the outside-press handler covers and Safari reports with no
+        // relatedTarget at all): the menu closes behind it.
+        if (event.relatedTarget && !root.current?.contains(event.relatedTarget as Node)) {
+          setOpen(false);
+        }
+      }}
+    >
       <button
         ref={button}
         type="button"
@@ -589,6 +644,7 @@ export function Menu({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-label={triggerLabel}
+        aria-busy={busy || undefined}
         title={triggerLabel}
         onClick={() => setOpen((value) => !value)}
       >
@@ -675,9 +731,9 @@ export function MenuSeparator() {
   return <div className="menu-separator" role="separator" />;
 }
 
-export function MenuLabel({ children }: { children: ReactNode }) {
+export function MenuLabel({ children, id }: { children: ReactNode; id?: string }) {
   return (
-    <div className="menu-label" role="presentation">
+    <div className="menu-label" role="presentation" id={id}>
       {children}
     </div>
   );

@@ -57,6 +57,7 @@ export default function DocumentsPage() {
   const mine = params.get("mine") === "1";
 
   const [searchInput, setSearchInput] = useState(params.get("q") ?? "");
+  const searchField = useRef<HTMLInputElement>(null);
   const search = useDebouncedValue(searchInput.trim(), 350);
 
   const update = (changes: Record<string, string>) => {
@@ -96,10 +97,14 @@ export default function DocumentsPage() {
   usePolling(documents.reload, anyInFlight);
 
   const filtered = Boolean(search || status || documentType || department || mine);
+  // The button that cleared them disappears with the filters; focus goes to
+  // the start of the filters rather than being lost to the page.
   const clearFilters = () => {
     setSearchInput("");
     setParams(new URLSearchParams(), { replace: true });
+    searchField.current?.focus();
   };
+  const total = documents.data?.count ?? rows.length;
 
   return (
     <div className="page">
@@ -118,6 +123,7 @@ export default function DocumentsPage() {
           <div className="input-icon toolbar-search">
             <Icon name="search" />
             <input
+              ref={searchField}
               type="search"
               className="input"
               placeholder="Search titles and file names…"
@@ -207,19 +213,21 @@ export default function DocumentsPage() {
             Only mine
           </label>
           <span className="toolbar-spacer" />
-          {rows.length ? (
-            <div className="list-summary" aria-live="polite">
-              <span>
-                {pluralize(documents.data?.count ?? rows.length, "document")}
-                {filtered ? " match these filters" : ""}
-              </span>
-              {filtered ? (
-                <button type="button" className="link-button" onClick={clearFilters}>
-                  Clear filters
-                </button>
-              ) : null}
-            </div>
-          ) : null}
+          <div className="list-summary" aria-live="polite">
+            {rows.length ? (
+              <>
+                <span>
+                  {pluralize(total, "document")}
+                  {filtered ? (total === 1 ? " matches these filters" : " match these filters") : ""}
+                </span>
+                {filtered ? (
+                  <button type="button" className="link-button" onClick={clearFilters}>
+                    Clear filters
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -259,10 +267,16 @@ export default function DocumentsPage() {
               <tr>
                 <th scope="col">Title</th>
                 <th scope="col">Type</th>
-                <th scope="col">Department</th>
-                <th scope="col">Owner</th>
+                <th scope="col" className="col-secondary">
+                  Department
+                </th>
+                <th scope="col" className="col-secondary">
+                  Owner
+                </th>
                 <th scope="col">Status</th>
-                <th scope="col">Updated</th>
+                <th scope="col" className="col-secondary">
+                  Updated
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -284,8 +298,10 @@ export default function DocumentsPage() {
                     </div>
                   </td>
                   <td>{TYPE_LABEL[row.document_type]}</td>
-                  <td>{row.department || <span className="muted">—</span>}</td>
-                  <td>
+                  <td className="col-secondary">
+                    {row.department || <span className="muted">—</span>}
+                  </td>
+                  <td className="col-secondary">
                     {row.owner_username ? (
                       <span className="cell-person">
                         <Avatar name={row.owner_username} size="sm" />
@@ -301,7 +317,7 @@ export default function DocumentsPage() {
                       {row.is_archived ? <Badge tone="muted">Archived</Badge> : null}
                     </div>
                   </td>
-                  <td className="nowrap muted" title={row.updated_at}>
+                  <td className="nowrap muted col-secondary" title={row.updated_at}>
                     {formatRelative(row.updated_at)}
                   </td>
                 </tr>

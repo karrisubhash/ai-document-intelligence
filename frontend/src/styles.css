@@ -23,6 +23,7 @@
   --raised: #ffffff;
   --border: #e4e7ec;
   --border-strong: #d0d5dd;
+  --input-border: #8590a2;
   --text: #101828;
   --text-2: #475467;
   --text-3: #667085;
@@ -104,6 +105,7 @@
     --raised: #2c2c31;
     --border: #29292e;
     --border-strong: #3a3a41;
+    --input-border: #6c6c76;
     --text: #ededef;
     --text-2: #b4b4bc;
     --text-3: #8e8e98;
@@ -157,6 +159,7 @@
   --raised: #2c2c31;
   --border: #29292e;
   --border-strong: #3a3a41;
+  --input-border: #6c6c76;
   --text: #ededef;
   --text-2: #b4b4bc;
   --text-3: #8e8e98;
@@ -411,6 +414,7 @@ code {
   top: 0;
   z-index: 30;
   height: 100vh;
+  height: 100dvh;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -662,6 +666,11 @@ code {
   flex: 1;
 }
 
+/* A page with its own breadcrumb (a document) says where it is itself. */
+.app:has(.main .breadcrumb) .topbar-location {
+  display: none;
+}
+
 .quick-find {
   display: flex;
   align-items: center;
@@ -715,7 +724,10 @@ code {
   font: 550 11px/1 var(--font);
 }
 
-.nav-toggle {
+/* Two classes: .icon-button (display: inline-grid, later in this file)
+   would otherwise show the phone menu button on desktop, where it does
+   nothing. */
+.icon-button.nav-toggle {
   display: none;
 }
 
@@ -734,7 +746,10 @@ code {
   gap: 24px;
 }
 
-.page-narrow {
+/* A narrow page keeps the left edge every other page has; only its content
+   is narrower, so moving between screens does not shift the page. */
+.page-narrow > * {
+  width: 100%;
   max-width: 760px;
 }
 
@@ -1552,6 +1567,13 @@ code {
   --tint: #0284c7;
 }
 
+/* An actor the audit log could not name keeps the column's alignment. */
+.avatar-unknown {
+  border: 1px dashed var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+
 .file-icon {
   flex: none;
   display: inline-grid;
@@ -1659,7 +1681,7 @@ code {
   width: 100%;
   height: 36px;
   padding: 0 12px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius);
   background-color: var(--surface);
   color: var(--text);
@@ -1677,7 +1699,7 @@ code {
 }
 
 .input:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--border-strong) 60%, var(--text-3));
+  border-color: color-mix(in srgb, var(--input-border) 65%, var(--text));
 }
 
 .input:focus,
@@ -1908,7 +1930,8 @@ select.input-sm {
   color: var(--text-3);
 }
 
-/* A row's actions stay on one line, at the row's end. */
+/* A row's actions stay on one line, in a column of their own, so the same
+   action lines up from row to row even when some rows offer fewer. */
 .cell-actions {
   width: 1%;
   white-space: nowrap;
@@ -1916,7 +1939,6 @@ select.input-sm {
 
 .cell-actions .button-row {
   flex-wrap: nowrap;
-  justify-content: flex-end;
 }
 
 .table-wrap {
@@ -2005,6 +2027,13 @@ a.table-title:hover {
   font-size: 12.5px;
   color: var(--text-3);
   overflow-wrap: anywhere;
+}
+
+.table-sub-truncate {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cell-title {
@@ -2116,6 +2145,10 @@ a.table-title:hover {
   font-weight: 600;
 }
 
+.tabs[data-more="true"] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+}
+
 .tab-panel {
   padding-top: 20px;
 }
@@ -2125,6 +2158,7 @@ a.table-title:hover {
 .dialog {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -2161,7 +2195,9 @@ a.table-title:hover {
 
 .dialog-drawer {
   height: 100vh;
+  height: 100dvh;
   max-height: 100vh;
+  max-height: 100dvh;
   margin: 0 0 0 auto;
   border-width: 0 0 0 1px;
   border-radius: 0;
@@ -2233,6 +2269,16 @@ a.table-title:hover {
   padding-top: 20px;
 }
 
+/* In the source drawer the page text scrolls with the drawer - one scroll
+   area, not two - and is set a size smaller, so a clause's lines fit
+   without re-wrapping into orphans. */
+.dialog-drawer .page-text {
+  max-height: none;
+  overflow-y: visible;
+  padding: 18px 20px;
+  font-size: 12px;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
@@ -2247,6 +2293,7 @@ a.table-title:hover {
 .palette {
   width: min(640px, calc(100vw - 32px));
   max-height: min(560px, calc(100vh - 96px));
+  max-height: min(560px, calc(100dvh - 96px));
   margin: 12vh auto auto;
   padding: 0;
   overflow: hidden;
@@ -2889,7 +2936,7 @@ a.table-title:hover {
   align-items: center;
   gap: 8px;
   padding: 6px 6px 6px 16px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-xs);
@@ -3477,6 +3524,7 @@ mark.evidence {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   height: calc(100vh - var(--topbar));
+  height: calc(100dvh - var(--topbar));
 }
 
 .conversations {
@@ -3488,6 +3536,12 @@ mark.evidence {
   padding: 16px 12px;
   border-right: 1px solid var(--border);
   background: var(--bg);
+}
+
+/* The panel scrolls instead: as flex items the 36px buttons were squashed
+   to a 17px strip on phones. */
+.conversations > * {
+  flex: none;
 }
 
 .conversations-label {
@@ -3561,10 +3615,14 @@ mark.evidence {
   color: var(--text-3);
 }
 
+/* Hidden actions take no room, so titles are not cut short for nothing.
+   They appear on hover, on keyboard focus and on the open conversation -
+   and always on touch screens, which cannot hover. */
 .conversation-actions {
   display: flex;
   gap: 2px;
-  padding-right: 4px;
+  width: 0;
+  overflow: hidden;
   opacity: 0;
   transition: opacity 0.1s;
 }
@@ -3572,7 +3630,19 @@ mark.evidence {
 .conversation:hover .conversation-actions,
 .conversation:focus-within .conversation-actions,
 .conversation.active .conversation-actions {
+  width: auto;
+  overflow: visible;
+  padding-right: 4px;
   opacity: 1;
+}
+
+@media (hover: none) {
+  .conversation-actions {
+    width: auto;
+    overflow: visible;
+    padding-right: 4px;
+    opacity: 1;
+  }
 }
 
 .chat-main {
@@ -4066,7 +4136,7 @@ mark.evidence {
 .composer-box {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow: var(--shadow-md);
@@ -4332,6 +4402,11 @@ mark.evidence {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 
+  .tab {
+    gap: 6px;
+    padding: 0 10px;
+  }
+
   .suggestions {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -4380,7 +4455,7 @@ mark.evidence {
     background: var(--overlay);
   }
 
-  .nav-toggle {
+  .icon-button.nav-toggle {
     display: inline-grid;
   }
 
@@ -4442,10 +4517,12 @@ mark.evidence {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     height: calc(100vh - var(--topbar));
+    height: calc(100dvh - var(--topbar));
   }
 
   .conversations {
-    max-height: 30vh;
+    max-height: 24vh;
+    padding: 10px 12px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
@@ -4484,6 +4561,30 @@ mark.evidence {
 }
 
 @media (max-width: 560px) {
+  /* The actions row is full width here; the overflow menu sits at its right
+     edge, so the right-anchored menu opens inside the screen. */
+  .page-actions > .menu-root:last-child {
+    margin-left: auto;
+  }
+
+  .palette {
+    margin-top: 12px;
+  }
+
+  .tab .icon {
+    display: none;
+  }
+
+  /* A phone shows the columns that decide what to open: title, type, status. */
+  .col-secondary {
+    display: none;
+  }
+
+  .table th,
+  .table td {
+    padding: 10px 12px;
+  }
+
   .dl-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
@@ -4514,6 +4615,16 @@ mark.evidence {
 
   .composer-scope select.input {
     max-width: 150px;
+  }
+}
+
+/* iOS zooms into any field whose text is smaller than 16px. */
+@media (max-width: 860px) and (pointer: coarse) {
+  .input,
+  .ask-box-input,
+  .composer-input,
+  .palette-input {
+    font-size: 16px;
   }
 }
 
