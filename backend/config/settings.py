@@ -143,8 +143,16 @@ REST_FRAMEWORK = {
         "login_account": os.getenv("THROTTLE_LOGIN_ACCOUNT", "100/hour"),
         # Writes bytes and queues worker time.
         "upload": os.getenv("THROTTLE_UPLOAD", "60/hour"),
-        # Runs two retrievers and a fusion pass.
+        # Runs two retrievers, a fusion pass and - with a cross-encoder
+        # configured - a reranking pass over up to SEARCH_RERANK_DEPTH
+        # passages, which is most of its cost.
         "search": os.getenv("THROTTLE_SEARCH", "120/hour"),
+        # How fast that hourly budget may be spent. A search that reranks
+        # costs seconds of CPU (docs/evaluation/search-relevance.md), so 120
+        # arriving at once would starve everyone else for minutes. 20 a
+        # minute is several times what a person searching, refining and
+        # expanding results produces.
+        "search_burst": os.getenv("THROTTLE_SEARCH_BURST", "20/minute"),
         # The most expensive path in the system.
         "chat": os.getenv("THROTTLE_CHAT", "60/hour"),
     },

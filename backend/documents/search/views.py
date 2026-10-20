@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 
 from documents.audit import record_event
 from documents.models import AuditLog
-from documents.throttling import BurstUserThrottle
+from documents.throttling import BurstUserThrottle, ShortWindowUserThrottle
 
 from . import ranking
 from .serializers import SearchRequestSerializer, max_limit
@@ -22,8 +22,11 @@ class SearchView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [BurstUserThrottle]
+    # An hourly budget, and a per-minute limit on how fast it may be spent:
+    # a reranked search costs seconds of CPU (ShortWindowUserThrottle).
+    throttle_classes = [BurstUserThrottle, ShortWindowUserThrottle]
     throttle_scope = "search"
+    throttle_short_window_scope = "search_burst"
 
     def post(self, request):
         serializer = SearchRequestSerializer(data=request.data)

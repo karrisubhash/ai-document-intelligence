@@ -9,16 +9,22 @@ model - the model's own quality is what the benchmark measures.
 """
 
 import json
+import os
 import tempfile
+import unittest
 from io import StringIO
 from pathlib import Path
 from unittest import mock
 
+from django.conf import settings
+from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
+from rest_framework.throttling import SimpleRateThrottle
 
 from documents.evaluation import search as scoring
 from documents.models import Document, ProcessingJob
@@ -32,6 +38,7 @@ from documents.tests import MEDIA_ROOT, make_user
 
 PROVIDER = "documents.processing.embedding.hashing.HashingEmbeddingProvider"
 FAKE = "documents.tests_search_relevance.FakeCrossEncoder"
+FAKE_MINILM = "documents.tests_search_relevance.FakeMiniLM"
 
 
 def case(kind="exact"):
@@ -229,6 +236,13 @@ class FakeCrossEncoder:
         return reranked
 
 
+class FakeMiniLM(FakeCrossEncoder):
+    """Reports the pilot's model id, so ranking applies the floor calibrated
+    for it rather than a fake model's."""
+
+    version = "cross-encoder/ms-marco-MiniLM-L6-v2"
+
+
 def index(title, body, owner, department):
     document = Document.objects.create(
         title=title, document_type="REGULATION", owner=owner, department=department
@@ -352,6 +366,41 @@ class RankingTests(TestCase):
         self.assertEqual(
             self.titles(data)[1:], ["Hostel Regulations", "Scanned fragment"]
         )
+
+    def test_every_weaker_match_is_returned_even_when_matches_fill_the_limit(self):
+        """The page's "Show N weaker matches" asks again with the same limit
+        and include_below_floor; N is ranking.below_floor. With matches and
+        weaker matches cut to `limit` together, `limit` matches clearing the
+        floor meant the click returned the same matches again - and nothing
+        it promised."""
+        for number in range(4):
+            index(f"Library copy {number}", self.LIBRARY, self.user, "Registry")
+        # Five passages score 0.97, above the 0.5 floor; the hostel clause
+        # (0.40) and the fragment (0) fall below it.
+        first = self.search(query="library late return fine", limit=2)
+        self.assertEqual(first["count"], 2)
+        self.assertEqual(first["ranking"]["below_floor"], 2)
+
+        data = self.search(
+            query="library late return fine", limit=2, include_below_floor=True
+        )
+
+        self.assertEqual(
+            [hit["below_floor"] for hit in data["results"]], [False, False, True, True]
+        )
+        self.assertEqual(
+            self.titles(data)[2:], ["Hostel Regulations", "Scanned fragment"]
+        )
+
+    def test_with_nothing_above_the_floor_all_weaker_matches_are_returned(self):
+        """ "Show all N weaker matches" must show N, not `limit` of them."""
+        FakeCrossEncoder.scores = {}
+
+        data = self.search(query="late fine", limit=2, include_below_floor=True)
+
+        self.assertEqual(data["ranking"]["below_floor"], 3)
+        self.assertEqual(data["count"], 3)
+        self.assertTrue(all(hit["below_floor"] for hit in data["results"]))
 
     def test_citations_are_the_stored_passage_exactly(self):
         hit = self.search(query="library late return fine")["results"][0]
@@ -502,6 +551,127 @@ class RankingAuthorizationTests(TestCase):
 @override_settings(
     MEDIA_ROOT=MEDIA_ROOT,
     DOCUMENT_EMBEDDING_PROVIDER=PROVIDER,
+    RAG_RERANKER=FAKE_MINILM,
+    SEARCH_RERANK_DEPTH=30,
+)
+class PilotDefaultsTests(TestCase):
+    """The pilot's relevance floor and fallback, at their shipped defaults.
+
+    Nothing here is patched or overridden. CI's search gate runs the lexical
+    reranker, which keeps retrieval order and never reaches the floor, and
+    the other ranking tests patch a fake model's floor or override the
+    fallback - so without these, MiniLM's floor (0.03, chosen on the dev
+    split) or the fallback (3) could change and every gate would pass.
+    """
+
+    def setUp(self):
+        chunking_service.reset_provider_cache()
+        engine.reset_caches()
+        self.addCleanup(chunking_service.reset_provider_cache)
+        self.addCleanup(engine.reset_caches)
+        FakeCrossEncoder.scores = {}
+        FakeCrossEncoder.degraded = False
+        FakeCrossEncoder.seen = []
+
+        self.user = make_user("pilot_user", department="Registry")
+        for title, marker in (
+            ("Clause A", "alpha"),
+            ("Clause B", "bravo"),
+            ("Clause C", "charlie"),
+            ("Clause D", "delta"),
+            ("Clause E", "echo"),
+        ):
+            body = f"Rule {marker}: late fines are charged per day.\n".encode()
+            index(title, body, self.user, "Registry")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def search(self, **payload):
+        response = self.client.post(reverse("search"), payload, format="json")
+        self.assertEqual(response.status_code, 200, response.content)
+        return response.data
+
+    def use_code_defaults(self):
+        """The defaults in the code, whatever this environment configured."""
+        del settings.SEARCH_RELEVANCE_FLOOR
+        del settings.SEARCH_FALLBACK_RESULTS
+
+    @override_settings()
+    def test_the_minilm_floor_admits_0_05_and_not_0_02(self):
+        self.use_code_defaults()
+        FakeCrossEncoder.scores = {"alpha": 0.05, "bravo": 0.02}
+
+        data = self.search(query="late fines", include_below_floor=True)
+
+        below = {hit["document_title"]: hit["below_floor"] for hit in data["results"]}
+        self.assertFalse(below["Clause A"])  # fails if the floor rises above 0.05
+        self.assertTrue(below["Clause B"])  # fails if it falls to 0.02
+        self.assertEqual(data["ranking"]["relevance_floor"], 0.03)
+
+    @override_settings()
+    def test_with_nothing_above_the_floor_the_three_closest_are_shown(self):
+        self.use_code_defaults()
+        FakeCrossEncoder.scores = {"alpha": 0.02, "bravo": 0.01}
+
+        data = self.search(query="late fines")
+
+        self.assertEqual(data["count"], 3)
+        self.assertTrue(all(hit["below_floor"] for hit in data["results"]))
+        self.assertEqual(
+            [hit["document_title"] for hit in data["results"]][:2],
+            ["Clause A", "Clause B"],
+        )
+
+    @unittest.skipIf(
+        {"SEARCH_RELEVANCE_FLOOR", "SEARCH_FALLBACK_RESULTS"} & set(os.environ),
+        "this environment overrides the shipped defaults",
+    )
+    def test_the_settings_ship_the_same_defaults(self):
+        self.assertIsNone(settings.SEARCH_RELEVANCE_FLOOR)
+        self.assertEqual(settings.SEARCH_FALLBACK_RESULTS, 3)
+
+
+@override_settings(
+    MEDIA_ROOT=MEDIA_ROOT, DOCUMENT_EMBEDDING_PROVIDER=PROVIDER, RAG_RERANKER=""
+)
+class SearchBurstThrottleTests(TestCase):
+    """A reranked search costs seconds of CPU. The hourly budget alone let
+    one account spend all 120 of its searches in the hour's first seconds."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        chunking_service.reset_provider_cache()
+        engine.reset_caches()
+        self.addCleanup(chunking_service.reset_provider_cache)
+        self.user = make_user("burst_user", department="Registry")
+        index("Library Rules", RankingTests.LIBRARY, self.user, "Registry")
+
+    def search(self, user):
+        client = APIClient()
+        client.force_authenticate(user)
+        return client.post(reverse("search"), {"query": "late fine"}, format="json")
+
+    def test_the_twenty_first_search_in_a_minute_is_refused(self):
+        codes = [self.search(self.user).status_code for _ in range(21)]
+
+        self.assertEqual(codes[:20], [200] * 20)
+        self.assertEqual(codes[20], 429)
+
+    def test_the_per_minute_budget_is_per_account(self):
+        other = make_user("burst_other", department="Registry")
+        with mock.patch.dict(
+            SimpleRateThrottle.THROTTLE_RATES,
+            {"search": "1000/hour", "search_burst": "2/minute"},
+        ):
+            codes = [self.search(self.user).status_code for _ in range(3)]
+            self.assertEqual(codes, [200, 200, 429])
+            self.assertEqual(self.search(other).status_code, 200)
+
+
+@override_settings(
+    MEDIA_ROOT=MEDIA_ROOT,
+    DOCUMENT_EMBEDDING_PROVIDER=PROVIDER,
     RAG_RERANKER="",
 )
 class SearchLimitTests(TestCase):
@@ -597,7 +767,73 @@ class EvaluateSearchCommandTests(TestCase):
         inflated["metrics"]["all"]["quality"]["mrr"] = 1.01
         report_path.write_text(json.dumps(inflated), encoding="utf-8")
 
-        from django.core.management.base import CommandError
-
         with self.assertRaises(CommandError):
             self.run_command("--baseline", str(report_path), "--fail-on-regression")
+
+    def dev_baseline(self):
+        path = Path(tempfile.mkdtemp()) / "baseline.json"
+        self.run_command("--split", "dev", "--output", str(path))
+        return path
+
+    def test_a_run_whose_reranker_degraded_is_refused(self):
+        """A cross-encoder that cannot load (empty model cache offline, OOM)
+        degrades every search to retrieval order. Scored, that order would be
+        published under the cross-encoder's name."""
+        FakeCrossEncoder.degraded = True
+        self.addCleanup(setattr, FakeCrossEncoder, "degraded", False)
+        self.addCleanup(engine.reset_caches)
+
+        with override_settings(RAG_RERANKER=FAKE):
+            engine.reset_caches()
+            with self.assertRaisesMessage(CommandError, "reranker was unavailable"):
+                self.run_command("--split", "dev")
+
+    def test_a_baseline_from_a_different_exam_is_refused(self):
+        """--k 10 against a k=5 baseline silently left the k-dependent
+        metrics out of the gate; --split test against a dev baseline reported
+        the different cases as regressions. Neither is a comparison."""
+        baseline = self.dev_baseline()
+        runs = {
+            "k 5 there": ["--split", "dev", "--k", "10"],
+            "limit 10 there": ["--split", "dev", "--limit", "5"],
+            "split 'dev' there": ["--split", "test"],
+        }
+        for message, args in runs.items():
+            with self.subTest(message), self.assertRaisesMessage(CommandError, message):
+                self.run_command(*args, "--baseline", str(baseline))
+
+    def test_a_gated_metric_missing_from_the_run_fails_the_gate(self):
+        """Otherwise renaming or dropping a metric takes it out of the gate
+        without anyone deciding to."""
+        baseline = self.dev_baseline()
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+        data["metrics"]["all"]["quality"]["retired_metric"] = 0.5
+        baseline.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaisesMessage(CommandError, "all.retired_metric"):
+            self.run_command(
+                "--split", "dev", "--baseline", str(baseline), "--fail-on-regression"
+            )
+
+    def test_refreshing_a_baseline_in_place_compares_with_the_old_one(self):
+        """--output X --baseline X is the natural way to refresh a baseline.
+        Writing first compared the run with itself, which cannot fail."""
+        baseline = self.dev_baseline()
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+        data["metrics"]["all"]["quality"]["mrr"] = 1.01
+        baseline.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaises(CommandError):
+            self.run_command(
+                "--split",
+                "dev",
+                "--output",
+                str(baseline),
+                "--baseline",
+                str(baseline),
+                "--fail-on-regression",
+            )
+
+        # ...and the baseline it failed against was not overwritten.
+        kept = json.loads(baseline.read_text(encoding="utf-8"))
+        self.assertEqual(kept["metrics"]["all"]["quality"]["mrr"], 1.01)

@@ -401,9 +401,13 @@ jobs:
       # (docs/evaluation/search-relevance.md). Its own user AND department:
       # visibility is owner-or-same-department, so under the shared
       # Evaluation department it would score v2's documents as part of its
-      # corpus. Offline baselines again, so the gate is deterministic: it
-      # guards retrieval, fusion and the endpoint's selection logic. The
-      # cross-encoder's quality is measured locally, not gated - CI has no
+      # corpus. Offline baselines again, so the gate is deterministic - and
+      # narrower than it looks: with the lexical reranker the endpoint keeps
+      # retrieval's fused order (search/ranking.py), so this gates retrieval
+      # and fusion only. The cross-encoder path - relevance floor, fallback,
+      # include_below_floor - runs under unit tests in
+      # tests_search_relevance.py, which also pin the pilot's MiniLM floor
+      # and fallback; its quality is measured locally, not gated - CI has no
       # model.
       - name: Seed the search-relevance corpus
         run: >

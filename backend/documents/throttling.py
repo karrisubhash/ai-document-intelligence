@@ -94,3 +94,22 @@ class BurstUserThrottle(ScopedRateThrottle):
             ident = f"ip:{self.get_ident(request)}"
 
         return self.cache_format % {"scope": self.scope, "ident": ident}
+
+
+class ShortWindowUserThrottle(BurstUserThrottle):
+    """A second, short-window budget for a view that already has an hourly one.
+
+    An hourly scope bounds how much an account spends in an hour, not how
+    fast: all 120 searches could arrive in the first few seconds of it. That
+    was harmless while a search was two indexed queries. Since search began
+    cross-encoding up to SEARCH_RERANK_DEPTH passages per request - seconds
+    of CPU each on the pilot's hardware - one account, or one buggy client,
+    spending its hourly budget at once queues minutes of CPU in front of
+    every other user's requests and the health check.
+
+    Reads its scope from `throttle_short_window_scope`, not `throttle_scope`:
+    ScopedRateThrottle takes its scope from one view attribute, and two
+    throttles reading the same attribute would be one budget counted twice.
+    """
+
+    scope_attr = "throttle_short_window_scope"

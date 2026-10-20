@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
@@ -16,10 +16,6 @@ import {
 } from "../components/ui";
 import { highlightTerms } from "../lib/highlight";
 import { TYPE_LABEL } from "../lib/labels";
-
-const PAGE = 20;
-// Used until a response says what the server allows (SEARCH_MAX_LIMIT).
-const FALLBACK_MAX_LIMIT = 50;
 
 interface SearchRequest {
   query: string;
@@ -78,7 +74,11 @@ export default function SearchPage() {
   const [documentType, setDocumentType] = useState("");
   const [department, setDepartment] = useState("");
   const [collection, setCollection] = useState("");
-  const [limit, setLimit] = useState(PAGE);
+  // The server owns the page size (SEARCH_DEFAULT_LIMIT) and its ceiling
+  // (SEARCH_MAX_LIMIT): a new search sends no limit, and "Show more" adds one
+  // more page of the size the server chose. A fixed client-side size used to
+  // be rejected outright by a server configured with a smaller maximum.
+  const [pageSize, setPageSize] = useState(0);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [asked, setAsked] = useState("");
   // The search the results on screen came from. "Show more results" repeats
@@ -88,32 +88,43 @@ export default function SearchPage() {
   const [submitted, setSubmitted] = useState<SearchRequest | null>(null);
   const search = useAction(api.search);
 
-  const run = async (request: SearchRequest, nextLimit = PAGE) => {
-    if (!request.query) return;
-    setLimit(nextLimit);
-    const outcome = await search.run({ ...request, limit: nextLimit });
-    if (outcome.ok) {
-      setResult(outcome.value);
-      setAsked(request.query);
-      setSubmitted(request);
-    }
+  /** `limit` undefined: a new search, at the server's default page size. */
+  const run = async (request: SearchRequest, limit?: number): Promise<boolean> => {
+    if (!request.query) return false;
+    const outcome = await search.run(limit === undefined ? request : { ...request, limit });
+    if (!outcome.ok) return false;
+    setResult(outcome.value);
+    setAsked(request.query);
+    setSubmitted(request);
+    if (limit === undefined) setPageSize(outcome.value.limit);
+    return true;
   };
+
+  // The button that asks for the weaker matches unmounts once they arrive,
+  // which dropped keyboard focus to <body>. It moves to their heading instead.
+  // Set only after the response is applied, so the heading it reaches is the
+  // one for the matches just fetched.
+  const weakerHeading = useRef<HTMLHeadingElement>(null);
+  const [focusWeaker, setFocusWeaker] = useState(false);
+  useEffect(() => {
+    if (!focusWeaker) return;
+    setFocusWeaker(false);
+    weakerHeading.current?.focus();
+  }, [focusWeaker]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void run(
-      {
-        query: query.trim(),
-        document_type: documentType,
-        department,
-        collection_id: collection ? Number(collection) : null,
-        include_below_floor: false,
-      },
-      PAGE,
-    );
+    void run({
+      query: query.trim(),
+      document_type: documentType,
+      department,
+      collection_id: collection ? Number(collection) : null,
+      include_below_floor: false,
+    });
   };
 
-  const maxLimit = result?.max_limit ?? FALLBACK_MAX_LIMIT;
+  const limit = result?.limit ?? 0;
+  const maxLimit = result?.max_limit ?? 0;
   // Passages the reranker left off the page as not relevant enough. Never
   // dropped for good: one click asks for them, marked and ordered last.
   const hidden = result?.ranking?.below_floor ?? 0;
@@ -121,7 +132,13 @@ export default function SearchPage() {
   const strong = result?.results.filter((hit) => !hit.below_floor) ?? [];
   const weak = result?.results.filter((hit) => hit.below_floor) ?? [];
   const documents = new Set(strong.map((hit) => hit.document_id));
-  const showWeaker = () => submitted && void run({ ...submitted, include_below_floor: true }, limit);
+  // Every weaker match comes back, whatever the limit: the server caps the
+  // matches at `limit` and appends all `hidden` passages below the floor.
+  const showWeaker = async () => {
+    if (submitted && (await run({ ...submitted, include_below_floor: true }, limit))) {
+      setFocusWeaker(true);
+    }
+  };
 
   return (
     <div className="page">
@@ -235,7 +252,7 @@ export default function SearchPage() {
               close enough match.{" "}
               {weak.length ? `The closest ${weak.length === 1 ? "is" : plural(weak.length, "is", "are")} below. ` : null}
               {showingWeaker || weak.length >= hidden ? null : (
-                <Button variant="ghost" onClick={showWeaker} loading={search.pending}>
+                <Button variant="ghost" onClick={() => void showWeaker()} loading={search.pending}>
                   {weak.length ? `Show all ${hidden} weaker matches` : "Show the weaker matches"}
                 </Button>
               )}
@@ -246,7 +263,7 @@ export default function SearchPage() {
               ask a question instead — the assistant can combine several passages.
             </EmptyState>
           ) : (
-            <ol className="results">
+            <ol className="results" aria-label="Search results">
               {strong.map((hit) => (
                 <Hit key={hit.chunk_id} hit={hit} query={asked} semantic={result.semantic} />
               ))}
@@ -255,7 +272,9 @@ export default function SearchPage() {
 
           {weak.length ? (
             <>
-              <h2 className="results-weak-head">Weaker matches</h2>
+              <h2 className="results-weak-head" tabIndex={-1} ref={weakerHeading}>
+                Weaker matches
+              </h2>
               <p className="muted small">
                 Scored below the relevance threshold, so they may only share words with the search.
               </p>
@@ -268,16 +287,19 @@ export default function SearchPage() {
           ) : null}
 
           <div className="button-row">
-            {result.count >= limit && limit < maxLimit ? (
+            {/* On the matches, not the whole response: weaker matches asked
+                for are appended beyond `limit`, so the count alone said "there
+                may be more" when every match was already shown. */}
+            {strong.length >= limit && limit < maxLimit ? (
               <Button
-                onClick={() => submitted && void run(submitted, Math.min(maxLimit, limit + PAGE))}
+                onClick={() => submitted && void run(submitted, Math.min(maxLimit, limit + (pageSize || limit)))}
                 loading={search.pending}
               >
                 Show more results
               </Button>
             ) : null}
             {strong.length && hidden > 0 && !showingWeaker ? (
-              <Button variant="ghost" onClick={showWeaker} loading={search.pending}>
+              <Button variant="ghost" onClick={() => void showWeaker()} loading={search.pending}>
                 Show {plural(hidden, "weaker match", "weaker matches")}
               </Button>
             ) : null}

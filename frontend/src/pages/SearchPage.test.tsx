@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -111,8 +111,42 @@ describe("SearchPage", () => {
     expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ include_below_floor: true, query: "late fine" }));
     const weaker = await screen.findByRole("list", { name: "Weaker matches" });
     expect(weaker).toHaveTextContent("Scanned fragment");
-    // The first list still holds only the passage above the floor.
-    expect(screen.getAllByRole("list")[0]).not.toHaveTextContent("Scanned fragment");
+    // The results list still holds only the passage above the floor. Found by
+    // name: the first list on the page is the sidebar's navigation.
+    const results = screen.getByRole("list", { name: "Search results" });
+    expect(results).toHaveTextContent("Library Rules");
+    expect(results).not.toHaveTextContent("Scanned fragment");
+  });
+
+  it("moves focus to the weaker matches when the button asking for them goes away", async () => {
+    vi.spyOn(api, "search")
+      .mockResolvedValueOnce(response([ANSWER], 1))
+      .mockResolvedValueOnce(response([ANSWER, FRAGMENT], 1));
+    renderSearch();
+    await searchFor("late fine");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Show 1 weaker match" }));
+
+    const heading = await screen.findByRole("heading", { name: "Weaker matches" });
+    expect(screen.queryByRole("button", { name: "Show 1 weaker match" })).not.toBeInTheDocument();
+    await waitFor(() => expect(heading).toHaveFocus());
+  });
+
+  it("offers more results only while the matches themselves filled the page", async () => {
+    // Weaker matches asked for are appended beyond the limit, so the response
+    // can hold `limit` passages while every match is already on screen.
+    const three = [1, 2, 3].map((chunk) => hit(chunk, `Match ${chunk}`, "late fine"));
+    const weaker = Array.from({ length: 9 }, (_, index) => hit(10 + index, `Weak ${index}`, "fine", true));
+    vi.spyOn(api, "search")
+      .mockResolvedValueOnce(response(three, 9, { limit: 10 }))
+      .mockResolvedValueOnce(response([...three, ...weaker], 9, { limit: 10 }));
+    renderSearch();
+    await searchFor("late fine");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Show 9 weaker matches" }));
+
+    expect(await screen.findByRole("list", { name: "Weaker matches" })).toHaveTextContent("Weak 8");
+    expect(screen.queryByRole("button", { name: "Show more results" })).not.toBeInTheDocument();
   });
 
   it("says there is no close match and shows the closest only as weaker matches", async () => {
@@ -144,6 +178,24 @@ describe("SearchPage", () => {
     await searchFor("zzz");
 
     expect(await screen.findByText("Nothing found")).toBeInTheDocument();
+  });
+
+  it("lets the server choose the page size, and pages by it up to the server's maximum", async () => {
+    const ten = Array.from({ length: 10 }, (_, index) => hit(index + 1, `Doc ${index + 1}`, "late fine"));
+    const search = vi
+      .spyOn(api, "search")
+      .mockResolvedValueOnce(response(ten, 0, { limit: 10, max_limit: 15 }))
+      .mockResolvedValueOnce(response(ten, 0, { limit: 15, max_limit: 15 }));
+    renderSearch();
+    await searchFor("late fine");
+
+    expect(await screen.findByRole("link", { name: "Doc 1" })).toBeInTheDocument();
+    // A new search sends no limit: a server configured with a smaller
+    // maximum than any client-side page size would reject it outright.
+    expect(search.mock.calls[0][0]).not.toHaveProperty("limit");
+
+    await userEvent.click(screen.getByRole("button", { name: "Show more results" }));
+    expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 15 }));
   });
 
   it("asks for more results only up to the server's maximum", async () => {

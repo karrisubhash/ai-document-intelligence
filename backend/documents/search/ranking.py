@@ -185,16 +185,23 @@ def rank(
     response.below_floor = len(below)
 
     if include_below_floor:
-        selected = above + below
+        # The matches the caller asked for, then EVERY weaker match the
+        # reranker scored: `limit` caps the matches, not the weaker ones. So
+        # `ranking.below_floor` - the N on the page's "Show N weaker matches"
+        # - is exactly how many this appends. Cutting the two together to
+        # `limit` returned the same matches again whenever `limit` of them
+        # cleared the floor, and fewer than N whenever none did. Bounded by
+        # the candidates reranked: max(limit, SEARCH_RERANK_DEPTH).
+        selected = above[:limit] + below
     elif above:
-        selected = above
+        selected = above[:limit]
     else:
         # Nothing cleared the floor. The closest few, marked, rather than an
         # empty page: the floor cannot tell a paraphrased answer from no
         # answer, and the reranker's ORDER still puts the answer first.
-        selected = below[: fallback_results()]
+        selected = below[: fallback_results()][:limit]
 
-    response.hits = selected[:limit]
+    response.hits = selected
 
     if below and not above:
         shown = len(response.hits)

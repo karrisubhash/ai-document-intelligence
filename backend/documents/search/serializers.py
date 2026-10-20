@@ -35,6 +35,8 @@ class SearchRequestSerializer(serializers.Serializer):
     )
     # Also return the passages the reranker scored below the relevance
     # floor - after every passage above it, and marked `below_floor`.
+    # `limit` caps the passages above the floor; every weaker one is
+    # appended, so a response can hold more than `limit` passages.
     include_below_floor = serializers.BooleanField(required=False, default=False)
 
     def validate_limit(self, value):

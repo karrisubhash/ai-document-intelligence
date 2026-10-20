@@ -124,6 +124,13 @@ class Command(BaseCommand):
         factory = APIRequestFactory()
 
         scores = []
+        # What the endpoint actually did, per its own response - not what is
+        # configured. A cross-encoder that fails to load (an empty model
+        # cache offline, an OOM) degrades every search to retrieval order,
+        # and a run that did not notice would score that order under the
+        # configured model's name.
+        degraded = []
+        applied = set()
         for case in cases:
             evidence = self._evidence(user, case, documents)
 
@@ -141,6 +148,11 @@ class Command(BaseCommand):
                     f"{case['id']}: search returned {response.status_code} "
                     f"{getattr(response, 'data', '')}"
                 )
+
+            ranking_info = response.data.get("ranking") or {}
+            if ranking_info.get("degraded"):
+                degraded.append(case["id"])
+            applied.add(ranking_info.get("reranker") or "retrieval order")
 
             results = response.data["results"]
             ranked = [hit["chunk_id"] for hit in results]
@@ -170,17 +182,48 @@ class Command(BaseCommand):
                 )
             )
 
-        report = self._report(data, options, scores, k)
+        if degraded:
+            raise CommandError(
+                f"The configured reranker was unavailable for {len(degraded)} of "
+                f"{len(cases)} case(s) (first: {', '.join(degraded[:3])}), and "
+                f"the endpoint fell back to retrieval order. These numbers would "
+                f"describe that order under the reranker's name. Make the "
+                f"reranker loadable (model cache, HF_HUB_OFFLINE, memory) and "
+                f"run again, or configure the lexical reranker to measure "
+                f"retrieval order on purpose."
+            )
+
+        report = self._report(data, options, scores, k, applied)
         self._print(report, scores, k, show_cases=options["show_cases"])
 
-        if options.get("output"):
-            Path(options["output"]).write_text(
-                json.dumps(report, indent=2) + "\n", encoding="utf-8"
-            )
-            self.stdout.write(f"wrote {options['output']}")
+        # Compared BEFORE --output is written: with the two pointing at one
+        # file - the natural way to refresh a baseline - writing first
+        # compared the run with itself, which can never fail.
+        failing = self._compare(report, options) if options.get("baseline") else []
+        must_fail = bool(failing) and options["fail_on_regression"]
 
-        if options.get("baseline"):
-            self._compare(report, options)
+        if options.get("output"):
+            overwrites_baseline = bool(options.get("baseline")) and (
+                Path(options["output"]).resolve() == Path(options["baseline"]).resolve()
+            )
+            if must_fail and overwrites_baseline:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"{options['output']} not written: it is the baseline "
+                        f"this run failed against"
+                    )
+                )
+            else:
+                Path(options["output"]).write_text(
+                    json.dumps(report, indent=2) + "\n", encoding="utf-8"
+                )
+                self.stdout.write(f"wrote {options['output']}")
+
+        if must_fail:
+            raise CommandError(
+                f"{len(failing)} search metric(s) regressed against, or missing "
+                f"from, {options['baseline']}: {', '.join(failing)}"
+            )
 
     # --- resolution --------------------------------------------------------
 
@@ -234,7 +277,7 @@ class Command(BaseCommand):
 
     # --- reporting ---------------------------------------------------------
 
-    def _report(self, data, options, scores, k) -> dict:
+    def _report(self, data, options, scores, k, applied) -> dict:
         from documents.processing.chunking import service as chunking_service
         from documents.rag import engine
 
@@ -259,9 +302,17 @@ class Command(BaseCommand):
             "label": options["label"],
             "k": k,
             "limit": options["limit"],
+            # Which cases were run. Part of the exam: a baseline over every
+            # case and a run over the test split share metric names but not
+            # cases, and comparing them reports the difference as regressions.
+            "split": options["split"],
             "configuration": {
                 "embedding": embedding,
                 "reranker": f"{reranker.name} {getattr(reranker, 'version', '')}",
+                # What ordered the results, from the endpoint's responses:
+                # a lexical reranker is configured in CI but the endpoint
+                # keeps retrieval order with it, so the two can differ.
+                "endpoint_ranking": sorted(applied),
                 "search_candidates": getattr(settings, "SEARCH_CANDIDATES", None),
                 "search_rerank_depth": ranking.rerank_depth(),
                 "search_relevance_floor": ranking.relevance_floor(reranker),
@@ -280,8 +331,10 @@ class Command(BaseCommand):
         config = report["configuration"]
         self.stdout.write(
             f"{report['dataset']} {report['dataset_version']}  "
-            f"{report['label'] or '(no label)'}  k={k} limit={report['limit']}\n"
-            f"embedding: {config['embedding']}  reranker: {config['reranker']}"
+            f"{report['label'] or '(no label)'}  k={k} limit={report['limit']} "
+            f"split={report['split']}\n"
+            f"embedding: {config['embedding']}  reranker: {config['reranker']}  "
+            f"results ordered by: {', '.join(config['endpoint_ranking'])}"
         )
         for name, block in report["metrics"].items():
             self.stdout.write(f"\n[{name}]")
@@ -319,8 +372,39 @@ class Command(BaseCommand):
                     f"n={s.returned:<3} {marks}"
                 )
 
-    def _compare(self, report, options):
+    # What makes two runs the same exam. A baseline written before `split`
+    # was recorded covered every case.
+    EXAM = (
+        ("dataset", None),
+        ("dataset_version", None),
+        ("k", None),
+        ("limit", None),
+        ("split", "all"),
+    )
+
+    def _compare(self, report, options) -> list:
+        """Print the comparison; return the keys that fail the gate.
+
+        Refuses outright when the baseline is a different exam: `--k 10`
+        against a k=5 baseline renamed the k-dependent metrics, so they were
+        silently left out and only the rest were gated; `--split test`
+        against an all-cases baseline reported four false regressions.
+        """
         baseline = json.loads(Path(options["baseline"]).read_text(encoding="utf-8"))
+
+        mismatched = [
+            f"{field} {baseline.get(field, default)!r} there, {report[field]!r} here"
+            for field, default in self.EXAM
+            if baseline.get(field, default) != report[field]
+        ]
+        if mismatched:
+            raise CommandError(
+                f"{options['baseline']} measured a different exam: "
+                f"{'; '.join(mismatched)}. Comparing them would report the "
+                f"difference as regressions or improvements. Run with matching "
+                f"options, or write a new baseline."
+            )
+
         before = {name: block["quality"] for name, block in baseline["metrics"].items()}
         after = {name: block["quality"] for name, block in report["metrics"].items()}
         result = metrics.compare(before, after, tolerance=options["tolerance"])
@@ -333,11 +417,19 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(f"  improved   {key} {result['deltas'][key]:+.4f}")
             )
-
-        if result["regressions"] and options["fail_on_regression"]:
-            raise CommandError(
-                f"{len(result['regressions'])} search metric(s) regressed "
-                f"against {options['baseline']}"
+        for key in result["added"]:
+            self.stdout.write(f"  new        {key} (not in the baseline, so not gated)")
+        # A gated metric this run no longer produces is a failure, not a
+        # footnote: otherwise renaming or dropping a metric removes it from
+        # the gate without anyone deciding to.
+        for key in result["removed"]:
+            self.stdout.write(
+                self.style.ERROR(
+                    f"  missing    {key} (in the baseline, not in this run)"
+                )
             )
-        if not result["regressions"]:
+
+        failing = result["regressions"] + result["removed"]
+        if not failing:
             self.stdout.write(self.style.SUCCESS("no search regression"))
+        return failing
