@@ -81,8 +81,9 @@ logger = logging.getLogger("adi.search")
 # results exactly): MRR and nDCG@5 were as good or better at 20 than at 30
 # on both corpora, best at 15, and recall started to fall at 10 - the
 # deepest relevant passage sat at fused rank 11. 20 rather than 15 keeps
-# headroom for larger corpora, which push relevant passages deeper, at two
-# thirds of 30's cost. docs/evaluation/search-relevance.md has the table.
+# headroom for larger corpora, which push relevant passages deeper, with a
+# third fewer pairs than 30 (measured: about a quarter less CPU per search).
+# docs/evaluation/search-relevance.md has the table.
 DEFAULT_RERANK_DEPTH = 20
 
 # Search relevance floors per cross-encoder model (the reranker's `version`

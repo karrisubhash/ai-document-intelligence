@@ -8,8 +8,8 @@ purpose, version, schema, split and role.
 
 | | |
 |---|---|
-| Location | `evaluation/corpus/*.txt` (9 documents) |
-| Provenance | **Synthetic.** Written for this repository to resemble institutional regulations — academic regulations, examination policy, fee structure, hostel, library, grievance procedure, IT acceptable use, placement policy, scholarship rules. Not copied from any real institution. |
+| Location | `evaluation/corpus/*.txt` (16 documents: 9 regulations, 7 search distractors) |
+| Provenance | **Synthetic.** Written for this repository to resemble institutional regulations — academic regulations, examination policy, fee structure, hostel, library, grievance procedure, IT acceptable use, placement policy, scholarship rules. Not copied from any real institution. The seven distractors added for the search benchmark (2026-10-13) imitate failure modes seen on a real OCR-heavy corpus: a staff attendance-and-leave rulebook, Theory of Machines lecture notes, a transport circular `TR/2024/117`, and four short OCR-damaged fragments (`scan-*-fragment.txt`). |
 | Purpose | Regression-testing retrieval and answering end to end, through the real ingestion pipeline |
 | Deliberate properties | Overlapping vocabulary across documents (`15 days` is both a revaluation deadline and a grievance window; `condonation` appears in two documents with different meanings (the v2 template's own description says three - it is governed and immutable, so the correction lives here); attendance thresholds of 75 % and 85 % mean different things), a table (fee structure), numbered clauses |
 | Versioning | Governed through the benchmark templates below; editing a corpus file changes what a benchmark version measures, so it requires a new benchmark version |
@@ -29,6 +29,22 @@ purpose, version, schema, split and role.
 
 `evaluation/baseline.json` is the committed v1 baseline the CI gate compares against. See
 [evaluation/README.md](../evaluation/README.md).
+
+### Search relevance (`search-relevance` s1)
+
+| | |
+|---|---|
+| Template | `evaluation/search-relevance.template.json` |
+| Measures | The **Search endpoint**, per passage, in the order it returns them — not the chat engine |
+| Cases | 55 over all 16 corpus documents: exact (11), identifier (5), paraphrase (13), ambiguous (5), common-term (6), repeated-terminology (6), no-relevant (9) |
+| Schema per case | `id`, `kind`, `split`, `query`, `relevant` (a list of `{document, contains}`: a passage is relevant when it belongs to that document **and** contains the evidence text, case- and whitespace-insensitive), `notes` |
+| Split | Fixed per case before any measurement: **dev** (19) for choosing thresholds, **test** (36) for reporting |
+| Relevance | Topical, as a reader of search results would judge it, not "answers the question". No-relevant cases name topics no corpus document covers |
+| Provenance | Synthetic, written for this repository. Labels were checked mechanically (every evidence string resolves to a current chunk, or `evaluate_search` refuses to score) but not by a second person |
+| Resolution | `seed_evaluation --template evaluation/search-relevance.template.json --user search-evaluator --department "Search evaluation"`; `evaluation/search-relevance.json` is git-ignored |
+
+`evaluation/search-baseline.json` is its committed baseline (offline configuration). See
+[evaluation/search-relevance.md](../evaluation/search-relevance.md).
 
 ## Public classification data
 
