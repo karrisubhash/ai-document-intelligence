@@ -299,6 +299,7 @@ Pipeline limits, in `backend/config/settings.py`:
 | `DOCUMENT_SCANNER` | `""` | Dotted path to a `DocumentScanner`; empty means the SCANNING stage records that the file was **not scanned** |
 | `THROTTLE_LOGIN` / `_UPLOAD` / `_SEARCH` / `_CHAT` | 10/min, 60/h, 120/h, 60/h | Per-endpoint rate limits |
 | `THROTTLE_SEARCH_BURST` | 20/min | How fast the hourly search budget may be spent: a search that reranks costs seconds of CPU |
+| `THROTTLE_CHAT_BURST` | 10/min | How fast the hourly chat budget may be spent: a question reranks too, and a streamed answer holds a server thread until it ends |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1000 / 150 | Chunking; changing either requires re-indexing |
 | `SEARCH_CANDIDATES` | 50 | Candidates each retrieval half returns before fusion |
 | `SEARCH_RERANK_DEPTH` | 20 | With a cross-encoder `RAG_RERANKER`, how many fused candidates the Search endpoint reranks (at least the requested `limit`); the per-search CPU cost. `15` is cheaper; `0` returns the fused order, as does the bundled lexical reranker — see [search relevance](docs/evaluation/search-relevance.md) |

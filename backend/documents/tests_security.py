@@ -542,6 +542,32 @@ class ThrottlingTests(TestCase):
             )
             self.assertEqual(response.status_code, status.HTTP_200_OK)
 
+    def ask(self, name="chat"):
+        extra = {"HTTP_ACCEPT": "text/event-stream"} if name == "chat-stream" else {}
+        response = self.client.post(
+            reverse(name), {"question": "attendance"}, format="json", **extra
+        )
+        if hasattr(response, "streaming_content"):
+            b"".join(response.streaming_content)
+        return response.status_code
+
+    def test_the_eleventh_question_in_a_minute_is_refused(self):
+        """The hourly budget alone let one account spend all 60 questions in
+        the hour's first seconds - each one a rerank, and a streamed one
+        holds a gunicorn thread until it ends."""
+        with rates():
+            codes = [self.ask() for _ in range(11)]
+
+        self.assertEqual(codes[:10], [status.HTTP_200_OK] * 10)
+        self.assertEqual(codes[10], status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_streamed_and_plain_questions_share_the_per_minute_budget(self):
+        with rates(chat_burst="2/minute"):
+            self.assertEqual(self.ask("chat"), status.HTTP_200_OK)
+            self.assertEqual(self.ask("chat-stream"), status.HTTP_200_OK)
+            self.assertEqual(self.ask("chat-stream"), status.HTTP_429_TOO_MANY_REQUESTS)
+            self.assertEqual(self.ask("chat"), status.HTTP_429_TOO_MANY_REQUESTS)
+
     def test_login_is_throttled_against_credential_guessing(self):
         client = APIClient()
         url = reverse("api-token-auth")

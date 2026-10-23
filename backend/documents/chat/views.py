@@ -24,7 +24,7 @@ from documents.observability import telemetry
 from documents.rag import followup, general, streaming
 from documents.rag.engine import Abstention
 from documents.rag.llm import ABSTENTION_TEXT
-from documents.throttling import BurstUserThrottle
+from documents.throttling import BurstUserThrottle, ShortWindowUserThrottle
 
 from .serializers import (
     ChatRequestSerializer,
@@ -57,8 +57,11 @@ class ChatView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [BurstUserThrottle]
+    # An hourly budget, and a per-minute limit on how fast it may be spent
+    # (ShortWindowUserThrottle). ChatStreamView inherits both.
+    throttle_classes = [BurstUserThrottle, ShortWindowUserThrottle]
     throttle_scope = "chat"
+    throttle_short_window_scope = "chat_burst"
 
     def post(self, request):
         serializer = ChatRequestSerializer(data=request.data)

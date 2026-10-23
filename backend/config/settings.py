@@ -155,6 +155,11 @@ REST_FRAMEWORK = {
         "search_burst": os.getenv("THROTTLE_SEARCH_BURST", "20/minute"),
         # The most expensive path in the system.
         "chat": os.getenv("THROTTLE_CHAT", "60/hour"),
+        # How fast that hourly budget may be spent, as for search: a
+        # question reranks its passages too, and a streamed answer holds
+        # one of gunicorn's threads until it ends. 10 a minute is more than
+        # a person reads answers at.
+        "chat_burst": os.getenv("THROTTLE_CHAT_BURST", "10/minute"),
     },
 }
 
