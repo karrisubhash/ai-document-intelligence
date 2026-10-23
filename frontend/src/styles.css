@@ -1021,6 +1021,15 @@ textarea.input {
   border-radius: var(--radius);
 }
 
+/* Documents: below the table, held at the bottom of the window while the
+   table runs past it - so appearing never moves the rows being ticked. */
+.bulk-bar-floating {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  box-shadow: var(--shadow-lg);
+}
+
 .bulk-bar-count {
   font-size: 14px;
   font-weight: 600;
