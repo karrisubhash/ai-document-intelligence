@@ -184,15 +184,16 @@ const COLUMN_GAP = /\S(?: {2,}|\t)\S/;
  */
 export function unwrapLines(text: string): string {
   const out: string[] = [];
-  let previous: string | null = null;
+  let previous = "";
   for (const line of text.split(/\r?\n/)) {
     const next = line.trimStart();
     const head = out.length ? out[out.length - 1].trimEnd() : "";
     const joins =
-      previous !== null &&
-      head !== "" &&
+      // The line before stopped mid-sentence: it is not blank and does not
+      // end with a full stop, colon, semicolon or other sentence end ...
+      /[^.:;!?]$/.test(head) &&
+      // ... and this one carries the sentence on.
       /^[a-z0-9(]/.test(next) &&
-      !".:;!?".includes(head.slice(-1)) &&
       !ITEM_START.test(next) &&
       !COLUMN_GAP.test(previous.trim()) &&
       !COLUMN_GAP.test(next);
