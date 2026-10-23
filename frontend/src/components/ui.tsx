@@ -893,9 +893,14 @@ export function ConfirmDialog({
         </>
       }
     >
-      <div className="stack">
-        {children}
-        {error ? <ErrorState error={error} title="That did not work" /> : null}
+      <div className={`confirm confirm-${tone}`}>
+        <span className="confirm-icon" aria-hidden="true">
+          <Icon name={tone === "danger" ? "alert-triangle" : "info"} size={20} />
+        </span>
+        <div className="stack confirm-body">
+          {children}
+          {error ? <ErrorState error={error} title="That did not work" /> : null}
+        </div>
       </div>
     </Dialog>
   );

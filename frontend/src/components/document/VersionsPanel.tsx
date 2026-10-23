@@ -93,7 +93,7 @@ export default function VersionsPanel({
       </div>
       {problem ? <Alert tone="danger">{problem}</Alert> : null}
       <div className="table-wrap">
-        <table className="table">
+        <table className="table table-stack">
           <thead>
             <tr>
               <th scope="col">Version</th>
@@ -121,15 +121,17 @@ export default function VersionsPanel({
                     ) : null}
                   </span>
                 </td>
-                <td>
+                <td data-label="File">
                   <span className="cell-title">
                     <FileTypeIcon fileName={version.file_name} size="sm" />
                     <span className="cell-title-text">{version.file_name}</span>
                   </span>
                 </td>
-                <td className="num">{formatBytes(version.file_size)}</td>
-                <td>{formatDateTime(version.created_at)}</td>
-                <td>
+                <td className="num" data-label="Size">
+                  {formatBytes(version.file_size)}
+                </td>
+                <td data-label="Uploaded">{formatDateTime(version.created_at)}</td>
+                <td data-label="SHA-256">
                   <code className="checksum" title={version.checksum}>
                     {version.checksum?.slice(0, 12)}…
                   </code>

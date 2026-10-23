@@ -159,7 +159,7 @@ export default function DepartmentsPage() {
         </div>
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table table-stack">
             <thead>
               <tr>
                 <th scope="col">Department</th>
@@ -196,9 +196,13 @@ export default function DepartmentsPage() {
                       </div>
                     </div>
                   </td>
-                  <td className="num">{department.member_count ?? "—"}</td>
-                  <td className="num">{department.document_count ?? "—"}</td>
-                  <td>
+                  <td className="num" data-label="Members">
+                    {department.member_count ?? "—"}
+                  </td>
+                  <td className="num" data-label="Documents">
+                    {department.document_count ?? "—"}
+                  </td>
+                  <td data-label="Status">
                     <Badge tone={department.is_active ? "success" : "muted"} dot>
                       {department.is_active ? "Active" : "Inactive"}
                     </Badge>

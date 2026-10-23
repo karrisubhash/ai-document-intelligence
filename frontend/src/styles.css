@@ -744,6 +744,16 @@ code {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  animation: page-in 0.22s var(--ease) both;
+}
+
+/* A new screen settles in instead of snapping: brief, and only opacity and
+   a few pixels, so it never delays reading. Off under reduced motion. */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 /* A narrow page keeps the left edge every other page has; only its content
@@ -2446,6 +2456,40 @@ a.table-title:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* A confirmation: what it does beside an icon in the action's tone. */
+.confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.confirm-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.confirm-danger .confirm-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--danger-soft) 50%, transparent);
+}
+
+.confirm-primary .confirm-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent-soft) 50%, transparent);
+}
+
+.confirm-body {
+  flex: 1;
+  min-width: 0;
+  padding-top: 2px;
 }
 
 /* --- Menus and toasts ------------------------------------------------------------------- */
@@ -4978,6 +5022,18 @@ mark.evidence {
     width: auto;
   }
 
+  /* Elsewhere, two filters share a row instead of one select per line. */
+  .toolbar > select.input,
+  .toolbar > .inline-field {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .toolbar > .inline-field .input {
+    flex: 1;
+    min-width: 0;
+  }
+
   .toasts {
     left: 12px;
     right: 12px;
@@ -5119,6 +5175,91 @@ mark.evidence {
     content: "·";
     margin-right: 10px;
     color: var(--text-3);
+  }
+}
+
+/* Administration tables on a phone: each row a card of labelled lines -
+   the first cell (who or what the row is) as its heading, then one line per
+   column with the column's name beside the value (data-label), then the
+   row's actions. */
+@media (max-width: 640px) {
+  .table-stack,
+  .table-stack tbody,
+  .table-stack tbody tr {
+    display: block;
+  }
+
+  .table-stack thead {
+    display: none;
+  }
+
+  .table-stack tbody tr {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-stack tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table-stack tbody td,
+  .table-stack tbody td.num {
+    display: block;
+    padding: 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .table-stack tbody td:first-child {
+    padding-bottom: 8px;
+  }
+
+  .table-stack tbody td.stack-head {
+    font-weight: 600;
+  }
+
+  /* A row header (a field's name) heads its card the same way. */
+  .table-stack tbody th {
+    display: block;
+    padding: 0 0 8px;
+    border: 0;
+    text-align: left;
+  }
+
+  .table-stack tbody td[data-label] {
+    position: relative;
+    min-height: 28px;
+    padding: 4px 0 4px 38%;
+  }
+
+  .table-stack tbody td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    top: 5px;
+    left: 0;
+    width: 34%;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-3);
+  }
+
+  .table-stack tbody td[data-label]:empty,
+  .table-stack tbody td.cell-actions:empty {
+    display: none;
+  }
+
+  .table-stack tbody td.cell-actions {
+    width: auto;
+    padding-top: 10px;
+  }
+
+  .table-stack .cell-title {
+    min-width: 0;
+  }
+
+  .table-stack .table-sub-truncate {
+    max-width: none;
   }
 }
 

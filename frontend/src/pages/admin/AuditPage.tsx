@@ -118,7 +118,7 @@ export default function AuditPage() {
         </div>
       ) : (
         <div className="table-wrap">
-          <table className="table table-compact">
+          <table className="table table-compact table-stack">
             <thead>
               <tr>
                 <th scope="col">When</th>
@@ -132,8 +132,8 @@ export default function AuditPage() {
             <tbody>
               {entries.data.results.map((entry) => (
                 <tr key={entry.id}>
-                  <td className="nowrap">{formatDateTime(entry.created_at)}</td>
-                  <td>
+                  <td className="nowrap stack-head">{formatDateTime(entry.created_at)}</td>
+                  <td data-label="Who">
                     {entry.username ? (
                       <span className="cell-person">
                         <Avatar name={entry.username} size="sm" />
@@ -148,8 +148,8 @@ export default function AuditPage() {
                       </span>
                     )}
                   </td>
-                  <td>{AUDIT_ACTION_LABEL[entry.action] ?? entry.action}</td>
-                  <td>
+                  <td data-label="Action">{AUDIT_ACTION_LABEL[entry.action] ?? entry.action}</td>
+                  <td data-label="Result">
                     <Badge
                       tone={entry.result === "ALLOWED" ? "success" : "danger"}
                       icon={entry.result === "ALLOWED" ? "check" : "x"}
@@ -157,7 +157,7 @@ export default function AuditPage() {
                       {entry.result === "ALLOWED" ? "Allowed" : "Denied"}
                     </Badge>
                   </td>
-                  <td>
+                  <td data-label="Document">
                     {entry.document_withheld ? (
                       <span className="muted">Another department&rsquo;s document</span>
                     ) : entry.document ? (
@@ -168,7 +168,9 @@ export default function AuditPage() {
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td className="small muted">{describeMetadata(entry.metadata)}</td>
+                  <td className="small muted" data-label="Detail">
+                    {describeMetadata(entry.metadata)}
+                  </td>
                 </tr>
               ))}
             </tbody>

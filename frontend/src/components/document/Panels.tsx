@@ -240,7 +240,7 @@ export function FieldsPanel({ document }: { document: DocumentDetail }) {
         the exact place it was read from.
       </p>
       <div className="table-wrap">
-        <table className="table">
+        <table className="table table-stack">
           <thead>
             <tr>
               <th scope="col">Field</th>
@@ -258,8 +258,8 @@ export function FieldsPanel({ document }: { document: DocumentDetail }) {
               return (
                 <tr key={field.id}>
                   <th scope="row">{humanize(field.field_name)}</th>
-                  <td>{field.value || <span className="muted">—</span>}</td>
-                  <td>
+                  <td data-label="Value">{field.value || <span className="muted">—</span>}</td>
+                  <td data-label="Status">
                     <Badge tone={FIELD_TONE[field.status]}>{humanize(field.status)}</Badge>
                     {field.status === "CONFLICTED" ? (
                       <span className="table-sub">
@@ -267,8 +267,10 @@ export function FieldsPanel({ document }: { document: DocumentDetail }) {
                       </span>
                     ) : null}
                   </td>
-                  <td className="num">{field.status === "FOUND" ? formatPercent(field.confidence) : "—"}</td>
-                  <td>
+                  <td className="num" data-label="Confidence">
+                    {field.status === "FOUND" ? formatPercent(field.confidence) : "—"}
+                  </td>
+                  <td data-label="Source">
                     {link ? (
                       <Link to={link} className="link">
                         Page {field.page_number}

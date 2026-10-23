@@ -108,7 +108,7 @@ export default function ProcessingPage() {
         </div>
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table table-stack">
             <thead>
               <tr>
                 <th scope="col">Document</th>
@@ -134,13 +134,13 @@ export default function ProcessingPage() {
                       {job.department ? ` · ${job.department}` : ""}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <Badge tone={statusTone(job)} dot>
                       {job.is_stalled ? "Stalled" : humanize(job.status)}
                     </Badge>
                   </td>
-                  <td>{job.current_stage ? STAGE_LABEL[job.current_stage] : "—"}</td>
-                  <td className="small">
+                  <td data-label="Stage">{job.current_stage ? STAGE_LABEL[job.current_stage] : "—"}</td>
+                  <td className="small" data-label="Problem">
                     {job.error_code ? (
                       <>
                         <strong>{humanize(job.error_code)}</strong>
@@ -152,7 +152,9 @@ export default function ProcessingPage() {
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td className="nowrap muted">{formatRelative(job.updated_at)}</td>
+                  <td className="nowrap muted" data-label="Updated">
+                    {formatRelative(job.updated_at)}
+                  </td>
                   <td className="cell-actions">
                     {(job.status === "FAILED" || job.is_stalled) && job.is_current_version ? (
                       <Button

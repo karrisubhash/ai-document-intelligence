@@ -411,7 +411,7 @@ export default function UsersPage() {
         </div>
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table table-stack">
             <thead>
               <tr>
                 <th scope="col">Name</th>
@@ -442,14 +442,14 @@ export default function UsersPage() {
                       </div>
                     </div>
                   </td>
-                  <td>{ROLE_LABEL[user.role] ?? user.role}</td>
-                  <td>{user.department || <span className="muted">—</span>}</td>
-                  <td>
+                  <td data-label="Role">{ROLE_LABEL[user.role] ?? user.role}</td>
+                  <td data-label="Department">{user.department || <span className="muted">—</span>}</td>
+                  <td data-label="Status">
                     <Badge tone={user.is_active ? "success" : "muted"} dot>
                       {user.is_active ? "Active" : "Inactive"}
                     </Badge>
                   </td>
-                  <td className="nowrap muted">
+                  <td className="nowrap muted" data-label="Last sign-in">
                     {user.last_login ? formatRelative(user.last_login) : "Never"}
                   </td>
                   <td className="cell-actions">
