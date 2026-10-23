@@ -76,6 +76,10 @@ describe("CollectionsPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "New collection" }));
     const dialog = screen.getByRole("dialog", { name: "New collection" });
+    // Pressed empty, it says what is missing instead of sending anything.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(within(dialog).getByText("Give the collection a name.")).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
     await userEvent.type(within(dialog).getByLabelText(/^Name/), "Fees");
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(create).toHaveBeenCalledWith({ name: "Fees", description: "" });
@@ -242,13 +246,26 @@ describe("CollectionsPage bulk actions", { timeout: 15000 }, () => {
     const change = vi.spyOn(api, "setCollectionDocuments").mockResolvedValue(RULES);
     renderAt("/collections");
 
+    // At rest each row has only its own Remove; the boxes come with select mode.
+    const mode = await screen.findByRole(
+      "button",
+      { name: "Select documents in Exam rules" },
+      LOADED,
+    );
+    expect(screen.queryByRole("checkbox", { name: /in Exam rules$/ })).not.toBeInTheDocument();
+    await userEvent.click(mode);
     await userEvent.click(
-      await screen.findByRole("checkbox", { name: "Select Attendance policy in Exam rules" }, LOADED),
+      screen.getByRole("checkbox", { name: "Select Attendance policy in Exam rules" }),
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "Select Leave rules in Exam rules" }));
     await userEvent.click(screen.getByRole("button", { name: "Remove selected" }));
 
     expect(change).toHaveBeenCalledWith(7, [3, 5], false);
+    // The mode button kept its place (and focus) and now ends the mode.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Done selecting documents in Exam rules" }),
+    );
+    expect(screen.queryByRole("checkbox", { name: /in Exam rules$/ })).not.toBeInTheDocument();
   });
 
   it("shows no selection to a reader", async () => {

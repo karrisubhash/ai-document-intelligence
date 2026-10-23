@@ -225,6 +225,7 @@ function Feedback({ messageId }: { messageId: number }) {
           key={rating}
           type="button"
           className={`chip chip-sm${rated === rating ? " chip-active" : ""}`}
+          title={label}
           aria-pressed={rated === rating}
           disabled={pending}
           onClick={() => rate(rating)}

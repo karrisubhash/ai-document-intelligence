@@ -13,6 +13,7 @@ import {
   ProcessingPanel,
   TablesPanel,
 } from "../components/document/Panels";
+import { usePageTrail } from "../components/Layout";
 import VersionsPanel from "../components/document/VersionsPanel";
 import { FileTypeIcon, Icon } from "../components/icons";
 import {
@@ -271,6 +272,8 @@ export default function DocumentDetailPage() {
     setParams(nextParams, { replace: true });
   };
 
+  usePageTrail(document ? [{ label: "Documents", to: "/documents" }, { label: document.title }] : null);
+
   if (!Number.isFinite(documentId)) return <ErrorState error={new Error("Invalid document id")} />;
   if (resource.loading && !document) {
     return (
@@ -300,6 +303,7 @@ export default function DocumentDetailPage() {
   }
 
   const version = document.current_version;
+  const askable = document.status === "COMPLETED" && !document.is_archived;
   const page = Number(params.get("page") || "1") || 1;
   const start = params.has("start") ? Number(params.get("start")) : null;
   const end = params.has("end") ? Number(params.get("end")) : null;
@@ -327,15 +331,6 @@ export default function DocumentDetailPage() {
 
   return (
     <div className="page">
-      <nav aria-label="Breadcrumb" className="breadcrumb">
-        <Link to="/documents">
-          <Icon name="files" size={14} />
-          Documents
-        </Link>
-        <Icon name="chevron-right" size={14} />
-        <span aria-current="page">{document.title}</span>
-      </nav>
-
       {resource.error ? (
         <Alert tone="warning" title="This document could not be refreshed">
           What is shown may be out of date.{" "}
@@ -372,10 +367,12 @@ export default function DocumentDetailPage() {
         actions={
           <>
             <Button
-              variant="primary"
+              // Primary only when it can be used: a disabled primary was the
+              // loudest thing on a failed document's page.
+              variant={askable ? "primary" : "secondary"}
               icon="sparkles"
               className="page-action-main"
-              disabled={document.status !== "COMPLETED" || document.is_archived}
+              disabled={!askable}
               title={
                 document.is_archived
                   ? "Archived documents are not searched"
@@ -480,6 +477,7 @@ export default function DocumentDetailPage() {
               {document.can_manage ? (
                 <Button
                   size="sm"
+                  variant="primary"
                   icon="refresh"
                   onClick={runReprocess}
                   loading={reprocess.pending}

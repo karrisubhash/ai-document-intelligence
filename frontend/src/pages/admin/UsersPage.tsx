@@ -393,7 +393,7 @@ export default function UsersPage() {
             setPage(1);
           }}
         >
-          <option value="">Active and inactive</option>
+          <option value="">Any status</option>
           <option value="true">Active</option>
           <option value="false">Inactive</option>
         </select>

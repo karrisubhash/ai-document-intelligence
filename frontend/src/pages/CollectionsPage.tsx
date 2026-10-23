@@ -56,9 +56,15 @@ function NewCollectionDialog({
   );
   const errors = create.error instanceof ApiError ? create.error.fieldErrors() : {};
 
+  // Checked on submit, as every other dialog's form is: the button is
+  // always there to press, and pressing it says what is missing.
+  const [missingName, setMissingName] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      setMissingName(true);
+      return;
+    }
     const result = await create.run();
     if (result.ok) onCreated(result.value);
   };
@@ -81,7 +87,6 @@ function NewCollectionDialog({
             form="collection-form"
             icon="plus"
             loading={create.pending}
-            disabled={!name.trim()}
           >
             Create
           </Button>
@@ -89,7 +94,13 @@ function NewCollectionDialog({
       }
     >
       <form id="collection-form" className="stack" onSubmit={submit} noValidate>
-        <Field label="Name" error={errors.name} required>
+        <Field
+          label="Name"
+          error={
+            errors.name ?? (missingName && !name.trim() ? "Give the collection a name." : null)
+          }
+          required
+        >
           {(props) => (
             <input
               {...props}
@@ -158,6 +169,9 @@ function CollectionCard({
 }) {
   const toast = useToast();
   // Members ticked for "Remove selected" - removal only, never deletion.
+  // Their boxes show only in select mode: at rest, each row's own Remove is
+  // enough, and every card's rows line up whatever its size.
+  const [selectingMembers, setSelectingMembers] = useState(false);
   const [picked, setPicked] = useState<Set<number>>(() => new Set());
   // Candidates for "Add": the reader's documents in this collection's
   // department that are not members yet. The first page is enough for a
@@ -203,6 +217,7 @@ function CollectionCard({
   const pickedNow = collection.documents.filter((doc) => picked.has(doc.id)).map((doc) => doc.id);
   const allPicked =
     collection.documents.length > 0 && pickedNow.length === collection.documents.length;
+  const selectable = collection.can_manage && collection.documents.length > 1;
   const pickMember = (id: number, on: boolean) =>
     setPicked((current) => {
       const next = new Set(current);
@@ -241,38 +256,64 @@ function CollectionCard({
         ) : null
       }
     >
-      {collection.description ? <p className="collection-description">{collection.description}</p> : null}
-      {collection.can_manage && collection.documents.length > 1 ? (
-        <div className="member-select-bar">
-          <SelectBox
-            label={`Select all documents in ${collection.name}`}
-            checked={allPicked}
-            indeterminate={pickedNow.length > 0 && !allPicked}
-            onChange={(on) =>
-              setPicked(on ? new Set(collection.documents.map((doc) => doc.id)) : new Set())
+      {collection.description ? (
+        <p className="collection-description">{collection.description}</p>
+      ) : null}
+      {selectable ? (
+        <div className={`member-select-bar${selectingMembers ? " member-select-bar-on" : ""}`}>
+          {selectingMembers ? (
+            <>
+              <SelectBox
+                label={`Select all documents in ${collection.name}`}
+                checked={allPicked}
+                indeterminate={pickedNow.length > 0 && !allPicked}
+                onChange={(on) =>
+                  setPicked(on ? new Set(collection.documents.map((doc) => doc.id)) : new Set())
+                }
+              />
+              <span className="small muted" aria-live="polite">
+                {pickedNow.length ? `${pickedNow.length} selected` : "Select documents to remove"}
+              </span>
+              {pickedNow.length ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="x"
+                  loading={change.pending}
+                  onClick={() => void update(pickedNow, false)}
+                >
+                  Remove selected
+                </Button>
+              ) : null}
+            </>
+          ) : (
+            <span className="member-list-label">Documents</span>
+          )}
+          {/* One button for both, so focus stays on it as the mode flips. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={selectingMembers ? "check" : "list-checks"}
+            className="member-select-mode"
+            aria-label={
+              selectingMembers
+                ? `Done selecting documents in ${collection.name}`
+                : `Select documents in ${collection.name}`
             }
-          />
-          <span className="small muted" aria-live="polite">
-            {pickedNow.length ? `${pickedNow.length} selected` : "Select documents to remove"}
-          </span>
-          {pickedNow.length ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="x"
-              loading={change.pending}
-              onClick={() => void update(pickedNow, false)}
-            >
-              Remove selected
-            </Button>
-          ) : null}
+            onClick={() => {
+              setSelectingMembers((on) => !on);
+              setPicked(new Set());
+            }}
+          >
+            {selectingMembers ? "Done" : "Select"}
+          </Button>
         </div>
       ) : null}
       {collection.documents.length ? (
         <ul className="row-list collection-docs">
           {collection.documents.map((doc) => (
             <li key={doc.id} className="row-item">
-              {collection.can_manage && collection.documents.length > 1 ? (
+              {selectable && selectingMembers ? (
                 <SelectBox
                   label={`Select ${doc.title} in ${collection.name}`}
                   checked={picked.has(doc.id)}

@@ -134,7 +134,7 @@ export default function DashboardPage() {
           <input
             id="dashboard-question"
             className="ask-box-input"
-            placeholder="e.g. What is the minimum attendance required to sit the end-semester exam?"
+            placeholder="Ask a question about your documents…"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             maxLength={2000}

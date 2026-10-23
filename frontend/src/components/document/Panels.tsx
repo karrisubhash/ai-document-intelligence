@@ -145,7 +145,13 @@ function JobCard({ job, latest }: { job: ProcessingJob; latest: boolean }) {
             <li key={event.id} className={`timeline-item tone-${EVENT_TONE[event.status] ?? "neutral"}`}>
               <div className="timeline-head">
                 <span className="timeline-stage">{STAGE_LABEL[event.stage] ?? event.stage}</span>
-                <Badge tone={EVENT_TONE[event.status] ?? "neutral"}>{humanize(event.status)}</Badge>
+                {/* A stage that succeeded says so with its green dot; only the
+                    exceptions (started, skipped, failed) carry a label. */}
+                {event.status === "SUCCEEDED" ? (
+                  <span className="visually-hidden">{humanize(event.status)}</span>
+                ) : (
+                  <Badge tone={EVENT_TONE[event.status] ?? "neutral"}>{humanize(event.status)}</Badge>
+                )}
                 {typeof event.metadata?.duration_seconds === "number" ? (
                   <span className="muted small">
                     {formatDuration((event.metadata.duration_seconds as number) * 1000)}

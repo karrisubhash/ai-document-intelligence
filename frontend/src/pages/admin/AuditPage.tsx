@@ -69,7 +69,7 @@ export default function AuditPage() {
           value={action}
           onChange={(event) => reset(setAction)(event.target.value)}
         >
-          <option value="">Every action</option>
+          <option value="">Any action</option>
           {Object.entries(AUDIT_ACTION_LABEL).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
@@ -82,7 +82,7 @@ export default function AuditPage() {
           value={result}
           onChange={(event) => reset(setResult)(event.target.value)}
         >
-          <option value="">Allowed and denied</option>
+          <option value="">Any result</option>
           <option value="ALLOWED">Allowed</option>
           <option value="DENIED">Denied</option>
         </select>

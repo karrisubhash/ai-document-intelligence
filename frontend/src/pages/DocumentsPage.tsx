@@ -454,8 +454,15 @@ export default function DocumentsPage() {
                   Select all {total} matching
                 </Button>
               ) : null}
-              <Button variant="ghost" size="sm" icon="x" onClick={clearSelection}>
-                Clear selection
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="x"
+                className="bulk-bar-clear"
+                onClick={clearSelection}
+              >
+                {/* Icon only on a phone; the words stay as the button's name. */}
+                <span className="btn-label-wide">Clear selection</span>
               </Button>
               <Button
                 variant="danger"
@@ -686,64 +693,69 @@ function BulkDeleteDialog({
         </>
       }
     >
-      <div className="stack">
-        <p>
-          {count === 1 ? "The document is" : "Each document is"} removed permanently, with every
-          version, its extracted text, its search index and its files. This cannot be undone.
-        </p>
-        {all ? (
+      <div className="confirm confirm-danger">
+        <span className="confirm-icon" aria-hidden="true">
+          <Icon name="alert-triangle" size={20} />
+        </span>
+        <div className="stack confirm-body">
           <p>
-            That is every document matching the current search and filters that you may delete, on
-            every page - not only the ones shown. Documents added from now on are not included.
+            {count === 1 ? "The document is" : "Each document is"} removed permanently, with every
+            version, its extracted text, its search index and its files. This cannot be undone.
           </p>
-        ) : null}
-        {all && !preview && !previewError ? (
-          <p className="muted" role="status">
-            Counting the matching documents…
-          </p>
-        ) : null}
-        {preview && preview.skipped > 0 ? (
-          <p className="muted">
-            {preview.skipped} matching {plural(preview.skipped, "document")} you may not delete{" "}
-            {preview.skipped === 1 ? "is" : "are"} left in place.
-          </p>
-        ) : null}
-        {preview && preview.count === 0 ? (
-          <p role="status">None of the matching documents are yours to delete.</p>
-        ) : null}
-        {previewError ? (
-          <ErrorState error={previewError} title="Could not count the matching documents" />
-        ) : null}
-        <p className="muted">To take documents out of search without losing them, archive them instead.</p>
-        {all && preview && preview.count > 0 ? (
-          <label className="field">
-            <span className="field-label">Type {CONFIRM_WORD} to confirm</span>
-            <input
-              className="input"
-              value={typed}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={pending}
-              onChange={(event) => setTyped(event.target.value)}
-            />
-          </label>
-        ) : null}
-        {pending && progress > 0 ? (
-          <p role="status">
-            Deleted {progress} of {count}…
-          </p>
-        ) : null}
-        {error ? (
-          <>
-            <ErrorState error={error} title="Deleting stopped" />
-            {progress > 0 ? (
-              <p>
-                {progress} {plural(progress, "document")} {progress === 1 ? "was" : "were"} deleted
-                before it stopped; the list has been refreshed.
-              </p>
-            ) : null}
-          </>
-        ) : null}
+          {all ? (
+            <p>
+              That is every document matching the current search and filters that you may delete, on
+              every page - not only the ones shown. Documents added from now on are not included.
+            </p>
+          ) : null}
+          {all && !preview && !previewError ? (
+            <p className="muted" role="status">
+              Counting the matching documents…
+            </p>
+          ) : null}
+          {preview && preview.skipped > 0 ? (
+            <p className="muted">
+              {preview.skipped} matching {plural(preview.skipped, "document")} you may not delete{" "}
+              {preview.skipped === 1 ? "is" : "are"} left in place.
+            </p>
+          ) : null}
+          {preview && preview.count === 0 ? (
+            <p role="status">None of the matching documents are yours to delete.</p>
+          ) : null}
+          {previewError ? (
+            <ErrorState error={previewError} title="Could not count the matching documents" />
+          ) : null}
+          <p className="muted">To take documents out of search without losing them, archive them instead.</p>
+          {all && preview && preview.count > 0 ? (
+            <label className="field">
+              <span className="field-label">Type {CONFIRM_WORD} to confirm</span>
+              <input
+                className="input"
+                value={typed}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={pending}
+                onChange={(event) => setTyped(event.target.value)}
+              />
+            </label>
+          ) : null}
+          {pending && progress > 0 ? (
+            <p role="status">
+              Deleted {progress} of {count}…
+            </p>
+          ) : null}
+          {error ? (
+            <>
+              <ErrorState error={error} title="Deleting stopped" />
+              {progress > 0 ? (
+                <p>
+                  {progress} {plural(progress, "document")} {progress === 1 ? "was" : "were"} deleted
+                  before it stopped; the list has been refreshed.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </div>
       </div>
     </Dialog>
   );

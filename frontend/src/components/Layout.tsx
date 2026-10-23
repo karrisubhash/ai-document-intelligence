@@ -1,5 +1,15 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import {
+  Fragment,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth, useMe } from "../auth/AuthContext";
 import { displayName } from "../lib/format";
@@ -20,6 +30,30 @@ import {
 } from "./ui";
 
 const COLLAPSED_KEY = "adi-sidebar";
+
+export interface Crumb {
+  label: string;
+  /** Where it leads; the last crumb, the page itself, has none. */
+  to?: string;
+}
+
+const TrailContext = createContext<(trail: Crumb[] | null) => void>(() => undefined);
+
+/**
+ * A page deeper than its navigation entry (a document) names itself in the
+ * top bar - "Documents › Academic Regulations R20" - instead of a second
+ * breadcrumb line of its own. Cleared when the page goes.
+ */
+export function usePageTrail(trail: Crumb[] | null) {
+  const setTrail = useContext(TrailContext);
+  const key = trail ? JSON.stringify(trail) : "";
+  useEffect(() => {
+    setTrail(trail);
+    return () => setTrail(null);
+    // The trail is compared by value (key): a new array each render is the same trail.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, setTrail]);
+}
 
 function readCollapsed(): boolean {
   try {
@@ -80,7 +114,7 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
     >
       <MenuLabel>
         Signed in as <strong>{me.username}</strong>
-        {me.department ? ` · ${me.department}` : ""}
+        {me.department ? <span className="menu-label-line">{me.department}</span> : null}
       </MenuLabel>
       <MenuItem icon="key" onSelect={() => navigate("/account")}>
         Account and password
@@ -113,6 +147,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [navOpen, setNavOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [trail, setTrail] = useState<Crumb[] | null>(null);
   const navToggle = useRef<HTMLButtonElement>(null);
   const resolvedTheme = useResolvedTheme();
   const location = useLocation();
@@ -246,7 +281,24 @@ export default function Layout({ children }: { children: ReactNode }) {
           >
             <Icon name="panel-left" size={18} />
           </button>
-          {section ? (
+          {trail ? (
+            <nav className="topbar-location" aria-label="Breadcrumb">
+              {trail.map((crumb, index) =>
+                crumb.to && index < trail.length - 1 ? (
+                  <Fragment key={index}>
+                    <Link to={crumb.to} className="topbar-group topbar-link">
+                      {crumb.label}
+                    </Link>
+                    <Icon name="chevron-right" size={14} className="topbar-separator" />
+                  </Fragment>
+                ) : (
+                  <span key={index} className="topbar-page" aria-current="page">
+                    {crumb.label}
+                  </span>
+                ),
+              )}
+            </nav>
+          ) : section ? (
             <div className="topbar-location">
               <span className="topbar-group">{section.group}</span>
               <Icon name="chevron-right" size={14} className="topbar-separator" />
@@ -278,7 +330,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           </button>
         </header>
         <main id="main" className="main" tabIndex={-1}>
-          {children}
+          <TrailContext.Provider value={setTrail}>{children}</TrailContext.Provider>
         </main>
       </div>
 

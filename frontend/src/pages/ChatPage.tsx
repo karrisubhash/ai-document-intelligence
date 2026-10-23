@@ -196,7 +196,16 @@ function ConversationList({
             {conversations.data.results.map((conversation) => (
               <li
                 key={conversation.id}
-                className={`conversation${conversation.id === activeId ? " active" : ""}`}
+                // While selecting, the tint follows the ticks, not the open conversation.
+                className={`conversation${
+                  selecting
+                    ? isChosen(conversation.id)
+                      ? " selected"
+                      : ""
+                    : conversation.id === activeId
+                      ? " active"
+                      : ""
+                }`}
               >
                 {selecting ? (
                   <span className="conversation-select">

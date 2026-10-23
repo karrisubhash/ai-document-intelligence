@@ -38,9 +38,11 @@ export function formatRelative(value: string | null | undefined, now = Date.now(
   return relative.format(seconds, "second");
 }
 
+// A number and its unit are joined by a no-break space: a wrapped line
+// never leaves "MB" or "s" on its own.
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return "—";
-  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024) return `${bytes}\u00a0B`;
   const units = ["KB", "MB", "GB"];
   let value = bytes / 1024;
   let unit = 0;
@@ -48,13 +50,13 @@ export function formatBytes(bytes: number | null | undefined): string {
     value /= 1024;
     unit += 1;
   }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+  return `${value.toFixed(value < 10 ? 1 : 0)}\u00a0${units[unit]}`;
 }
 
 export function formatDuration(milliseconds: number | null | undefined): string {
   if (milliseconds === null || milliseconds === undefined) return "—";
-  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
-  return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)} s`;
+  if (milliseconds < 1000) return `${Math.round(milliseconds)}\u00a0ms`;
+  return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}\u00a0s`;
 }
 
 export function formatPercent(fraction: number | null | undefined, digits = 0): string {

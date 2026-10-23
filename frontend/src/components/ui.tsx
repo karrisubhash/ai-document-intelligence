@@ -449,9 +449,11 @@ export function Tabs({
     if (!element || !tab) return;
     const left = tab.offsetLeft - element.offsetLeft;
     const right = left + tab.offsetWidth;
-    if (left < element.scrollLeft) element.scrollLeft = Math.max(0, left - 16);
-    else if (right > element.scrollLeft + element.clientWidth) {
-      element.scrollLeft = right - element.clientWidth + 16;
+    // Clear of the 48px fade at the edge that has more (.tabs[data-more]).
+    const clearance = 56;
+    if (left < element.scrollLeft) element.scrollLeft = Math.max(0, left - clearance);
+    else if (right > element.scrollLeft + element.clientWidth - clearance) {
+      element.scrollLeft = right - element.clientWidth + clearance;
     }
   }, [selected]);
 
