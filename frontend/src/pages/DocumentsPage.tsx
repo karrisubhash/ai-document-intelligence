@@ -343,45 +343,6 @@ export default function DocumentsPage() {
         </div>
       ) : (
         <div className="stack">
-          {/* Mounted whenever rows can be selected - appearing on the first
-              tick, it pushed the table down by a row under the pointer. */}
-          {showSelection ? (
-            <div
-              className={selected.size > 0 || allMatching ? "bulk-bar" : "bulk-bar bulk-bar-idle"}
-              role="region"
-              aria-label="Selected documents"
-            >
-              <span className="bulk-bar-count" aria-live="polite">
-                {allMatching
-                  ? `All matching documents selected (${total})`
-                  : selected.size
-                    ? `${selected.size} selected`
-                    : "Select documents to delete them"}
-              </span>
-              {/* Only when there is more than this page to select. */}
-              {selected.size > 0 && !allMatching && total > rows.length ? (
-                <Button variant="ghost" size="sm" onClick={() => setAllMatching(true)}>
-                  Select all {total} matching
-                </Button>
-              ) : null}
-              {selected.size > 0 || allMatching ? (
-                <>
-                  <Button variant="ghost" size="sm" icon="x" onClick={clearSelection}>
-                    Clear selection
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    icon="trash"
-                    className="bulk-bar-action"
-                    onClick={() => setConfirmingDelete(true)}
-                  >
-                    {allMatching ? "Delete all…" : "Delete selected"}
-                  </Button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
           <div className="table-wrap" aria-busy={documents.loading}>
             <table className="table">
               <caption className="visually-hidden">Documents</caption>
@@ -473,6 +434,45 @@ export default function DocumentsPage() {
               </tbody>
             </table>
           </div>
+          {/* Only while something is ticked, and BELOW the table: shown above
+              it, its appearance on the first tick pushed every row down under
+              the pointer. Sticky, so it stays in view on a long page. */}
+          {selected.size > 0 || allMatching ? (
+            <div className="bulk-bar bulk-bar-floating" role="region" aria-label="Selected documents">
+              <span className="bulk-bar-count">
+                {allMatching ? `All matching documents selected (${total})` : `${selected.size} selected`}
+              </span>
+              {/* Only when there is more than this page to select. */}
+              {!allMatching && total > rows.length ? (
+                <Button variant="ghost" size="sm" onClick={() => setAllMatching(true)}>
+                  Select all {total} matching
+                </Button>
+              ) : null}
+              <Button variant="ghost" size="sm" icon="x" onClick={clearSelection}>
+                Clear selection
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                icon="trash"
+                className="bulk-bar-action"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                {allMatching ? "Delete all…" : "Delete selected"}
+              </Button>
+            </div>
+          ) : null}
+          {/* Mounted before the count changes, so the first tick is announced
+              too (a live region added together with its text usually is not). */}
+          {showSelection ? (
+            <span className="visually-hidden" aria-live="polite">
+              {allMatching
+                ? `All ${total} matching documents selected`
+                : selected.size
+                  ? `${selected.size} ${plural(selected.size, "document")} selected`
+                  : ""}
+            </span>
+          ) : null}
         </div>
       )}
 

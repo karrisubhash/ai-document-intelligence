@@ -99,6 +99,21 @@ describe("DocumentsPage bulk delete", { timeout: 15000 }, () => {
     expect(screen.queryByText("2 selected")).not.toBeInTheDocument();
   });
 
+  it("shows the selection bar only once something is ticked, below the table", async () => {
+    vi.spyOn(api, "documents").mockResolvedValue(page(ROWS));
+    renderAt("/documents");
+
+    const box = await screen.findByRole("checkbox", { name: "Select Fee schedule" }, LOADED);
+    expect(screen.queryByRole("region", { name: "Selected documents" })).not.toBeInTheDocument();
+
+    await userEvent.click(box);
+    const bar = screen.getByRole("region", { name: "Selected documents" });
+    // After the table in the page, so appearing never moves the rows.
+    const table = screen.getByRole("table");
+    expect(table.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("1 document selected")).toHaveClass("visually-hidden");
+  });
+
   it("offers only the documents the caller may delete", async () => {
     vi.spyOn(api, "documents").mockResolvedValue(page(ROWS));
     renderAt("/documents");

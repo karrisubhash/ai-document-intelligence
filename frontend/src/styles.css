@@ -4431,6 +4431,18 @@ mark.evidence {
   color: var(--text-2);
 }
 
+/* Documents: below the table, held at the bottom of the window while the
+   table runs past it - so appearing never moves the rows being ticked.
+   The tint is laid over the surface: in the dark theme it is translucent,
+   and the rows scrolling underneath would show through. */
+.bulk-bar-floating {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
 .table .table-select {
   width: 1%;
   padding-right: 0;
