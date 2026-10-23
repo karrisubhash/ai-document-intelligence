@@ -1916,6 +1916,12 @@ select.input-sm {
   min-width: 200px;
 }
 
+/* Filter selects: part of the toolbar's own row here; one sideways-scrolling
+   row on a phone (below). */
+.toolbar-selects {
+  display: contents;
+}
+
 .filters {
   display: flex;
   flex-direction: column;
@@ -2764,23 +2770,120 @@ a.table-title:hover {
   color: #c7d2fe;
 }
 
+/* The page behind (paper, tilted) and the answer in front (glass), the cited
+   passage highlighted on the page. */
 .login-illustration {
+  position: relative;
+  width: min(100%, 470px);
+  height: 250px;
+  flex: none;
+}
+
+.login-sheet {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: 64%;
+  padding: 16px 18px 20px;
+  border-radius: var(--radius-lg);
+  background: #f8fafc;
+  box-shadow:
+    0 24px 48px -16px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.4);
+  transform: rotate(-3deg);
+  transform-origin: bottom left;
+}
+
+.login-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: #6366f1;
+}
+
+.login-sheet-title {
+  flex: 1;
+  height: 9px;
+  max-width: 46%;
+  border-radius: 5px;
+  background: #c7d2fe;
+}
+
+.login-sheet-page {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.login-sheet-line {
+  display: block;
+  height: 7px;
+  border-radius: 4px;
+  background: #e2e8f0;
+}
+
+.login-sheet-line:nth-of-type(2) {
+  width: 94%;
+}
+
+.login-sheet-line:nth-of-type(3) {
+  width: 86%;
+}
+
+.login-sheet-line:nth-of-type(4) {
+  width: 97%;
+}
+
+.login-sheet-line:nth-of-type(5) {
+  width: 62%;
+}
+
+.login-sheet-line:nth-of-type(6) {
+  width: 90%;
+}
+
+.login-sheet-line:nth-of-type(7) {
+  width: 78%;
+}
+
+.login-sheet-line:nth-of-type(8) {
+  width: 84%;
+}
+
+/* The cited passage, in the same yellow as evidence in the app. */
+.login-sheet-hit {
+  height: 11px;
+  margin: -2px 0;
+  background: #fde047;
+  box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.35);
+}
+
+.login-answer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 420px;
+  width: 66%;
   padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: var(--radius-xl);
-  background: rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(8px);
+  background: rgba(30, 27, 75, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.6);
 }
 
 .login-illustration-question {
   align-self: flex-end;
   width: 62%;
-  height: 30px;
-  border-radius: 14px 14px 4px 14px;
+  height: 26px;
+  border-radius: 13px 13px 4px 13px;
   background: rgba(255, 255, 255, 0.16);
 }
 
@@ -2799,9 +2902,9 @@ a.table-title:hover {
 
 .login-illustration-bar {
   display: block;
-  height: 9px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.22);
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.24);
 }
 
 .login-illustration-bar-short {
@@ -2830,6 +2933,7 @@ a.table-title:hover {
   color: #1e1b4b;
   font-size: 10.5px;
   font-weight: 700;
+  box-shadow: 0 0 0 3px rgba(165, 180, 252, 0.25);
 }
 
 .login-illustration-source {
@@ -2838,18 +2942,24 @@ a.table-title:hover {
   gap: 8px;
   margin-left: 40px;
   padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(253, 224, 71, 0.35);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(253, 224, 71, 0.1);
   font-size: 12px;
-  color: #e0e7ff;
+  font-weight: 550;
+  color: #fef9c3;
 }
 
-.login-illustration-source mark {
-  padding: 0 3px;
-  border-radius: 3px;
-  background: rgba(253, 224, 71, 0.85);
-  color: #1e1b4b;
+.login-illustration-open {
+  margin-left: auto;
+  opacity: 0.8;
+}
+
+/* A short window keeps the pitch and drops the picture. */
+@media (max-height: 780px) {
+  .login-illustration {
+    display: none;
+  }
 }
 
 .login-main {
@@ -3540,6 +3650,11 @@ mark.evidence {
   height: calc(100dvh - var(--topbar));
 }
 
+/* Phones only: the folded conversation list's toggle and "New". */
+.chat-mobile-bar {
+  display: none;
+}
+
 .conversations {
   display: flex;
   flex-direction: column;
@@ -3912,7 +4027,8 @@ mark.evidence {
 
 .source-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  /* auto-fit: one source spans the row instead of a third of it. */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 8px;
   margin: 0;
   padding: 0;
@@ -3964,6 +4080,13 @@ mark.evidence {
   line-height: 1.45;
 }
 
+.source-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .source-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3973,6 +4096,7 @@ mark.evidence {
 }
 
 .source-page {
+  flex: none;
   font-size: 12px;
   color: var(--text-3);
 }
@@ -4251,9 +4375,31 @@ mark.evidence {
 }
 
 .composer-hint {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
   font-size: 12.5px;
   color: var(--text-3);
   text-align: center;
+}
+
+.composer-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-keys .kbd {
+  height: 18px;
+  font-size: 10.5px;
+}
+
+/* A touch keyboard has its own send key. */
+@media (pointer: coarse) {
+  .composer-keys {
+    display: none;
+  }
 }
 
 /* Chat: the answer while it is being written - a caret after the last word. */
@@ -4283,32 +4429,48 @@ mark.evidence {
   align-items: start;
 }
 
-.create-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 14px;
+.collection-card {
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
-.create-form > .field {
-  flex: 1 1 220px;
+.collection-card-selected {
+  border-color: var(--accent-border);
+  box-shadow:
+    0 0 0 1px var(--accent-border),
+    var(--shadow-sm);
 }
 
-.create-form-submit {
-  flex: none;
-  padding-top: 26px;
+.collection-description {
+  color: var(--text-2);
+  font-size: 13.5px;
 }
 
 .collection-docs .row-item {
   padding: 10px 0;
 }
 
+.collection-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-3);
+  font-size: 13.5px;
+}
+
 .collection-add {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding-top: 14px;
+  margin: 2px -20px -18px;
+  padding: 12px 20px;
   border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--surface-2);
 }
 
 .collection-add .input {
@@ -4419,16 +4581,19 @@ mark.evidence {
   margin-left: auto;
 }
 
-/* Nothing ticked yet: the bar offers selection, quietly. */
+/* Nothing ticked yet: the bar offers selection, quietly - a toolbar line,
+   not a panel. It keeps the bar's height, so the first tick moves nothing. */
 .bulk-bar-idle {
-  border-color: var(--border);
-  background: var(--surface-2);
+  border-color: transparent;
+  background: transparent;
   box-shadow: none;
+  padding-left: 4px;
 }
 
 .bulk-bar-idle .bulk-bar-count {
+  font-size: 13.5px;
   font-weight: 500;
-  color: var(--text-2);
+  color: var(--text-3);
 }
 
 /* Documents: below the table, held at the bottom of the window while the
@@ -4654,16 +4819,46 @@ mark.evidence {
 
   .chat {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
     height: calc(100vh - var(--topbar));
     height: calc(100dvh - var(--topbar));
   }
 
+  /* The thread gets the screen; the list folds away behind one button. */
+  .chat-mobile-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .chat-list-toggle .icon:last-child {
+    transition: transform 0.15s var(--ease);
+  }
+
+  .chat-list-open .chat-list-toggle .icon:last-child {
+    transform: rotate(180deg);
+  }
+
   .conversations {
-    max-height: 24vh;
+    display: none;
+    max-height: 55vh;
     padding: 10px 12px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+  }
+
+  .chat-list-open .conversations {
+    display: flex;
+  }
+
+  /* "New" is in the bar above. */
+  .conversations > .btn-block {
+    display: none;
   }
 
   .thread-inner {
@@ -4731,10 +4926,56 @@ mark.evidence {
 
   .page-actions {
     width: 100%;
+    flex-wrap: nowrap;
+  }
+
+  /* A document's actions on one row: the main one takes the width, the
+     rest become icons. */
+  .page-actions .page-action-main {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .page-actions .btn-label-wide {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .page-actions .btn:has(.btn-label-wide) {
+    width: 36px;
+    padding: 0;
+    justify-content: center;
   }
 
   .search-main {
     flex-direction: column;
+  }
+
+  /* Four filters in one row the thumb can swipe, instead of two rows of
+     selects pushing the list off the first screen. Bled to the screen
+     edges, so the last one visibly runs off: there is more. */
+  .toolbar-selects {
+    display: flex;
+    gap: 8px;
+    width: calc(100% + 32px);
+    margin: 0 -16px;
+    padding: 0 16px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .toolbar-selects::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-selects .input {
+    flex: none;
+    width: auto;
   }
 
   .toasts {
@@ -4754,6 +4995,130 @@ mark.evidence {
 
   .composer-scope select.input {
     max-width: 150px;
+  }
+
+  /* Rating an answer: icons on one line. The words stay as the buttons'
+     names (visually hidden, never display: none). */
+  .feedback .chip-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .feedback .chip {
+    width: 34px;
+    justify-content: center;
+    padding: 0;
+  }
+}
+
+/* Documents on a phone: each row becomes a card - the title on top, then
+   its status, type and age on one line beneath it - instead of a table that
+   scrolls sideways with the status cut off. */
+@media (max-width: 720px) {
+  .table-docs,
+  .table-docs thead,
+  .table-docs tbody {
+    display: block;
+  }
+
+  .table-docs thead tr {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  .table-docs thead th {
+    display: none;
+  }
+
+  .table-docs thead th.table-select,
+  .table-docs thead th.col-title {
+    display: block;
+    width: auto;
+    padding: 10px 0;
+    border: 0;
+    background: none;
+  }
+
+  .table-docs tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-docs tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table-docs tbody td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .table-docs tbody td.table-select {
+    align-self: flex-start;
+    width: auto;
+    padding: 10px 2px 0 0;
+  }
+
+  .table-docs tbody td.col-title {
+    flex: 1 1 calc(100% - 32px);
+    min-width: 0;
+  }
+
+  .table-docs .cell-title {
+    min-width: 0;
+    align-items: flex-start;
+  }
+
+  .table-docs .table-title {
+    overflow-wrap: anywhere;
+  }
+
+  /* Status first on the second line, which starts under the file icon:
+     lined up with the title's text, it no longer fit one line at 390px. */
+  .table-docs tbody td.col-status {
+    order: 1;
+  }
+
+  .table-docs tbody td.table-select ~ td.col-status {
+    margin-left: 28px;
+  }
+
+  /* Department and owner: on the document's own page. */
+  .table-docs tbody td.col-secondary:not(.col-updated) {
+    display: none;
+  }
+
+  .table-docs tbody td.col-type,
+  .table-docs tbody td.col-updated {
+    order: 2;
+    font-size: 13px;
+    color: var(--text-3);
+  }
+
+  .table-docs tbody td.col-updated {
+    display: block;
+    order: 3;
+  }
+
+  .table-docs tbody td.col-updated::before {
+    content: "·";
+    margin-right: 10px;
+    color: var(--text-3);
   }
 }
 

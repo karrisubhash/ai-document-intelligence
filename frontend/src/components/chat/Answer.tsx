@@ -230,7 +230,7 @@ function Feedback({ messageId }: { messageId: number }) {
           onClick={() => rate(rating)}
         >
           <Icon name={icon} />
-          {label}
+          <span className="chip-label">{label}</span>
         </button>
       ))}
     </div>
@@ -328,8 +328,10 @@ export function Answer({
                   <button type="button" className="source" onClick={() => onInspect(citation, answer.text)}>
                     <span className="source-marker">{citation.marker}</span>
                     <span className="source-body">
-                      <span className="source-title">{citation.document_title}</span>
-                      <span className="source-page">Page {citation.page_number}</span>
+                      <span className="source-head">
+                        <span className="source-title">{citation.document_title}</span>
+                        <span className="source-page">Page {citation.page_number}</span>
+                      </span>
                       <span className="source-excerpt">
                         {window.text}
                         {window.clippedEnd || citation.text.length > 200 ? "…" : ""}

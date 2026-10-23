@@ -12,9 +12,11 @@ import {
   Button,
   Card,
   ConfirmDialog,
+  Dialog,
   EmptyState,
   ErrorState,
   Field,
+  IconButton,
   PageHeader,
   SelectBox,
   Skeleton,
@@ -30,6 +32,119 @@ import { pluralize } from "../lib/format";
  * narrowed to. A collection never widens access - the server applies each
  * reader's document permissions first and the collection after.
  */
+function NewCollectionDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (collection: Collection) => void;
+}) {
+  const { can, me } = useAuth();
+  // A system administrator says which department a collection is for, as
+  // with an upload; everyone else's is their own.
+  const anyDepartment = can("upload_to_any_department");
+  const departments = useResource(() => api.departments(), [], { enabled: anyDepartment });
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [department, setDepartment] = useState("");
+  const create = useAction(() =>
+    api.createCollection({
+      name: name.trim(),
+      description,
+      ...(anyDepartment && department ? { department } : {}),
+    }),
+  );
+  const errors = create.error instanceof ApiError ? create.error.fieldErrors() : {};
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!name.trim()) return;
+    const result = await create.run();
+    if (result.ok) onCreated(result.value);
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="New collection"
+      description="A collection only ever narrows what Search and Ask look at. It never shows anyone a document they cannot already read."
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            type="submit"
+            form="collection-form"
+            icon="plus"
+            loading={create.pending}
+            disabled={!name.trim()}
+          >
+            Create
+          </Button>
+        </>
+      }
+    >
+      <form id="collection-form" className="stack" onSubmit={submit} noValidate>
+        <Field label="Name" error={errors.name} required>
+          {(props) => (
+            <input
+              {...props}
+              className="input"
+              value={name}
+              maxLength={120}
+              placeholder="e.g. Exam rules"
+              onChange={(event) => setName(event.target.value)}
+            />
+          )}
+        </Field>
+        <Field label="Description" error={errors.description} hint="Optional. Shown on the collection.">
+          {(props) => (
+            <textarea
+              {...props}
+              className="input"
+              rows={2}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          )}
+        </Field>
+        {anyDepartment ? (
+          <Field
+            label="Department"
+            error={errors.department}
+            hint="Who can see it. It holds only that department's documents."
+          >
+            {(props) => (
+              <select
+                {...props}
+                className="input"
+                value={department}
+                onChange={(event) => setDepartment(event.target.value)}
+              >
+                <option value="">
+                  {me?.department ? `Your own (${me.department})` : "Choose a department…"}
+                </option>
+                {(departments.data ?? []).map((item) => (
+                  <option key={item.id} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+        ) : null}
+        {create.error && !Object.keys(errors).length ? (
+          <Alert tone="danger">{errorMessage(create.error)}</Alert>
+        ) : null}
+      </form>
+    </Dialog>
+  );
+}
+
 function CollectionCard({
   collection,
   selected,
@@ -53,6 +168,7 @@ function CollectionCard({
     { enabled: collection.can_manage },
   );
   const [pick, setPick] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const change = useAction((ids: number[], add: boolean) =>
     api.setCollectionDocuments(collection.id, ids, add),
   );
@@ -103,6 +219,7 @@ function CollectionCard({
         ) : null
       }
       icon="folder"
+      className={`collection-card${selected ? " collection-card-selected" : ""}`}
       title={
         <>
           {collection.name}
@@ -112,26 +229,19 @@ function CollectionCard({
       description={collection.department || undefined}
       actions={
         collection.can_manage ? (
-          <Button
-            variant="ghost"
-            size="sm"
+          <IconButton
             icon="trash"
-            loading={remove.pending}
-            onClick={async () => {
-              if (!window.confirm(`Delete “${collection.name}”? Its documents are not deleted.`)) return;
-              const result = await remove.run();
-              if (result.ok) {
-                toast(`Deleted “${collection.name}”`);
-                onChanged();
-              }
+            size="sm"
+            label={`Delete ${collection.name}`}
+            onClick={() => {
+              remove.clearError();
+              setConfirmingDelete(true);
             }}
-          >
-            Delete
-          </Button>
+          />
         ) : null
       }
     >
-      {collection.description ? <p className="muted">{collection.description}</p> : null}
+      {collection.description ? <p className="collection-description">{collection.description}</p> : null}
       {collection.can_manage && collection.documents.length > 1 ? (
         <div className="member-select-bar">
           <SelectBox
@@ -186,8 +296,12 @@ function CollectionCard({
           ))}
         </ul>
       ) : (
-        <p className="muted">No documents yet.</p>
+        <p className="collection-empty">
+          <Icon name="inbox" size={16} />
+          {collection.can_manage ? "No documents yet. Add the first one below." : "No documents yet."}
+        </p>
       )}
+      {change.error ? <Alert tone="danger">{errorMessage(change.error)}</Alert> : null}
       {collection.can_manage ? (
         <div className="collection-add">
           <select
@@ -213,43 +327,39 @@ function CollectionCard({
           </Button>
         </div>
       ) : null}
-      {change.error || remove.error ? (
-        <Alert tone="danger">{errorMessage(change.error ?? remove.error)}</Alert>
-      ) : null}
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title={`Delete “${collection.name}”?`}
+        confirmLabel="Delete collection"
+        pending={remove.pending}
+        error={remove.error}
+        onClose={() => setConfirmingDelete(false)}
+        onConfirm={async () => {
+          const result = await remove.run();
+          if (result.ok) {
+            setConfirmingDelete(false);
+            toast(`Deleted “${collection.name}”.`, "success");
+            onChanged();
+          }
+        }}
+      >
+        <p>
+          The collection is removed. Its {pluralize(collection.document_count, "document")}{" "}
+          {collection.document_count === 1 ? "is" : "are"} not deleted and stay in Documents, Search
+          and Ask.
+        </p>
+      </ConfirmDialog>
     </Card>
   );
 }
 
 export default function CollectionsPage() {
   useDocumentTitle("Collections");
-  const { can, me } = useAuth();
-  // A system administrator says which department a collection is for, as
-  // with an upload; everyone else's is their own.
-  const anyDepartment = can("upload_to_any_department");
-  const departments = useResource(() => api.departments(), [], { enabled: anyDepartment });
+  const { can } = useAuth();
   const collections = useResource(() => api.collections(), []);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [department, setDepartment] = useState("");
-  const create = useAction(() =>
-    api.createCollection({
-      name: name.trim(),
-      description,
-      ...(anyDepartment && department ? { department } : {}),
-    }),
-  );
-  const errors = create.error instanceof ApiError ? create.error.fieldErrors() : {};
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const result = await create.run();
-    if (result.ok) {
-      setName("");
-      setDescription("");
-      setDepartment("");
-      collections.reload();
-    }
-  };
+  const [creating, setCreating] = useState(false);
+  const newButton = useRef<HTMLButtonElement>(null);
 
   const list = collections.data?.results ?? [];
 
@@ -312,92 +422,40 @@ export default function CollectionsPage() {
       <PageHeader
         title="Collections"
         description="Named sets of documents. Choose one in Search or Ask to work within it."
+        actions={
+          can("create_collections") ? (
+            <Button ref={newButton} variant="primary" icon="folder-plus" onClick={() => setCreating(true)}>
+              New collection
+            </Button>
+          ) : null
+        }
       />
-
-      {can("create_collections") ? (
-        <Card
-          title="New collection"
-          icon="folder-plus"
-          description="A collection only ever narrows what Search and Ask look at - it never shows anyone a document they cannot already read."
-        >
-          <form className="stack" onSubmit={submit} noValidate>
-            <div className="create-form">
-              <Field label="Name" error={errors.name} required>
-                {(props) => (
-                  <input
-                    {...props}
-                    className="input"
-                    value={name}
-                    maxLength={120}
-                    onChange={(event) => setName(event.target.value)}
-                  />
-                )}
-              </Field>
-              <Field label="Description" error={errors.description}>
-                {(props) => (
-                  <input
-                    {...props}
-                    className="input"
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                  />
-                )}
-              </Field>
-              {anyDepartment ? (
-                <Field
-                  label="Department"
-                  error={errors.department}
-                  hint="Who can see it. It holds only that department's documents."
-                >
-                  {(props) => (
-                    <select
-                      {...props}
-                      className="input"
-                      value={department}
-                      onChange={(event) => setDepartment(event.target.value)}
-                    >
-                      <option value="">
-                        {me?.department ? `Your own (${me.department})` : "Choose a department…"}
-                      </option>
-                      {(departments.data ?? []).map((item) => (
-                        <option key={item.id} value={item.name}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </Field>
-              ) : null}
-              <div className="create-form-submit">
-                <Button
-                  type="submit"
-                  variant="primary"
-                  icon="plus"
-                  loading={create.pending}
-                  disabled={!name.trim()}
-                >
-                  Create
-                </Button>
-              </div>
-            </div>
-            {create.error && !Object.keys(errors).length ? (
-              <Alert tone="danger">{errorMessage(create.error)}</Alert>
-            ) : null}
-          </form>
-        </Card>
-      ) : null}
 
       {collections.error ? <ErrorState error={collections.error} title="Could not load collections" /> : null}
       {collections.loading && !collections.data ? (
-        <div className="card card-body">
-          <Skeleton lines={4} />
+        <div className="collections-grid">
+          {[0, 1].map((index) => (
+            <div key={index} className="card card-body">
+              <Skeleton lines={4} />
+            </div>
+          ))}
         </div>
       ) : null}
       {collections.data && !list.length ? (
         <div className="card">
-          <EmptyState title="No collections yet" icon="folder">
+          <EmptyState
+            title="No collections yet"
+            icon="folder"
+            action={
+              can("create_collections") ? (
+                <Button variant="primary" icon="folder-plus" onClick={() => setCreating(true)}>
+                  New collection
+                </Button>
+              ) : null
+            }
+          >
             {can("create_collections")
-              ? "Create one above, then add documents to it."
+              ? "Group the documents that belong together, such as every exam rule, so Search and Ask can work within them."
               : "A faculty member or department administrator can create one."}
           </EmptyState>
         </div>
@@ -466,6 +524,21 @@ export default function CollectionsPage() {
             />
           ))}
         </div>
+      ) : null}
+
+      {creating ? (
+        <NewCollectionDialog
+          onClose={() => {
+            setCreating(false);
+            newButton.current?.focus();
+          }}
+          onCreated={(collection) => {
+            setCreating(false);
+            newButton.current?.focus();
+            toast(`Created “${collection.name}”. Add documents to it below.`, "success");
+            collections.reload();
+          }}
+        />
       ) : null}
 
       <ConfirmDialog

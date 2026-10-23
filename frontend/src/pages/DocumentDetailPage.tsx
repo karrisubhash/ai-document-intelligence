@@ -38,6 +38,7 @@ import {
   useToast,
   type TabItem,
 } from "../components/ui";
+import { formatLabel } from "../lib/files";
 import { formatBytes, formatDateTime, formatPercent } from "../lib/format";
 import { IN_FLIGHT, TYPE_LABEL, humanize } from "../lib/labels";
 
@@ -85,7 +86,12 @@ function Overview({ document }: { document: DocumentDetail }) {
                 ["File", version.file_name],
                 ["Version", `v${version.version_number}`],
                 ["Size", formatBytes(version.file_size)],
-                ["Format", version.mime_type || "—"],
+                [
+                  "Format",
+                  <span key="f" title={version.mime_type || undefined}>
+                    {formatLabel(version.mime_type)}
+                  </span>,
+                ],
                 ["Uploaded", formatDateTime(version.created_at)],
               ]}
             />
@@ -368,6 +374,7 @@ export default function DocumentDetailPage() {
             <Button
               variant="primary"
               icon="sparkles"
+              className="page-action-main"
               disabled={document.status !== "COMPLETED" || document.is_archived}
               title={
                 document.is_archived
@@ -397,7 +404,8 @@ export default function DocumentDetailPage() {
                   : undefined
               }
             >
-              Download
+              {/* Icon only on a phone; the word stays as the button's name. */}
+              <span className="btn-label-wide">Download</span>
             </Button>
             {document.can_manage ? (
               <Menu

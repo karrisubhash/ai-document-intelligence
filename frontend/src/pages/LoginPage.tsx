@@ -23,27 +23,46 @@ const FEATURES: [IconName, string, string][] = [
   ],
 ];
 
-/** A cited answer, drawn without words: what the product does, not a claim about any policy. */
+/**
+ * A cited answer and the page it came from, drawn without words: what the
+ * product does, not a claim about any policy. The passage the answer cites
+ * is highlighted on the page behind it.
+ */
 function Illustration() {
   return (
     <div className="login-illustration" aria-hidden="true">
-      <span className="login-illustration-question" />
-      <div className="login-illustration-answer">
-        <BrandMark size="sm" />
-        <div className="login-illustration-lines">
-          <span className="login-illustration-bar" />
-          <span className="login-illustration-row">
-            <span className="login-illustration-bar" />
-            <span className="login-illustration-cite">1</span>
-          </span>
-          <span className="login-illustration-bar login-illustration-bar-short" />
+      <div className="login-sheet">
+        <div className="login-sheet-head">
+          <Icon name="file-text" size={13} />
+          <span className="login-sheet-title" />
+          <span className="login-sheet-page">p. 12</span>
         </div>
+        <span className="login-sheet-line" />
+        <span className="login-sheet-line" />
+        <span className="login-sheet-line login-sheet-hit" />
+        <span className="login-sheet-line login-sheet-hit" />
+        <span className="login-sheet-line" />
+        <span className="login-sheet-line" />
+        <span className="login-sheet-line" />
       </div>
-      <div className="login-illustration-source">
-        <Icon name="file-text" size={14} />
-        <span>
-          Source 1 · page 12 · <mark>quoted passage</mark>
-        </span>
+      <div className="login-answer">
+        <span className="login-illustration-question" />
+        <div className="login-illustration-answer">
+          <BrandMark size="sm" />
+          <div className="login-illustration-lines">
+            <span className="login-illustration-bar" />
+            <span className="login-illustration-row">
+              <span className="login-illustration-bar" />
+              <span className="login-illustration-cite">1</span>
+            </span>
+            <span className="login-illustration-bar login-illustration-bar-short" />
+          </div>
+        </div>
+        <div className="login-illustration-source">
+          <Icon name="file-text" size={14} />
+          <span>Source 1 · page 12</span>
+          <Icon name="arrow-up-right" size={13} className="login-illustration-open" />
+        </div>
       </div>
     </div>
   );

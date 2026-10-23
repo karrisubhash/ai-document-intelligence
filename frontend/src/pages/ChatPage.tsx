@@ -20,6 +20,7 @@ import {
   Dialog,
   ErrorState,
   IconButton,
+  Kbd,
   SelectBox,
   Skeleton,
   errorMessage,
@@ -49,12 +50,14 @@ interface Turn {
 }
 
 function ConversationList({
+  id,
   activeId,
   conversations,
   onNew,
   onChanged,
   onMore,
 }: {
+  id: string;
   activeId: number | null;
   conversations: Resource<Paginated<ConversationSummary>>;
   onNew: () => void;
@@ -134,7 +137,7 @@ function ConversationList({
   };
 
   return (
-    <aside className="conversations" aria-label="Conversations">
+    <aside id={id} className="conversations" aria-label="Conversations">
       <Button variant="primary" icon="square-pen" className="btn-block" onClick={onNew}>
         New question
       </Button>
@@ -384,6 +387,10 @@ export default function ChatPage() {
   );
   const thread = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  // Phones: whether the folded conversation list is showing. Opening a
+  // conversation folds it again.
+  const [listOpen, setListOpen] = useState(false);
+  useEffect(() => setListOpen(false), [conversationId]);
   // Which conversation the turns on screen belong to. A conversation this
   // page has just created already shows its turns with their live response
   // data, so it is not rebuilt from history; any OTHER conversation is.
@@ -558,13 +565,46 @@ export default function ChatPage() {
 
   // Showing a conversation whose turns have not been loaded yet.
   const opening = conversationId !== null && turnsFor !== conversationId;
+  const conversationCount = conversations.data?.count ?? 0;
 
   return (
-    <div className="chat">
+    <div className={`chat${listOpen ? " chat-list-open" : ""}`}>
+      {/* Phones only (CSS): the list folds away above the thread, which
+          then has the whole screen. */}
+      <div className="chat-mobile-bar">
+        <Button
+          variant="ghost"
+          size="sm"
+          icon="history"
+          iconEnd="chevron-down"
+          className="chat-list-toggle"
+          aria-expanded={listOpen}
+          aria-controls="conversation-panel"
+          onClick={() => setListOpen((open) => !open)}
+        >
+          Conversations
+          {conversationCount ? <span className="tab-count">{conversationCount}</span> : null}
+        </Button>
+        <Button
+          size="sm"
+          icon="square-pen"
+          onClick={() => {
+            setListOpen(false);
+            startNew();
+          }}
+        >
+          New
+        </Button>
+      </div>
+
       <ConversationList
+        id="conversation-panel"
         activeId={conversationId}
         conversations={conversations}
-        onNew={startNew}
+        onNew={() => {
+          setListOpen(false);
+          startNew();
+        }}
         onChanged={conversations.reload}
         onMore={() => setConversationPages((pages) => pages + 1)}
       />
@@ -672,7 +712,10 @@ export default function ChatPage() {
                 className="composer-input"
                 rows={1}
                 maxLength={2000}
-                placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)"
+                aria-describedby="composer-keys"
+                placeholder={
+                  turns.length ? "Ask a follow-up question…" : "Ask a question about your documents…"
+                }
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={onKeyDown}
@@ -727,11 +770,16 @@ export default function ChatPage() {
                 </Button>
               </div>
             </div>
-            {turns.length ? (
-              <p className="composer-hint">
-                Follow-up questions like “what about MECH?” use this conversation for context.
-              </p>
-            ) : null}
+            <p className="composer-hint">
+              {turns.length ? (
+                <>Follow-up questions like “what about MECH?” use this conversation for context.</>
+              ) : (
+                <>Answers cite the passages they come from.</>
+              )}
+              <span className="composer-keys" id="composer-keys">
+                <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> for a new line
+              </span>
+            </p>
           </div>
         </form>
       </section>

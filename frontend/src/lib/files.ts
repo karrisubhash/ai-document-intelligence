@@ -45,3 +45,16 @@ export function isPreviewable(mime: string, name: string): "pdf" | "image" | "te
   if (mime.startsWith("text/") || ext === ".txt") return "text";
   return null;
 }
+
+const FORMAT_LABEL: Record<string, string> = {
+  "application/pdf": "PDF document",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word document",
+  "text/plain": "Plain text",
+  "image/png": "PNG image",
+  "image/jpeg": "JPEG image",
+};
+
+/** "application/pdf" -> "PDF document"; an unknown type is shown as it is. */
+export function formatLabel(mime: string): string {
+  return FORMAT_LABEL[mime] ?? (mime || "—");
+}

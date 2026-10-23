@@ -74,9 +74,27 @@ describe("CollectionsPage", () => {
     expect(await screen.findByText("Exam rules")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Attendance policy" })).toHaveAttribute("href", "/documents/3");
 
-    await userEvent.type(screen.getByLabelText(/^Name/), "Fees");
-    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await userEvent.click(screen.getByRole("button", { name: "New collection" }));
+    const dialog = screen.getByRole("dialog", { name: "New collection" });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), "Fees");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(create).toHaveBeenCalledWith({ name: "Fees", description: "" });
+    expect(await screen.findByText("Created “Fees”. Add documents to it below.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "New collection" })).not.toBeInTheDocument();
+  });
+
+  it("deletes one collection after asking, in the page's own dialog", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    const remove = vi.spyOn(api, "deleteCollection").mockResolvedValue(undefined);
+    renderAt("/collections");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Exam rules" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete “Exam rules”?" });
+    expect(remove).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete collection" }));
+
+    expect(remove).toHaveBeenCalledWith(7);
+    expect(await screen.findByText("Deleted “Exam rules”.")).toBeInTheDocument();
   });
 
   it("hides creation and management from a reader", async () => {
@@ -89,8 +107,9 @@ describe("CollectionsPage", () => {
     renderAt("/collections");
 
     expect(await screen.findByText("Exam rules")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New collection" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
   });
 
   it("lets a system administrator say which department a collection is for", async () => {
@@ -106,12 +125,14 @@ describe("CollectionsPage", () => {
       .mockResolvedValue({ ...RULES, id: 9, name: "Workshops", department: "Mechanical" });
     renderAt("/collections");
 
-    await userEvent.type(await screen.findByLabelText(/^Name/), "Workshops");
+    await userEvent.click(await screen.findByRole("button", { name: "New collection" }));
+    const dialog = screen.getByRole("dialog", { name: "New collection" });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), "Workshops");
     await userEvent.selectOptions(
-      screen.getByLabelText(/^Department/),
-      await screen.findByRole("option", { name: "Mechanical" }),
+      within(dialog).getByLabelText(/^Department/),
+      await within(dialog).findByRole("option", { name: "Mechanical" }),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(create).toHaveBeenCalledWith({
       name: "Workshops",
       description: "",

@@ -214,57 +214,61 @@ export default function DocumentsPage() {
               onChange={(event) => setSearchInput(event.target.value)}
             />
           </div>
-          <select
-            className="input"
-            aria-label="Status"
-            value={status}
-            onChange={(event) => update({ status: event.target.value })}
-          >
-            <option value="">Any status</option>
-            {DOCUMENT_STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {STATUS_LABEL[value]}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input"
-            aria-label="Type"
-            value={documentType}
-            onChange={(event) => update({ type: event.target.value })}
-          >
-            <option value="">Any type</option>
-            {DOCUMENT_TYPES.map((value) => (
-              <option key={value} value={value}>
-                {TYPE_LABEL[value]}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input"
-            aria-label="Department"
-            value={department}
-            onChange={(event) => update({ department: event.target.value })}
-          >
-            <option value="">Any department</option>
-            {(departments.data ?? []).map((item) => (
-              <option key={item.id} value={item.name}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input"
-            aria-label="Sort by"
-            value={ordering}
-            onChange={(event) => update({ sort: event.target.value })}
-          >
-            {SORTS.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          {/* One row that scrolls sideways on a phone; on wider screens the
+              selects sit in the toolbar itself (display: contents). */}
+          <div className="toolbar-selects">
+            <select
+              className="input"
+              aria-label="Status"
+              value={status}
+              onChange={(event) => update({ status: event.target.value })}
+            >
+              <option value="">Any status</option>
+              {DOCUMENT_STATUSES.map((value) => (
+                <option key={value} value={value}>
+                  {STATUS_LABEL[value]}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input"
+              aria-label="Type"
+              value={documentType}
+              onChange={(event) => update({ type: event.target.value })}
+            >
+              <option value="">Any type</option>
+              {DOCUMENT_TYPES.map((value) => (
+                <option key={value} value={value}>
+                  {TYPE_LABEL[value]}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input"
+              aria-label="Department"
+              value={department}
+              onChange={(event) => update({ department: event.target.value })}
+            >
+              <option value="">Any department</option>
+              {(departments.data ?? []).map((item) => (
+                <option key={item.id} value={item.name}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input"
+              aria-label="Sort by"
+              value={ordering}
+              onChange={(event) => update({ sort: event.target.value })}
+            >
+              {SORTS.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="toolbar">
           <div className="segmented" role="group" aria-label="Archive">
@@ -344,7 +348,7 @@ export default function DocumentsPage() {
       ) : (
         <div className="stack">
           <div className="table-wrap" aria-busy={documents.loading}>
-            <table className="table">
+            <table className="table table-docs">
               <caption className="visually-hidden">Documents</caption>
               <thead>
                 <tr>
@@ -360,7 +364,9 @@ export default function DocumentsPage() {
                       />
                     </th>
                   ) : null}
-                  <th scope="col">Title</th>
+                  <th scope="col" className="col-title">
+                    Title
+                  </th>
                   <th scope="col">Type</th>
                   <th scope="col" className="col-secondary">
                     Department
@@ -391,7 +397,7 @@ export default function DocumentsPage() {
                         />
                       </td>
                     ) : null}
-                    <td>
+                    <td className="col-title">
                       <div className="cell-title">
                         <FileTypeIcon fileName={row.current_version?.file_name} />
                         <div className="cell-title-text">
@@ -406,7 +412,7 @@ export default function DocumentsPage() {
                         </div>
                       </div>
                     </td>
-                    <td>{TYPE_LABEL[row.document_type]}</td>
+                    <td className="col-type">{TYPE_LABEL[row.document_type]}</td>
                     <td className="col-secondary">
                       {row.department || <span className="muted">—</span>}
                     </td>
@@ -420,13 +426,13 @@ export default function DocumentsPage() {
                         <span className="muted">—</span>
                       )}
                     </td>
-                    <td>
+                    <td className="col-status">
                       <div className="badge-row">
                         <StatusBadge status={row.status} />
                         {row.is_archived ? <Badge tone="muted">Archived</Badge> : null}
                       </div>
                     </td>
-                    <td className="nowrap muted col-secondary" title={row.updated_at}>
+                    <td className="nowrap muted col-secondary col-updated" title={row.updated_at}>
                       {formatRelative(row.updated_at)}
                     </td>
                   </tr>
