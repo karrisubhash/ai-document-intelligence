@@ -118,6 +118,19 @@ describe("SearchPage", () => {
     expect(results).not.toHaveTextContent("Scanned fragment");
   });
 
+  it("shows a passage as sentences, keeping its items on their own lines", async () => {
+    const text =
+      "Every student shall maintain a\nminimum of 75 percent attendance in\n(a) theory and\n(b) laboratory";
+    vi.spyOn(api, "search").mockResolvedValue(response([hit(3, "Academic Regulations", text)], 0));
+    renderSearch();
+    await searchFor("attendance");
+
+    await screen.findByRole("link", { name: "Academic Regulations" });
+    expect(document.querySelector(".snippet")?.textContent).toBe(
+      "Every student shall maintain a minimum of 75 percent attendance in\n(a) theory and\n(b) laboratory",
+    );
+  });
+
   it("moves focus to the weaker matches when the button asking for them goes away", async () => {
     vi.spyOn(api, "search")
       .mockResolvedValueOnce(response([ANSWER], 1))

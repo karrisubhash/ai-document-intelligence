@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
@@ -68,17 +68,22 @@ function NewCollectionDialog({
     const result = await create.run();
     if (result.ok) onCreated(result.value);
   };
+  // Not closable while Create runs: closing would look like cancelling, and
+  // the collection would be created regardless (as ConfirmDialog does).
+  const close = () => {
+    if (!create.pending) onClose();
+  };
 
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={close}
       title="New collection"
       description="A collection only ever narrows what Search and Ask look at. It never shows anyone a document they cannot already read."
       size="sm"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={close} disabled={create.pending}>
             Cancel
           </Button>
           <Button
@@ -112,7 +117,11 @@ function NewCollectionDialog({
             />
           )}
         </Field>
-        <Field label="Description" error={errors.description} hint="Optional. Shown on the collection.">
+        <Field
+          label="Description"
+          error={errors.description}
+          hint="Optional. Shown on the collection."
+        >
           {(props) => (
             <textarea
               {...props}
@@ -161,11 +170,14 @@ function CollectionCard({
   selected,
   onSelect,
   onChanged,
+  onDeleted,
 }: {
   collection: Collection;
   selected: boolean;
   onSelect: (on: boolean) => void;
   onChanged: () => void;
+  /** After this card's own delete: the page reloads and puts focus somewhere that stays. */
+  onDeleted: () => void;
 }) {
   const toast = useToast();
   // Members ticked for "Remove selected" - removal only, never deletion.
@@ -183,6 +195,8 @@ function CollectionCard({
   );
   const [pick, setPick] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const addSelect = useRef<HTMLSelectElement>(null);
+  const modeButton = useRef<HTMLButtonElement>(null);
   const change = useAction((ids: number[], add: boolean) =>
     api.setCollectionDocuments(collection.id, ids, add),
   );
@@ -210,6 +224,15 @@ function CollectionCard({
         setPicked((current) => new Set([...current].filter((id) => !gone.has(id))));
       }
       onChanged();
+      // The control that was used goes away (a removed row's Remove, an
+      // emptied "Remove selected", the Add button disabled again), and focus
+      // with it. It moves to what stays: select mode's button while two or
+      // more documents remain to select from, otherwise the Add picker.
+      const remaining = collection.documents.length + (add ? 1 : -Math.min(done, ids.length));
+      window.setTimeout(() => {
+        const keepSelecting = !add && selectingMembers && remaining > 1;
+        (keepSelecting ? modeButton.current : addSelect.current)?.focus();
+      }, 0);
     }
   };
   // Only picks still in the collection count: membership can change
@@ -218,6 +241,14 @@ function CollectionCard({
   const allPicked =
     collection.documents.length > 0 && pickedNow.length === collection.documents.length;
   const selectable = collection.can_manage && collection.documents.length > 1;
+  // Select mode ends when there is no longer anything to select from: it
+  // must not come back, unasked, when documents are added again later.
+  useEffect(() => {
+    if (!selectable) {
+      setSelectingMembers(false);
+      setPicked(new Set());
+    }
+  }, [selectable]);
   const pickMember = (id: number, on: boolean) =>
     setPicked((current) => {
       const next = new Set(current);
@@ -291,6 +322,7 @@ function CollectionCard({
           )}
           {/* One button for both, so focus stays on it as the mode flips. */}
           <Button
+            ref={modeButton}
             variant="ghost"
             size="sm"
             icon={selectingMembers ? "check" : "list-checks"}
@@ -339,13 +371,16 @@ function CollectionCard({
       ) : (
         <p className="collection-empty">
           <Icon name="inbox" size={16} />
-          {collection.can_manage ? "No documents yet. Add the first one below." : "No documents yet."}
+          {collection.can_manage
+            ? "No documents yet. Add the first one below."
+            : "No documents yet."}
         </p>
       )}
       {change.error ? <Alert tone="danger">{errorMessage(change.error)}</Alert> : null}
       {collection.can_manage ? (
         <div className="collection-add">
           <select
+            ref={addSelect}
             className="input"
             aria-label={`Add a document to ${collection.name}`}
             value={pick}
@@ -381,14 +416,17 @@ function CollectionCard({
           if (result.ok) {
             setConfirmingDelete(false);
             toast(`Deleted “${collection.name}”.`, "success");
-            onChanged();
+            onDeleted();
           }
         }}
       >
         <p>
-          The collection is removed. Its {pluralize(collection.document_count, "document")}{" "}
-          {collection.document_count === 1 ? "is" : "are"} not deleted and stay in Documents, Search
-          and Ask.
+          The collection is removed.{" "}
+          {collection.document_count === 0
+            ? "It holds no documents."
+            : collection.document_count === 1
+              ? "Its document is not deleted and stays in Documents, Search and Ask."
+              : `Its ${collection.document_count.toLocaleString()} documents are not deleted and stay in Documents, Search and Ask.`}
         </p>
       </ConfirmDialog>
     </Card>
@@ -401,6 +439,17 @@ export default function CollectionsPage() {
   const collections = useResource(() => api.collections(), []);
   const [creating, setCreating] = useState(false);
   const newButton = useRef<HTMLButtonElement>(null);
+  // Where focus goes back to when the dialog closes: the button that opened
+  // it (the header's, or the empty state's).
+  const opener = useRef<HTMLElement | null>(null);
+  const openCreate = () => {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setCreating(true);
+  };
+  // Deferred: until the dialog has gone, the page behind the modal is inert
+  // and a focus() call there is ignored.
+  const focusLater = (target: () => HTMLElement | null | undefined) =>
+    window.setTimeout(() => (target() ?? document.getElementById("main"))?.focus(), 0);
 
   const list = collections.data?.results ?? [];
 
@@ -465,7 +514,7 @@ export default function CollectionsPage() {
         description="Named sets of documents. Choose one in Search or Ask to work within it."
         actions={
           can("create_collections") ? (
-            <Button ref={newButton} variant="primary" icon="folder-plus" onClick={() => setCreating(true)}>
+            <Button ref={newButton} variant="primary" icon="folder-plus" onClick={openCreate}>
               New collection
             </Button>
           ) : null
@@ -489,7 +538,7 @@ export default function CollectionsPage() {
             icon="folder"
             action={
               can("create_collections") ? (
-                <Button variant="primary" icon="folder-plus" onClick={() => setCreating(true)}>
+                <Button variant="primary" icon="folder-plus" onClick={openCreate}>
                   New collection
                 </Button>
               ) : null
@@ -562,6 +611,12 @@ export default function CollectionsPage() {
               selected={selected.has(collection.id)}
               onSelect={(on) => select(collection.id, on)}
               onChanged={collections.reload}
+              onDeleted={() => {
+                collections.reload();
+                // Its card - and the trash button the dialog would return
+                // focus to - is about to go.
+                focusLater(() => newButton.current);
+              }}
             />
           ))}
         </div>
@@ -571,11 +626,12 @@ export default function CollectionsPage() {
         <NewCollectionDialog
           onClose={() => {
             setCreating(false);
-            newButton.current?.focus();
+            focusLater(() => (opener.current?.isConnected ? opener.current : newButton.current));
           }}
           onCreated={(collection) => {
             setCreating(false);
-            newButton.current?.focus();
+            // Not the empty state's button: the new collection replaces it.
+            focusLater(() => newButton.current);
             toast(`Created “${collection.name}”. Add documents to it below.`, "success");
             collections.reload();
           }}

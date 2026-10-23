@@ -1,4 +1,5 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -109,5 +110,32 @@ describe("DocumentDetailPage", () => {
 
     expect(detail).toHaveBeenCalledTimes(2);
     expect(await screen.findByText("Ready", { selector: ".page-header .badge, .page-header .badge *" })).toBeInTheDocument();
+  });
+
+  it("names itself in the top bar, and the name goes when the page does", async () => {
+    vi.spyOn(api, "document").mockResolvedValue(document("COMPLETED"));
+    vi.spyOn(api, "processing").mockResolvedValue([job("COMPLETED")]);
+    vi.spyOn(api, "documents").mockResolvedValue({ count: 0, next: null, previous: null, results: [] });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(
+      <MemoryRouter initialEntries={["/documents/7"]}>
+        <AuthProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    const trail = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(within(trail).getByText("Hostel circular")).toHaveAttribute("aria-current", "page");
+    const parent = within(trail).getByRole("link", { name: "Documents" });
+    expect(parent).toHaveAttribute("href", "/documents");
+
+    await user.click(parent);
+    expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).not.toBeInTheDocument(),
+    );
   });
 });

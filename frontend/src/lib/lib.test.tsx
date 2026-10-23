@@ -221,15 +221,28 @@ describe("unwrapLines", () => {
       "in each course, counted separately for theory",
     );
     expect(unwrapLines("a minimum of\n75 percent attendance")).toBe("a minimum of 75 percent attendance");
+    expect(unwrapLines("as stated\n(see clause 4) in the rules")).toBe(
+      "as stated (see clause 4) in the rules",
+    );
+    // Windows line ends; a word hyphenated across the break keeps its hyphen, not a space.
+    expect(unwrapLines("counted\r\n  separately")).toBe("counted separately");
+    expect(unwrapLines("the end-\nsemester examination")).toBe("the end-semester examination");
   });
 
   it("keeps the breaks that mean something", () => {
-    // A sentence that ended, a blank line, a heading or a table row.
-    expect(unwrapLines("components.\n4.2 A student")).toBe("components.\n4.2 A student");
-    expect(unwrapLines("first.\n\nsecond")).toBe("first.\n\nsecond");
-    expect(unwrapLines("Chapter 4\nAttendance")).toBe("Chapter 4\nAttendance");
-    expect(unwrapLines("Component  Weightage\nEnd-semester exam  60%")).toBe(
-      "Component  Weightage\nEnd-semester exam  60%",
-    );
+    const kept = [
+      "components.\n4.2 A student", // a sentence that ended
+      "first\n\nsecond", // a blank line, with no full stop to rely on
+      "as follows:\nthe fee", // a colon
+      "the deposit;\nthe fee", // a semicolon
+      "Chapter 4\nAttendance", // a heading
+      "granted for\n(a) medical grounds\n(b) representing the institute", // lettered items
+      "i) the Dean\nii) the Head", // roman numerals
+      "1. Introduction\n2. Scope", // a numbered list
+      "4.1 Attendance\n4.2 Condonation", // clause numbers
+      "1   20   4.1   62\n2   40   3.8   71", // a scanned table's rows (evaluation/corpus)
+      "Component  Weightage\nend-semester exam  60%", // columns, even in lower case
+    ];
+    for (const text of kept) expect(unwrapLines(text)).toBe(text);
   });
 });

@@ -477,11 +477,19 @@ export default function DocumentDetailPage() {
               {document.can_manage ? (
                 <Button
                   size="sm"
-                  variant="primary"
+                  // The next step - primary only when it can be taken.
+                  variant={document.is_archived || !version ? "secondary" : "primary"}
                   icon="refresh"
                   onClick={runReprocess}
                   loading={reprocess.pending}
                   disabled={document.is_archived || !version}
+                  title={
+                    document.is_archived
+                      ? "Restore the document first"
+                      : !version
+                        ? "There is no file to process"
+                        : undefined
+                  }
                 >
                   Reprocess
                 </Button>

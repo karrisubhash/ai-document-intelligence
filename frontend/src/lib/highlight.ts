@@ -167,15 +167,38 @@ export function toUtf16Offset(text: string, codePoints: number): number {
   return units;
 }
 
+// A line that starts an item of its own: "(a)", "b)", "iv.", "2.", "3)", "4.1".
+const ITEM_START = /^(?:\(?[a-z][.)]|\(?[ivxlc]{1,4}[.)]|\(?\d{1,3}[.)]|\d+(?:\.\d+)+)\s/i;
+// Two or more spaces, or a tab, between words: a table's columns.
+const COLUMN_GAP = /\S(?: {2,}|\t)\S/;
+
 /**
  * PDF text is hard-wrapped at the page's line length, so a passage shown on
  * its own broke mid-sentence ("counted / separately for theory"). A line
- * that carries on in lower case or with a number continues the sentence
- * and is joined to it - unless the line before ended a sentence. A blank
- * line, a heading or a table row (which start in capitals) keep their break.
+ * that carries on in lower case, with a number or with "(" continues the
+ * sentence and is joined to it. Every other break stays: after a sentence
+ * (or a colon or semicolon), at a blank line, before a heading (a capital),
+ * before an item of a list or a clause ("(a)", "ii)", "2.", "4.1"), and
+ * around a table's row (columns two spaces apart). A word broken with a
+ * hyphen at the line's end is joined without a space.
  */
 export function unwrapLines(text: string): string {
-  return text.replace(/([^\n])[ \t]*\n[ \t]*(?=[a-z0-9(])/g, (match, before: string) =>
-    /[.:;!?]/.test(before) ? match : `${before} `,
-  );
+  const out: string[] = [];
+  let previous: string | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    const next = line.trimStart();
+    const head = out.length ? out[out.length - 1].trimEnd() : "";
+    const joins =
+      previous !== null &&
+      head !== "" &&
+      /^[a-z0-9(]/.test(next) &&
+      !".:;!?".includes(head.slice(-1)) &&
+      !ITEM_START.test(next) &&
+      !COLUMN_GAP.test(previous.trim()) &&
+      !COLUMN_GAP.test(next);
+    if (joins) out[out.length - 1] = head + (head.endsWith("-") ? "" : " ") + next;
+    else out.push(line);
+    previous = line;
+  }
+  return out.join("\n");
 }

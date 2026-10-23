@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,11 +94,42 @@ describe("CollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Delete Exam rules" }));
     const dialog = screen.getByRole("dialog", { name: "Delete “Exam rules”?" });
+    expect(
+      within(dialog).getByText(/Its document is not deleted and stays in Documents, Search and Ask\./),
+    ).toBeInTheDocument();
     expect(remove).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete collection" }));
 
     expect(remove).toHaveBeenCalledWith(7);
     expect(await screen.findByText("Deleted “Exam rules”.")).toBeInTheDocument();
+    // Its card, and the trash button focus would return to, are going: focus
+    // goes to something that stays.
+    await waitFor(() => expect(screen.getByRole("button", { name: "New collection" })).toHaveFocus());
+  });
+
+  it("cannot be closed while Create runs, so cancelling never looks like it worked", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    let finish: (value: Collection) => void = () => undefined;
+    vi.spyOn(api, "createCollection").mockImplementation(
+      () =>
+        new Promise<Collection>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderAt("/collections");
+
+    await userEvent.click(await screen.findByRole("button", { name: "New collection" }));
+    const dialog = screen.getByRole("dialog", { name: "New collection" });
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), "Fees");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("dialog", { name: "New collection" })).toBeInTheDocument();
+
+    await act(async () => finish({ ...RULES, id: 8, name: "Fees" }));
+    expect(await screen.findByText("Created “Fees”. Add documents to it below.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "New collection" })).not.toBeInTheDocument();
   });
 
   it("hides creation and management from a reader", async () => {
@@ -254,6 +285,8 @@ describe("CollectionsPage bulk actions", { timeout: 15000 }, () => {
     );
     expect(screen.queryByRole("checkbox", { name: /in Exam rules$/ })).not.toBeInTheDocument();
     await userEvent.click(mode);
+    // One button for both: it keeps focus as the mode flips.
+    expect(screen.getByRole("button", { name: "Done selecting documents in Exam rules" })).toHaveFocus();
     await userEvent.click(
       screen.getByRole("checkbox", { name: "Select Attendance policy in Exam rules" }),
     );
@@ -261,10 +294,66 @@ describe("CollectionsPage bulk actions", { timeout: 15000 }, () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove selected" }));
 
     expect(change).toHaveBeenCalledWith(7, [3, 5], false);
-    // The mode button kept its place (and focus) and now ends the mode.
+    // The mode button kept its place and now ends the mode, keeping focus.
     await userEvent.click(
       screen.getByRole("button", { name: "Done selecting documents in Exam rules" }),
     );
+    expect(screen.queryByRole("checkbox", { name: /in Exam rules$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select documents in Exam rules" })).toHaveFocus();
+  });
+
+  it("ends select mode when one document is left, and does not bring it back", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    const two: Collection = {
+      ...RULES,
+      documents: [
+        { id: 3, title: "Attendance policy" },
+        { id: 4, title: "Fee schedule" },
+      ],
+      document_count: 2,
+    };
+    vi.spyOn(api, "collections")
+      .mockResolvedValueOnce(page([two]))
+      .mockResolvedValueOnce(page([RULES]))
+      .mockResolvedValue(page([two]));
+    vi.spyOn(api, "setCollectionDocuments").mockResolvedValue(RULES);
+    vi.spyOn(api, "documents").mockResolvedValue(
+      page([
+        {
+          id: 4,
+          title: "Fee schedule",
+          department: "Computer Science",
+          document_type: "POLICY",
+          owner: 1,
+          owner_username: "prof",
+          status: "COMPLETED",
+          current_version: null,
+          is_archived: false,
+          archived_at: null,
+          can_manage: true,
+          created_at: "2026-10-01T10:00:00Z",
+          updated_at: "2026-10-01T10:00:00Z",
+        },
+      ]),
+    );
+    renderAt("/collections");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select documents in Exam rules" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Fee schedule in Exam rules" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove selected" }));
+
+    // One left: nothing to select from - no mode, no boxes.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /documents in Exam rules$/ })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("checkbox", { name: /in Exam rules$/ })).not.toBeInTheDocument();
+
+    // Added back: the card is at rest, not in a mode nobody asked for.
+    await userEvent.selectOptions(screen.getByLabelText("Add a document to Exam rules"), "4");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("button", { name: "Select documents in Exam rules" })).toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /in Exam rules$/ })).not.toBeInTheDocument();
   });
 
@@ -274,12 +363,21 @@ describe("CollectionsPage bulk actions", { timeout: 15000 }, () => {
       role: "STUDENT",
       capabilities: { ...capabilities, create_collections: false },
     });
+    // Two documents each: enough to be selectable, if the reader could manage them.
+    const members = [
+      { id: 3, title: "Attendance policy" },
+      { id: 4, title: "Fee schedule" },
+    ];
     vi.spyOn(api, "collections").mockResolvedValue(
-      page([collection(7, "Exam rules", false), collection(8, "Fees", false)]),
+      page([
+        { ...collection(7, "Exam rules", false), documents: members, document_count: 2 },
+        { ...collection(8, "Fees", false), documents: members, document_count: 2 },
+      ]),
     );
     renderAt("/collections");
 
     expect(await screen.findByText("Exam rules", {}, LOADED)).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Select documents in/ })).not.toBeInTheDocument();
   });
 });

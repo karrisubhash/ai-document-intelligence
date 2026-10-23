@@ -54,6 +54,7 @@ function ConversationList({
   activeId,
   conversations,
   onNew,
+  onOpen,
   onChanged,
   onMore,
 }: {
@@ -61,6 +62,8 @@ function ConversationList({
   activeId: number | null;
   conversations: Resource<Paginated<ConversationSummary>>;
   onNew: () => void;
+  /** A conversation in the list was chosen - also the one already open. */
+  onOpen: () => void;
   onChanged: () => void;
   onMore: () => void;
 }) {
@@ -220,6 +223,7 @@ function ConversationList({
                   to={`/ask/${conversation.id}`}
                   className="conversation-link"
                   aria-current={conversation.id === activeId ? "page" : undefined}
+                  onClick={onOpen}
                 >
                   <span className="conversation-title">
                     {conversation.title || "Untitled conversation"}
@@ -396,10 +400,15 @@ export default function ChatPage() {
   );
   const thread = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
-  // Phones: whether the folded conversation list is showing. Opening a
-  // conversation folds it again.
+  // Phones: whether the folded conversation list is showing. Choosing a
+  // conversation folds it (onOpen, also for the one already open), and so
+  // does arriving at another one - but not this page giving a new
+  // question its id, which can happen while the list is open on purpose.
   const [listOpen, setListOpen] = useState(false);
-  useEffect(() => setListOpen(false), [conversationId]);
+  useEffect(() => {
+    if (!(location.state as { keepFocus?: boolean } | null)?.keepFocus) setListOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
   // Which conversation the turns on screen belong to. A conversation this
   // page has just created already shows its turns with their live response
   // data, so it is not rebuilt from history; any OTHER conversation is.
@@ -614,6 +623,7 @@ export default function ChatPage() {
           setListOpen(false);
           startNew();
         }}
+        onOpen={() => setListOpen(false)}
         onChanged={conversations.reload}
         onMore={() => setConversationPages((pages) => pages + 1)}
       />
