@@ -1,0 +1,3233 @@
+{
+  "dataset": "search-relevance",
+  "dataset_version": "s1",
+  "label": "offline baseline: hashing + lexical (fused order)",
+  "k": 5,
+  "limit": 10,
+  "split": "all",
+  "configuration": {
+    "embedding": "hashing-baseline 0.1.0",
+    "reranker": "lexical-reranker 0.1.0",
+    "endpoint_ranking": [
+      "retrieval order"
+    ],
+    "search_candidates": 50,
+    "search_rerank_depth": 20,
+    "search_relevance_floor": null
+  },
+  "metrics": {
+    "all": {
+      "quality": {
+        "recall_at_5": 0.9036,
+        "precision_at_5": 0.2435,
+        "mrr": 0.7924,
+        "ndcg_at_5": 0.8055,
+        "document_recall_at_5": 0.934,
+        "document_mrr": 0.8402,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0,
+        "no_relevant_returned_nothing": 0.0,
+        "no_relevant_said_no_match": 0.0
+      },
+      "diagnostics": {
+        "cases": 55,
+        "answerable": 46,
+        "no_relevant": 9,
+        "outcomes": {
+          "ranking": 3,
+          "results-for-no-relevant": 9,
+          "top-k": 12,
+          "top1": 31
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 10.0,
+        "mean_distinct_documents_at_5": 4.0,
+        "pool_rank_p95": 6,
+        "pool_rank_max": 17,
+        "latency_p50_ms": 43,
+        "latency_p95_ms": 87
+      }
+    },
+    "dev": {
+      "quality": {
+        "recall_at_5": 0.8728,
+        "precision_at_5": 0.2625,
+        "mrr": 0.8438,
+        "ndcg_at_5": 0.8094,
+        "document_recall_at_5": 0.8728,
+        "document_mrr": 0.8438,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0,
+        "no_relevant_returned_nothing": 0.0,
+        "no_relevant_said_no_match": 0.0
+      },
+      "diagnostics": {
+        "cases": 19,
+        "answerable": 16,
+        "no_relevant": 3,
+        "outcomes": {
+          "ranking": 1,
+          "results-for-no-relevant": 3,
+          "top-k": 3,
+          "top1": 12
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 10.0,
+        "mean_distinct_documents_at_5": 3.9375,
+        "pool_rank_p95": 2,
+        "pool_rank_max": 17,
+        "latency_p50_ms": 41,
+        "latency_p95_ms": 70
+      }
+    },
+    "test": {
+      "quality": {
+        "recall_at_5": 0.92,
+        "precision_at_5": 0.2333,
+        "mrr": 0.765,
+        "ndcg_at_5": 0.8035,
+        "document_recall_at_5": 0.9667,
+        "document_mrr": 0.8383,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0,
+        "no_relevant_returned_nothing": 0.0,
+        "no_relevant_said_no_match": 0.0
+      },
+      "diagnostics": {
+        "cases": 36,
+        "answerable": 30,
+        "no_relevant": 6,
+        "outcomes": {
+          "ranking": 2,
+          "results-for-no-relevant": 6,
+          "top-k": 9,
+          "top1": 19
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 10.0,
+        "mean_distinct_documents_at_5": 4.0333,
+        "pool_rank_p95": 6,
+        "pool_rank_max": 13,
+        "latency_p50_ms": 45,
+        "latency_p95_ms": 87
+      }
+    }
+  },
+  "by_kind": {
+    "ambiguous": {
+      "quality": {
+        "recall_at_5": 0.8129,
+        "precision_at_5": 0.64,
+        "mrr": 0.8,
+        "ndcg_at_5": 0.8189,
+        "document_recall_at_5": 0.8929,
+        "document_mrr": 1.0,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0
+      },
+      "diagnostics": {
+        "cases": 5,
+        "answerable": 5,
+        "no_relevant": 0,
+        "outcomes": {
+          "top-k": 2,
+          "top1": 3
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 0.0,
+        "mean_distinct_documents_at_5": 4.0,
+        "pool_rank_p95": 2,
+        "pool_rank_max": 2,
+        "latency_p50_ms": 55,
+        "latency_p95_ms": 82
+      }
+    },
+    "common-term": {
+      "quality": {
+        "recall_at_5": 0.9167,
+        "precision_at_5": 0.2,
+        "mrr": 0.8333,
+        "ndcg_at_5": 0.8125,
+        "document_recall_at_5": 0.9167,
+        "document_mrr": 0.8333,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0
+      },
+      "diagnostics": {
+        "cases": 6,
+        "answerable": 6,
+        "no_relevant": 0,
+        "outcomes": {
+          "top-k": 2,
+          "top1": 4
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 0.0,
+        "mean_distinct_documents_at_5": 4.3333,
+        "pool_rank_p95": 2,
+        "pool_rank_max": 2,
+        "latency_p50_ms": 45,
+        "latency_p95_ms": 51
+      }
+    },
+    "exact": {
+      "quality": {
+        "recall_at_5": 1.0,
+        "precision_at_5": 0.2182,
+        "mrr": 1.0,
+        "ndcg_at_5": 1.0,
+        "document_recall_at_5": 1.0,
+        "document_mrr": 1.0,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0
+      },
+      "diagnostics": {
+        "cases": 11,
+        "answerable": 11,
+        "no_relevant": 0,
+        "outcomes": {
+          "top1": 11
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 0.0,
+        "mean_distinct_documents_at_5": 4.0,
+        "pool_rank_p95": 1,
+        "pool_rank_max": 1,
+        "latency_p50_ms": 39,
+        "latency_p95_ms": 246
+      }
+    },
+    "identifier": {
+      "quality": {
+        "recall_at_5": 1.0,
+        "precision_at_5": 0.24,
+        "mrr": 0.9,
+        "ndcg_at_5": 0.9262,
+        "document_recall_at_5": 1.0,
+        "document_mrr": 0.9,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0
+      },
+      "diagnostics": {
+        "cases": 5,
+        "answerable": 5,
+        "no_relevant": 0,
+        "outcomes": {
+          "top-k": 1,
+          "top1": 4
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 0.0,
+        "mean_distinct_documents_at_5": 4.8,
+        "pool_rank_p95": 2,
+        "pool_rank_max": 2,
+        "latency_p50_ms": 32,
+        "latency_p95_ms": 39
+      }
+    },
+    "no-relevant": {
+      "quality": {
+        "no_relevant_returned_nothing": 0.0,
+        "no_relevant_said_no_match": 0.0
+      },
+      "diagnostics": {
+        "cases": 9,
+        "answerable": 0,
+        "no_relevant": 9,
+        "outcomes": {
+          "results-for-no-relevant": 9
+        },
+        "mean_returned_answerable": 0.0,
+        "mean_returned_no_relevant": 10.0,
+        "mean_distinct_documents_at_5": 0.0,
+        "pool_rank_p95": 0,
+        "pool_rank_max": 0,
+        "latency_p50_ms": 40,
+        "latency_p95_ms": 105
+      }
+    },
+    "paraphrase": {
+      "quality": {
+        "recall_at_5": 0.7692,
+        "precision_at_5": 0.1538,
+        "mrr": 0.5474,
+        "ndcg_at_5": 0.5633,
+        "document_recall_at_5": 0.8462,
+        "document_mrr": 0.5885,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0
+      },
+      "diagnostics": {
+        "cases": 13,
+        "answerable": 13,
+        "no_relevant": 0,
+        "outcomes": {
+          "ranking": 3,
+          "top-k": 5,
+          "top1": 5
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 0.0,
+        "mean_distinct_documents_at_5": 4.0,
+        "pool_rank_p95": 13,
+        "pool_rank_max": 17,
+        "latency_p50_ms": 61,
+        "latency_p95_ms": 71
+      }
+    },
+    "repeated-terminology": {
+      "quality": {
+        "recall_at_5": 1.0,
+        "precision_at_5": 0.2,
+        "mrr": 0.8056,
+        "ndcg_at_5": 0.8552,
+        "document_recall_at_5": 1.0,
+        "document_mrr": 0.9167,
+        "pool_recall": 1.0,
+        "answerable_with_results": 1.0,
+        "answerable_with_a_match": 1.0
+      },
+      "diagnostics": {
+        "cases": 6,
+        "answerable": 6,
+        "no_relevant": 0,
+        "outcomes": {
+          "top-k": 2,
+          "top1": 4
+        },
+        "mean_returned_answerable": 10.0,
+        "mean_returned_no_relevant": 0.0,
+        "mean_distinct_documents_at_5": 3.0,
+        "pool_rank_p95": 3,
+        "pool_rank_max": 3,
+        "latency_p50_ms": 37,
+        "latency_p95_ms": 41
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "ex-attendance",
+      "kind": "exact",
+      "split": "test",
+      "query": "minimum attendance end-semester examination",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 246,
+      "top": [
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-library-fine",
+      "kind": "exact",
+      "split": "test",
+      "query": "library late return fine",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 52,
+      "top": [
+        {
+          "chunk": 33,
+          "document": "library-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 37,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-curfew",
+      "kind": "exact",
+      "split": "dev",
+      "query": "hostel curfew on Saturdays",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 40,
+      "top": [
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 26,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-supplementary",
+      "kind": "exact",
+      "split": "test",
+      "query": "supplementary examination July",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 40,
+      "top": [
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-printing",
+      "kind": "exact",
+      "split": "test",
+      "query": "printing allowance pages per semester",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 37,
+      "top": [
+        {
+          "chunk": 32,
+          "document": "it-acceptable-use",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-condonation",
+      "kind": "exact",
+      "split": "dev",
+      "query": "condonation below 65 percent",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 32,
+      "top": [
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-internship",
+      "kind": "exact",
+      "split": "test",
+      "query": "internship credit 8 weeks",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.4,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 37,
+      "top": [
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 40,
+          "document": "placement-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-quota",
+      "kind": "exact",
+      "split": "dev",
+      "query": "monthly data allowance gigabytes",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 2,
+      "most_from_one_document": 3,
+      "duration_ms": 39,
+      "top": [
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 32,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 51,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-merit",
+      "kind": "exact",
+      "split": "test",
+      "query": "merit scholarship eligibility aggregate",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 3,
+      "most_from_one_document": 2,
+      "duration_ms": 38,
+      "top": [
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 40,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-grievance-time",
+      "kind": "exact",
+      "split": "test",
+      "query": "grievance submitted within 30 days",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 34,
+      "top": [
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 29,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ex-bus-sunday",
+      "kind": "exact",
+      "split": "dev",
+      "query": "bus service on Sundays",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 41,
+      "top": [
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 43,
+          "document": "scan-results-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "id-circular",
+      "kind": "identifier",
+      "split": "test",
+      "query": "TR/2024/117",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 32,
+      "top": [
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 25,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 33,
+          "document": "library-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "id-clause-94",
+      "kind": "identifier",
+      "split": "dev",
+      "query": "Clause 9.4",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 39,
+      "top": [
+        {
+          "chunk": 33,
+          "document": "library-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 29,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "id-mech",
+      "kind": "identifier",
+      "split": "test",
+      "query": "B.Tech MECH",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 31,
+      "top": [
+        {
+          "chunk": 26,
+          "document": "fee-structure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 42,
+          "document": "scan-register-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 41,
+          "document": "scan-form-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "id-clause-42",
+      "kind": "identifier",
+      "split": "test",
+      "query": "Clause 4.2",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.4,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 27,
+      "top": [
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 29,
+          "document": "grievance-procedure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "id-300000",
+      "kind": "identifier",
+      "split": "dev",
+      "query": "300000 rupees",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.5,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 33,
+      "top": [
+        {
+          "chunk": 33,
+          "document": "library-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-book",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "what happens if I keep a borrowed book past its due date",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.2,
+      "ndcg": 0.3869,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.2,
+      "pool_recall": 1.0,
+      "pool_rank": 5,
+      "outcome": "top-k",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 43,
+      "top": [
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 41,
+          "document": "scan-form-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 33,
+          "document": "library-rules",
+          "relevant": true,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-stay-out",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "how late can residents stay out on weekend nights",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.25,
+      "ndcg": 0.4307,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.25,
+      "pool_recall": 1.0,
+      "pool_rank": 4,
+      "outcome": "top-k",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 47,
+      "top": [
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-cheating",
+      "kind": "paraphrase",
+      "split": "dev",
+      "query": "penalty for being caught cheating during a test",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 1.0,
+      "pool_rank": 17,
+      "outcome": "ranking",
+      "distinct_documents": 3,
+      "most_from_one_document": 2,
+      "duration_ms": 59,
+      "top": [
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-lab-files",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "is my work kept on the lab machines after term ends",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 3,
+      "most_from_one_document": 3,
+      "duration_ms": 71,
+      "top": [
+        {
+          "chunk": 32,
+          "document": "it-acceptable-use",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 35,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-pass-mark",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "what score do I need so I don't fail a course",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.5,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 57,
+      "top": [
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 43,
+          "document": "scan-results-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-recheck",
+      "kind": "paraphrase",
+      "split": "dev",
+      "query": "deadline to ask for my answer script to be marked again",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.5,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 3,
+      "most_from_one_document": 3,
+      "duration_ms": 122,
+      "top": [
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 35,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-password",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "how long does my login secret need to be",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 1.0,
+      "pool_rank": 13,
+      "outcome": "ranking",
+      "distinct_documents": 2,
+      "most_from_one_document": 4,
+      "duration_ms": 61,
+      "top": [
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 51,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-two-awards",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "can I receive two kinds of financial support together",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 64,
+      "top": [
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-lawyer",
+      "kind": "paraphrase",
+      "split": "dev",
+      "query": "can I bring a lawyer to my complaint hearing",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 0.6131,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 61,
+      "top": [
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 32,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-job-offer",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "once I say yes to a job offer can I keep interviewing with other companies",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 61,
+      "top": [
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 40,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-guests",
+      "kind": "paraphrase",
+      "split": "dev",
+      "query": "when can friends from outside visit me in the hostel",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 65,
+      "top": [
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-pay-late",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "penalty for paying tuition after the due date",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.1667,
+      "ndcg": 0.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.2,
+      "pool_recall": 1.0,
+      "pool_rank": 6,
+      "outcome": "ranking",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 53,
+      "top": [
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 51,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 29,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "pa-internet",
+      "kind": "paraphrase",
+      "split": "test",
+      "query": "what happens when I use up my internet quota",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 50,
+      "top": [
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 36,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 44,
+          "document": "scan-table-fragment",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "am-fee",
+      "kind": "ambiguous",
+      "split": "test",
+      "query": "fee",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.6,
+      "precision": 0.6,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.5296,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 55,
+      "top": [
+        {
+          "chunk": 25,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 26,
+          "document": "fee-structure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 41,
+          "document": "scan-form-fragment",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "am-late",
+      "kind": "ambiguous",
+      "split": "dev",
+      "query": "late",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.7143,
+      "precision": 1.0,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 0.7143,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 47,
+      "top": [
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 33,
+          "document": "library-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": true,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "am-15-days",
+      "kind": "ambiguous",
+      "split": "test",
+      "query": "15 days",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.4,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 56,
+      "top": [
+        {
+          "chunk": 29,
+          "document": "grievance-procedure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "am-attendance",
+      "kind": "ambiguous",
+      "split": "test",
+      "query": "attendance requirement",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.6,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.7328,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 3,
+      "most_from_one_document": 3,
+      "duration_ms": 82,
+      "top": [
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "am-deadline",
+      "kind": "ambiguous",
+      "split": "dev",
+      "query": "application deadline",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.75,
+      "precision": 0.6,
+      "reciprocal_rank": 1.0,
+      "ndcg": 0.8319,
+      "document_recall": 0.75,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 42,
+      "top": [
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ct-percent-fail",
+      "kind": "common-term",
+      "split": "test",
+      "query": "percent student fails course",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 45,
+      "top": [
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ct-student-account",
+      "kind": "common-term",
+      "split": "test",
+      "query": "student account",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 45,
+      "top": [
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ct-identity-card",
+      "kind": "common-term",
+      "split": "dev",
+      "query": "institute identity card",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.5,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 0.6131,
+      "document_recall": 0.5,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 46,
+      "top": [
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 25,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ct-final-year",
+      "kind": "common-term",
+      "split": "test",
+      "query": "rules for students in the final year",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.5,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 51,
+      "top": [
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 40,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 35,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ct-dean",
+      "kind": "common-term",
+      "split": "test",
+      "query": "Office of the Dean of Students",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 49,
+      "top": [
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 25,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 35,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "ct-end-semester",
+      "kind": "common-term",
+      "split": "dev",
+      "query": "end of each semester",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.5,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 39,
+      "top": [
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 32,
+          "document": "it-acceptable-use",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 35,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 36,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "rt-student-attendance",
+      "kind": "repeated-terminology",
+      "split": "test",
+      "query": "student attendance percentage needed for exams",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 0.5,
+      "pool_recall": 1.0,
+      "pool_rank": 2,
+      "outcome": "top-k",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 41,
+      "top": [
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "rt-staff-late",
+      "kind": "repeated-terminology",
+      "split": "test",
+      "query": "late attendance of staff and casual leave",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 0.3333,
+      "ndcg": 0.5,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 3,
+      "outcome": "top-k",
+      "distinct_documents": 2,
+      "most_from_one_document": 4,
+      "duration_ms": 37,
+      "top": [
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 51,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 27,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "rt-band-brake",
+      "kind": "repeated-terminology",
+      "split": "dev",
+      "query": "band brake tension ratio",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 1,
+      "most_from_one_document": 5,
+      "duration_ms": 35,
+      "top": [
+        {
+          "chunk": 35,
+          "document": "machine-design-notes",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 36,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 37,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "rt-placement-minimum",
+      "kind": "repeated-terminology",
+      "split": "test",
+      "query": "minimum percentage required for campus placement",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 3,
+      "most_from_one_document": 2,
+      "duration_ms": 41,
+      "top": [
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 40,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "rt-exam-hall",
+      "kind": "repeated-terminology",
+      "split": "test",
+      "query": "examination hall entry rules for students",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 40,
+      "top": [
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "rt-library-borrow",
+      "kind": "repeated-terminology",
+      "split": "dev",
+      "query": "library borrowing limit for students",
+      "answerable": true,
+      "returned": 10,
+      "matched": 10,
+      "recall": 1.0,
+      "precision": 0.2,
+      "reciprocal_rank": 1.0,
+      "ndcg": 1.0,
+      "document_recall": 1.0,
+      "document_reciprocal_rank": 1.0,
+      "pool_recall": 1.0,
+      "pool_rank": 1,
+      "outcome": "top1",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 31,
+      "top": [
+        {
+          "chunk": 33,
+          "document": "library-rules",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 37,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-quantum",
+      "kind": "no-relevant",
+      "split": "test",
+      "query": "quantum chromodynamics lattice gauge theory",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 3,
+      "most_from_one_document": 2,
+      "duration_ms": 30,
+      "top": [
+        {
+          "chunk": 34,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 51,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 35,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-parking",
+      "kind": "no-relevant",
+      "split": "test",
+      "query": "parking permit for visitors' cars",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 30,
+      "top": [
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-canteen",
+      "kind": "no-relevant",
+      "split": "test",
+      "query": "canteen menu on Fridays",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 3,
+      "most_from_one_document": 3,
+      "duration_ms": 26,
+      "top": [
+        {
+          "chunk": 51,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 48,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 32,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-thesis",
+      "kind": "no-relevant",
+      "split": "dev",
+      "query": "PhD thesis submission format",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 33,
+      "top": [
+        {
+          "chunk": 38,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 41,
+          "document": "scan-form-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 42,
+          "document": "scan-register-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-cricket",
+      "kind": "no-relevant",
+      "split": "test",
+      "query": "cricket tournament registration deadline",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 40,
+      "top": [
+        {
+          "chunk": 39,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 23,
+          "document": "academic-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 40,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-sports-quota",
+      "kind": "no-relevant",
+      "split": "dev",
+      "query": "sports quota admission",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 49,
+      "top": [
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 44,
+          "document": "scan-table-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 32,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 43,
+          "document": "scan-results-fragment",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 41,
+          "document": "scan-form-fragment",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-solar",
+      "kind": "no-relevant",
+      "split": "test",
+      "query": "solar panel installation on hostel roofs",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 87,
+      "top": [
+        {
+          "chunk": 30,
+          "document": "hostel-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 26,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 50,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-fire-drill",
+      "kind": "no-relevant",
+      "split": "dev",
+      "query": "fire drill evacuation procedure",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 5,
+      "most_from_one_document": 1,
+      "duration_ms": 70,
+      "top": [
+        {
+          "chunk": 28,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 49,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 24,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    },
+    {
+      "case_id": "nr-laptop",
+      "kind": "no-relevant",
+      "split": "test",
+      "query": "laptop loan scheme for first-year students",
+      "answerable": false,
+      "returned": 10,
+      "matched": 10,
+      "recall": 0.0,
+      "precision": 0.0,
+      "reciprocal_rank": 0.0,
+      "ndcg": 0.0,
+      "document_recall": 0.0,
+      "document_reciprocal_rank": 0.0,
+      "pool_recall": 0.0,
+      "pool_rank": null,
+      "outcome": "results-for-no-relevant",
+      "distinct_documents": 4,
+      "most_from_one_document": 2,
+      "duration_ms": 105,
+      "top": [
+        {
+          "chunk": 46,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 40,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 52,
+          "document": "transport-circular",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 47,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 31,
+          "document": "it-acceptable-use",
+          "relevant": false,
+          "below_floor": false
+        }
+      ]
+    }
+  ]
+}

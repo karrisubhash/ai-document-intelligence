@@ -327,6 +327,8 @@ export interface SearchInput {
   document_type?: string;
   department?: string;
   collection_id?: number | null;
+  /** Also return passages scored below the relevance floor, after the rest. */
+  include_below_floor?: boolean;
 }
 
 export interface ChatInput {

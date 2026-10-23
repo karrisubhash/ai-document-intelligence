@@ -298,8 +298,13 @@ Pipeline limits, in `backend/config/settings.py`:
 | `DOCUMENT_EMBEDDING_PROVIDER` | `""` | Dotted path to an `EmbeddingProvider`; empty means chunks are still indexed for **lexical** search, just not embedded |
 | `DOCUMENT_SCANNER` | `""` | Dotted path to a `DocumentScanner`; empty means the SCANNING stage records that the file was **not scanned** |
 | `THROTTLE_LOGIN` / `_UPLOAD` / `_SEARCH` / `_CHAT` | 10/min, 60/h, 120/h, 60/h | Per-endpoint rate limits |
+| `THROTTLE_SEARCH_BURST` | 20/min | How fast the hourly search budget may be spent: a search that reranks costs seconds of CPU |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1000 / 150 | Chunking; changing either requires re-indexing |
 | `SEARCH_CANDIDATES` | 50 | Candidates each retrieval half returns before fusion |
+| `SEARCH_RERANK_DEPTH` | 20 | With a cross-encoder `RAG_RERANKER`, how many fused candidates the Search endpoint reranks (at least the requested `limit`); the per-search CPU cost. `15` is cheaper; `0` returns the fused order, as does the bundled lexical reranker — see [search relevance](docs/evaluation/search-relevance.md) |
+| `SEARCH_RELEVANCE_FLOOR` | per model | Passages scoring below it are left off the Search page (one request away with `include_below_floor`, which appends every one of them after up to `limit` matches). Unset uses the floor calibrated for search for the configured cross-encoder, or **no floor** for an uncalibrated one. Not `RAG_RELEVANCE_FLOOR`: chat's floor hid paraphrased answers in search |
+| `SEARCH_FALLBACK_RESULTS` | 3 | When no passage clears the floor, how many of the best-ranked are still returned, marked `below_floor`, beside a "no close match" note. `0` returns none |
+| `SEARCH_DEFAULT_LIMIT` / `SEARCH_MAX_LIMIT` | 10 / 50 | Results per search when the client gives no `limit` (the Search page's page size), and the most it may ask for |
 | `DOCUMENT_TABLE_DETECTOR` | bundled layout detector | Dotted path to a `TableDetector`. The one capability that defaults **on**, because it is the only one with nothing to configure — it reads structure out of text already extracted. Empty skips LAYOUT_ANALYSIS' table half |
 | `DOCUMENT_FIGURE_DETECTOR` | bundled image detector | Dotted path to a `FigureDetector`. Also on by default, and also nothing to configure: it reads the image dictionary a PDF already carries. It does **not** look at the images |
 | `RAG_MAX_PLAN_STEPS` | 4 | How many parts a question may be planned into. `1` disables planning; each step is a full retrieval, so this is a bound, not a budget |

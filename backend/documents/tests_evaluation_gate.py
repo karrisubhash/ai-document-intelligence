@@ -189,6 +189,42 @@ class SeedEvaluationTests(TestCase):
         self.assertIn("--user", message)
         self.assertIn("--prune", message)
 
+    def test_a_benchmark_in_its_own_department_cannot_see_another(self):
+        """Visibility is owner OR same department, so a second benchmark
+        under its own --user but in the shared Evaluation department still
+        saw the first one's corpus - and the first saw it back. CI scores
+        the search benchmark in the same database as v1 and v2."""
+        from io import StringIO
+
+        from django.contrib.auth import get_user_model
+
+        from documents import authorization
+
+        self.seed()
+        other = self.write_template(
+            "institutional-other", "v9", ["@grievance-procedure"]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            call_command(
+                "seed_evaluation",
+                template=str(other),
+                user="other-evaluator",
+                department="Other evaluation",
+                output=str(Path(directory) / "b.json"),
+                stdout=StringIO(),
+            )
+
+        def owners_seen_by(username):
+            user = get_user_model().objects.get(username=username)
+            return set(
+                authorization.visible_documents(
+                    user, Document.objects.all()
+                ).values_list("owner__username", flat=True)
+            )
+
+        self.assertEqual(owners_seen_by("ci-evaluator"), {"ci-evaluator"})
+        self.assertEqual(owners_seen_by("other-evaluator"), {"other-evaluator"})
+
     def test_prune_switches_a_database_between_versions(self):
         self.seed()
 

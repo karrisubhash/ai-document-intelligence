@@ -52,6 +52,11 @@ match their reference more closely) - and the committed baseline was raised to t
 later change cannot quietly give the gain back. The offline pipeline is deterministic, so
 the higher bar costs no flakiness.
 
+A third gate scores the **Search endpoint** per passage: it seeds `search-relevance` s1
+under its own user and department and runs `evaluate_search --baseline
+evaluation/search-baseline.json --fail-on-regression`. See
+[search relevance](search-relevance.md).
+
 ## Results — configurations compared
 
 Measured 2026-09-30 on the development machine (CPU only), each configuration on a
@@ -162,6 +167,12 @@ was 13.8 s per question with bge-reranker-base on the test laptop
 ([performance](../operations/performance.md)). bge-reranker-base at its calibrated floor
 answers 3 more questions out of 57. On CPU-only hardware MiniLM is usually the better
 choice: `RAG_RERANKER_LOCAL_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2`.
+
+## Search
+
+The numbers above score documents through the chat engine. The Search page is scored
+separately, per passage and in returned order, in [search-relevance.md](search-relevance.md):
+why it ranked badly, the benchmark, the floor calibration and before/after results.
 
 ## System
 

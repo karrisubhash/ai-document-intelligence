@@ -143,8 +143,16 @@ REST_FRAMEWORK = {
         "login_account": os.getenv("THROTTLE_LOGIN_ACCOUNT", "100/hour"),
         # Writes bytes and queues worker time.
         "upload": os.getenv("THROTTLE_UPLOAD", "60/hour"),
-        # Runs two retrievers and a fusion pass.
+        # Runs two retrievers, a fusion pass and - with a cross-encoder
+        # configured - a reranking pass over up to SEARCH_RERANK_DEPTH
+        # passages, which is most of its cost.
         "search": os.getenv("THROTTLE_SEARCH", "120/hour"),
+        # How fast that hourly budget may be spent. A search that reranks
+        # costs seconds of CPU (docs/evaluation/search-relevance.md), so 120
+        # arriving at once would starve everyone else for minutes. 20 a
+        # minute is several times what a person searching, refining and
+        # expanding results produces.
+        "search_burst": os.getenv("THROTTLE_SEARCH_BURST", "20/minute"),
         # The most expensive path in the system.
         "chat": os.getenv("THROTTLE_CHAT", "60/hour"),
     },
@@ -492,6 +500,35 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
 
 # Hybrid retrieval: how many candidates each half returns before fusion.
 SEARCH_CANDIDATES = int(os.getenv("SEARCH_CANDIDATES", "50"))
+
+# When RAG_RERANKER is a cross-encoder, the Search endpoint reranks the top
+# SEARCH_RERANK_DEPTH fused candidates with it and leaves passages below the
+# relevance floor off the page (documents/search/ranking.py). Fusion alone
+# has no notion of relevance: OCR fragments a dense retriever ranks near
+# every query sat above exact matches, and a query nothing answered still
+# got a full page. With the bundled lexical reranker the fused order is
+# kept - lexical reranking measured worse than fusion. 0 turns reranking off
+# everywhere. Costs one cross-encoder pass over this many passages per
+# search; 20 was chosen on measured quality and cost, 15 is the cheaper
+# option (ranking.DEFAULT_RERANK_DEPTH, docs/evaluation/search-relevance.md).
+SEARCH_RERANK_DEPTH = int(os.getenv("SEARCH_RERANK_DEPTH", "20"))
+
+# Unset means the floor calibrated for search for the configured
+# cross-encoder (ranking.CALIBRATED_FLOORS), or no floor at all - reorder,
+# hide nothing - for a model nobody calibrated. NOT RAG_RELEVANCE_FLOOR:
+# chat's floor hid every paraphrased answer when applied to search. Set it
+# only after measuring; a floor belongs to one model's score distribution.
+_search_floor = os.getenv("SEARCH_RELEVANCE_FLOOR", "").strip()
+SEARCH_RELEVANCE_FLOOR = float(_search_floor) if _search_floor else None
+
+# With nothing above the floor, the best-ranked passages still returned,
+# marked below_floor, beside a "no close match" note. 0 returns nothing.
+SEARCH_FALLBACK_RESULTS = int(os.getenv("SEARCH_FALLBACK_RESULTS", "3"))
+
+# Results per request when the client does not say, and the most it may
+# ask for.
+SEARCH_DEFAULT_LIMIT = int(os.getenv("SEARCH_DEFAULT_LIMIT", "10"))
+SEARCH_MAX_LIMIT = int(os.getenv("SEARCH_MAX_LIMIT", "50"))
 
 
 # --- RAG (spec section 12) ------------------------------------------------
