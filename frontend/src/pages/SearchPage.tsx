@@ -15,7 +15,7 @@ import {
   Skeleton,
   useDocumentTitle,
 } from "../components/ui";
-import { highlightTerms } from "../lib/highlight";
+import { highlightTerms, unwrapLines } from "../lib/highlight";
 import { TYPE_LABEL } from "../lib/labels";
 
 interface SearchRequest {
@@ -27,7 +27,8 @@ interface SearchRequest {
 }
 
 function Snippet({ text, query }: { text: string; query: string }) {
-  const clipped = text.length > 420 ? `${text.slice(0, 420)}…` : text;
+  const flowing = unwrapLines(text);
+  const clipped = flowing.length > 420 ? `${flowing.slice(0, 420)}…` : flowing;
   return (
     <p className="snippet">
       {highlightTerms(clipped, query).map((segment, index) =>

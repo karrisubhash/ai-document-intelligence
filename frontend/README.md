@@ -61,6 +61,7 @@ E2E_PASSWORD=... npx playwright test
 | **Document** | Overview and classification; Preview (PDF and images, never for quarantined files); Text by page with OCR flagged; Fields with their source spans; Tables; Figures; Versions with per-version download; Processing timeline. Ask and Download up front; edit, reprocess, archive/restore and delete under **More actions** for those who may manage it, and new versions on the Versions tab. |
 | **Search** | Hybrid search with the query kept out of the URL (the API takes it by POST for the same reason). Results highlight matched terms and open the document at the exact passage. |
 | **Ask** | Conversations with history, rename and delete; answers with numbered citations that open the exact evidence — the cited passage tinted, the quoted words marked, and a warning when the document has changed since. Abstentions are explained in plain language; follow-ups show how they were read; injection warnings and multi-part plans are surfaced. Feedback per answer. |
+| **Collections** | Named sets of documents that Search and Ask can be narrowed to. **New collection** opens a dialog; each card adds and removes its documents; deleting one or several asks first, and never deletes their documents. |
 | **Account** | Profile and password change. |
 | **Administration** | Users (scoped for department admins), Departments (registry with cascading rename), Processing (failed/running/stalled runs with retry), Audit log, System status. Each screen appears only for the capabilities `/api/auth/me/` reports — and the API enforces the same rules regardless. |
 | **Quick find** | **Ctrl+K** (**⌘K** on a Mac), or the search box in the top bar: jump to any screen, open a document by title, send what you typed to Search or Ask, upload, switch theme, sign out. What is typed travels to Search and Ask in history state, never in the URL. |
@@ -79,6 +80,11 @@ shadows, type sizes, a 4px spacing grid — so a component never invents its own
 - **Icons are inline SVG** (`src/components/icons.tsx`, geometry from Lucide, ISC licence):
   no icon font, no image requests. They are decoration — every icon-only control has an
   accessible name.
+- **Phones.** Below 720px the documents list turns each row into a card, and below 640px
+  the administration tables do too: give a table `table-stack` and each cell a
+  `data-label` (the column's name, shown beside the value; the first cell heads the card).
+  Ask folds its conversation list behind a **Conversations** button so the thread has the
+  screen. Words that become icons on a phone stay as the control's accessible name.
 - **Primitives live in `src/components/ui.tsx`**: buttons, badges, alerts, cards, tabs,
   native `<dialog>` modals and drawers, an accessible menu button, toasts, avatars.
 

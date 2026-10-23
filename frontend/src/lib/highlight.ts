@@ -166,3 +166,16 @@ export function toUtf16Offset(text: string, codePoints: number): number {
   }
   return units;
 }
+
+/**
+ * PDF text is hard-wrapped at the page's line length, so a passage shown on
+ * its own broke mid-sentence ("counted / separately for theory"). A line
+ * that carries on in lower case or with a number continues the sentence
+ * and is joined to it - unless the line before ended a sentence. A blank
+ * line, a heading or a table row (which start in capitals) keep their break.
+ */
+export function unwrapLines(text: string): string {
+  return text.replace(/([^\n])[ \t]*\n[ \t]*(?=[a-z0-9(])/g, (match, before: string) =>
+    /[.:;!?]/.test(before) ? match : `${before} `,
+  );
+}

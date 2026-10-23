@@ -9,6 +9,7 @@ import {
   layeredSegments,
   queryTerms,
   splitAtSpan,
+  unwrapLines,
 } from "./highlight";
 import { explainAbstention } from "./labels";
 import { Markdown, parseBlocks } from "./markdown";
@@ -211,5 +212,24 @@ describe("API offsets", () => {
     // The API says the span is code points 2..6 - "Fees".
     const { container } = render(<PageText text="😀 Fees are due in July." start={2} end={6} />);
     expect(container.querySelector("mark")?.textContent).toBe("Fees");
+  });
+});
+
+describe("unwrapLines", () => {
+  it("joins a sentence the page's line length broke", () => {
+    expect(unwrapLines("in each course, counted\n    separately for theory")).toBe(
+      "in each course, counted separately for theory",
+    );
+    expect(unwrapLines("a minimum of\n75 percent attendance")).toBe("a minimum of 75 percent attendance");
+  });
+
+  it("keeps the breaks that mean something", () => {
+    // A sentence that ended, a blank line, a heading or a table row.
+    expect(unwrapLines("components.\n4.2 A student")).toBe("components.\n4.2 A student");
+    expect(unwrapLines("first.\n\nsecond")).toBe("first.\n\nsecond");
+    expect(unwrapLines("Chapter 4\nAttendance")).toBe("Chapter 4\nAttendance");
+    expect(unwrapLines("Component  Weightage\nEnd-semester exam  60%")).toBe(
+      "Component  Weightage\nEnd-semester exam  60%",
+    );
   });
 });
