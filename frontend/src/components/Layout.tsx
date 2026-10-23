@@ -1,41 +1,36 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth, useMe } from "../auth/AuthContext";
 import { displayName } from "../lib/format";
 import { ROLE_LABEL } from "../lib/labels";
-import { useToast } from "./ui";
+import { setTheme, useResolvedTheme, useTheme } from "../lib/theme";
+import CommandPalette from "./CommandPalette";
+import { BrandMark, Icon } from "./icons";
+import { PRIMARY, adminItems, sectionFor, type NavItem } from "./navigation";
+import {
+  Avatar,
+  Kbd,
+  Menu,
+  MenuItem,
+  MenuLabel,
+  MenuRadioItem,
+  MenuSeparator,
+  useToast,
+} from "./ui";
 
-interface NavItem {
-  to: string;
-  label: string;
-  icon: string;
-  end?: boolean;
+const COLLAPSED_KEY = "adi-sidebar";
+
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSED_KEY) === "collapsed";
+  } catch {
+    return false;
+  }
 }
 
-const PRIMARY: NavItem[] = [
-  { to: "/", label: "Dashboard", icon: "◧", end: true },
-  { to: "/documents", label: "Documents", icon: "▤" },
-  { to: "/search", label: "Search", icon: "⌕" },
-  { to: "/ask", label: "Ask", icon: "✦" },
-  { to: "/collections", label: "Collections", icon: "▣" },
-];
-
-function adminItems(can: ReturnType<typeof useAuth>["can"]): NavItem[] {
-  const items: NavItem[] = [];
-  if (can("administer_users")) items.push({ to: "/admin/users", label: "Users", icon: "◉" });
-  if (can("administer_departments") || can("administer_users")) {
-    items.push({ to: "/admin/departments", label: "Departments", icon: "▦" });
-  }
-  if (can("view_operations")) {
-    items.push({ to: "/admin/processing", label: "Processing", icon: "↻" });
-  }
-  if (can("view_audit_log")) items.push({ to: "/admin/audit", label: "Audit log", icon: "☰" });
-  if (can("view_system_status")) {
-    items.push({ to: "/admin/system", label: "System status", icon: "◎" });
-  }
-  return items;
-}
+const isMac =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate: () => void }) {
   return (
@@ -47,11 +42,10 @@ function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate: () => vo
             end={item.end}
             className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
             onClick={onNavigate}
+            title={item.label}
           >
-            <span className="nav-icon" aria-hidden="true">
-              {item.icon}
-            </span>
-            {item.label}
+            <Icon name={item.icon} size={18} className="nav-icon" />
+            <span className="nav-label">{item.label}</span>
           </NavLink>
         </li>
       ))}
@@ -59,100 +53,71 @@ function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate: () => vo
   );
 }
 
-function UserMenu() {
+function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   const me = useMe();
-  const { logout } = useAuth();
-  const toast = useToast();
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent | globalThis.KeyboardEvent) => {
-      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
-      if (event instanceof MouseEvent) {
-        const target = event.target as HTMLElement;
-        if (target.closest(".user-menu")) return;
-      }
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", close);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", close);
-    };
-  }, [open]);
-
-  const initials = displayName(me)
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const [theme] = useTheme();
+  const themeLabel = useId();
+  const name = displayName(me);
+  const role = me.role ? ROLE_LABEL[me.role] : "No role";
 
   return (
-    <div className="user-menu">
-      <button
-        type="button"
-        className="user-button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="avatar" aria-hidden="true">
-          {initials}
-        </span>
-        <span className="user-text">
-          <span className="user-name">{displayName(me)}</span>
-          <span className="user-meta">
-            {me.role ? ROLE_LABEL[me.role] : "No role"}
-            {me.department ? ` · ${me.department}` : ""}
+    <Menu
+      className="user-menu"
+      triggerClassName="user-button"
+      side="top"
+      align="start"
+      trigger={
+        <>
+          <Avatar name={name} />
+          <span className="user-text">
+            <span className="user-name">{name}</span>
+            <span className="user-meta">{role}</span>
           </span>
-        </span>
-      </button>
-      {open ? (
-        <div className="menu" role="menu">
-          <button
-            role="menuitem"
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              setOpen(false);
-              navigate("/account");
-            }}
-          >
-            Account and password
-          </button>
-          <button
-            role="menuitem"
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              setOpen(false);
-              logout().then(
-                () => navigate("/", { replace: true }),
-                () =>
-                  toast(
-                    "Sign-out did not complete - you are still signed in. Check your connection and try again.",
-                    "danger",
-                  ),
-              );
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-      ) : null}
-    </div>
+          <Icon name="chevrons-up-down" className="user-chevron" />
+        </>
+      }
+    >
+      <MenuLabel>
+        Signed in as <strong>{me.username}</strong>
+        {me.department ? ` · ${me.department}` : ""}
+      </MenuLabel>
+      <MenuItem icon="key" onSelect={() => navigate("/account")}>
+        Account and password
+      </MenuItem>
+      <MenuSeparator />
+      <div role="group" aria-labelledby={themeLabel}>
+        <MenuLabel id={themeLabel}>Theme</MenuLabel>
+        <MenuRadioItem icon="sun" checked={theme === "light"} onSelect={() => setTheme("light")}>
+          Light
+        </MenuRadioItem>
+        <MenuRadioItem icon="moon" checked={theme === "dark"} onSelect={() => setTheme("dark")}>
+          Dark
+        </MenuRadioItem>
+        <MenuRadioItem icon="monitor" checked={theme === "system"} onSelect={() => setTheme("system")}>
+          System
+        </MenuRadioItem>
+      </div>
+      <MenuSeparator />
+      <MenuItem icon="log-out" onSelect={onSignOut}>
+        Sign out
+      </MenuItem>
+    </Menu>
   );
 }
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { can } = useAuth();
+  const { can, logout } = useAuth();
+  const toast = useToast();
+  const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const navToggle = useRef<HTMLButtonElement>(null);
+  const resolvedTheme = useResolvedTheme();
   const location = useLocation();
   const admin = adminItems(can);
+  const section = sectionFor(location.pathname, admin);
 
   // Moving to a new screen closes the mobile menu and puts focus where a
   // screen-reader user expects it: the start of the new content.
@@ -166,18 +131,84 @@ export default function Layout({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
+  // The drawer exists on narrow screens only. Widening the window closes it,
+  // or it would reappear already open the next time the window narrows.
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const wide = window.matchMedia("(min-width: 861px)");
+    const onChange = () => {
+      if (wide.matches) setNavOpen(false);
+    };
+    wide.addEventListener?.("change", onChange);
+    return () => wide.removeEventListener?.("change", onChange);
+  }, []);
+
+  // While the drawer is open, focus moves into it, the page behind it is
+  // inert (see the workspace below), and Escape closes it and returns focus
+  // to the button that opened it.
+  useEffect(() => {
+    if (!navOpen) return;
+    document.querySelector<HTMLElement>(".sidebar .nav-link")?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector("dialog[open]")) return;
+      setNavOpen(false);
+      navToggle.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
+
+  // Ctrl+K (Cmd+K on a Mac) opens quick find from anywhere.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((value) => {
+      try {
+        if (value) window.localStorage.removeItem(COLLAPSED_KEY);
+        else window.localStorage.setItem(COLLAPSED_KEY, "collapsed");
+      } catch {
+        // Remembered for this visit only.
+      }
+      return !value;
+    });
+  };
+
+  const signOut = useCallback(() => {
+    logout().then(
+      () => navigate("/", { replace: true }),
+      () =>
+        toast(
+          "Sign-out did not complete - you are still signed in. Check your connection and try again.",
+          "danger",
+        ),
+    );
+  }, [logout, navigate, toast]);
+
   return (
-    <div className={`app${navOpen ? " nav-open" : ""}`}>
+    <div className={`app${navOpen ? " nav-open" : ""}${collapsed ? " nav-collapsed" : ""}`}>
       <a href="#main" className="skip-link">
         Skip to content
       </a>
 
       <aside className="sidebar" aria-label="Main navigation">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true" />
-          <span className="brand-name">Document Intelligence</span>
+        <div className="sidebar-header">
+          <div className="brand">
+            <BrandMark />
+            <span className="brand-name">Document Intelligence</span>
+          </div>
         </div>
-        <nav>
+        <nav className="sidebar-nav">
+          <p className="nav-section">Workspace</p>
           <NavList items={PRIMARY} onNavigate={() => setNavOpen(false)} />
           {admin.length ? (
             <>
@@ -186,28 +217,72 @@ export default function Layout({ children }: { children: ReactNode }) {
             </>
           ) : null}
         </nav>
+        <div className="sidebar-footer">
+          <UserMenu onSignOut={signOut} />
+        </div>
       </aside>
 
       <div className="scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />
 
-      <div className="workspace">
+      <div className="workspace" inert={navOpen || undefined}>
         <header className="topbar">
           <button
+            ref={navToggle}
             type="button"
             className="icon-button nav-toggle"
             aria-label={navOpen ? "Close navigation" : "Open navigation"}
             aria-expanded={navOpen}
             onClick={() => setNavOpen((value) => !value)}
           >
-            ☰
+            <Icon name="menu" size={18} />
           </button>
+          <button
+            type="button"
+            className="icon-button sidebar-toggle"
+            aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+            aria-pressed={collapsed}
+            title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+            onClick={toggleCollapsed}
+          >
+            <Icon name="panel-left" size={18} />
+          </button>
+          {section ? (
+            <div className="topbar-location">
+              <span className="topbar-group">{section.group}</span>
+              <Icon name="chevron-right" size={14} className="topbar-separator" />
+              <span className="topbar-page">{section.item.label}</span>
+            </div>
+          ) : null}
           <div className="topbar-spacer" />
-          <UserMenu />
+          <button
+            type="button"
+            className="quick-find"
+            onClick={() => setPaletteOpen(true)}
+            aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
+          >
+            <Icon name="search" />
+            <span className="quick-find-label">Search or jump to…</span>
+            <span className="quick-find-keys">
+              <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>K</Kbd>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={resolvedTheme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
+            title={resolvedTheme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
+            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+          >
+            <Icon name={resolvedTheme === "dark" ? "sun" : "moon"} size={18} />
+          </button>
         </header>
         <main id="main" className="main" tabIndex={-1}>
           {children}
         </main>
       </div>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onSignOut={signOut} />
     </div>
   );
 }

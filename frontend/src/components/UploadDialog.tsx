@@ -7,6 +7,7 @@ import { useAuth } from "../auth/AuthContext";
 import { formatBytes } from "../lib/format";
 import { ACCEPT_ATTRIBUTE, titleFromFilename, validateFile } from "../lib/files";
 import { TYPE_LABEL } from "../lib/labels";
+import { FileTypeIcon, Icon } from "./icons";
 import { Alert, Button, Dialog, Field, errorMessage } from "./ui";
 
 export default function UploadDialog({
@@ -107,6 +108,7 @@ export default function UploadDialog({
       open={open}
       onClose={uploading ? () => undefined : onClose}
       title="Upload a document"
+      description="It is scanned, read and indexed in the background, then becomes searchable."
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={uploading}>
@@ -139,16 +141,22 @@ export default function UploadDialog({
           />
           {file ? (
             <div className="dropzone-file">
-              <strong>{file.name}</strong>
-              <span className="muted">{formatBytes(file.size)}</span>
-              <Button size="sm" variant="ghost" onClick={() => input.current?.click()}>
+              <FileTypeIcon fileName={file.name} size="lg" />
+              <span className="dropzone-file-text">
+                <strong>{file.name}</strong>
+                <span className="muted small">{formatBytes(file.size)}</span>
+              </span>
+              <Button size="sm" variant="secondary" onClick={() => input.current?.click()}>
                 Choose another
               </Button>
             </div>
           ) : (
             <>
+              <span className="dropzone-icon" aria-hidden="true">
+                <Icon name="upload-cloud" size={20} />
+              </span>
               <p className="dropzone-title">Drop a file here</p>
-              <Button size="sm" onClick={() => input.current?.click()}>
+              <Button size="sm" icon="file" onClick={() => input.current?.click()}>
                 Choose a file
               </Button>
             </>

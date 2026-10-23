@@ -15,6 +15,7 @@ import { excerpt, findQuotedSpans, toUtf16Offset } from "../../lib/highlight";
 import { explainAbstention } from "../../lib/labels";
 import { Markdown } from "../../lib/markdown";
 import PageText from "../PageText";
+import { Icon, type IconName } from "../icons";
 import { Alert, Badge, Dialog, ErrorState, Skeleton, errorMessage, useToast } from "../ui";
 
 /** One answer, whether it came back just now or was loaded from history. */
@@ -136,12 +137,16 @@ export function SourceDialog({
       ) : source.data ? (
         <div className="stack">
           <div className="badge-row">
-            <Badge tone="neutral">
+            <Badge tone="neutral" icon="book-open">
               Page {source.data.page_number} of {source.data.page_count}
             </Badge>
-            <Badge tone="neutral">Version {source.data.version_number}</Badge>
+            <Badge tone="neutral" icon="layers">
+              Version {source.data.version_number}
+            </Badge>
             {source.data.extraction_method === "OCR" ? (
-              <Badge tone="warning">Read by OCR</Badge>
+              <Badge tone="warning" icon="scan">
+                Read by OCR
+              </Badge>
             ) : null}
           </div>
           {!source.data.is_current ? (
@@ -150,7 +155,8 @@ export function SourceDialog({
               reprocessed or replaced by a newer version, so the current text may differ.
             </Alert>
           ) : null}
-          <p className="muted small">
+          <p className="panel-note">
+            <Icon name="info" size={14} />
             The tinted passage is what was cited; the words the answer quoted are marked
             within it.
           </p>
@@ -165,7 +171,7 @@ export function SourceDialog({
             label={`Page ${source.data.page_number}`}
           />
           <Link
-            className="link"
+            className="link link-with-icon"
             // Offsets are only meaningful on the text they were cut from. When
             // the document has been reprocessed since, the link opens the page
             // without a highlight rather than marking whatever now sits at
@@ -178,6 +184,7 @@ export function SourceDialog({
             onClick={onClose}
           >
             Open the document at this page
+            <Icon name="arrow-right" size={14} />
           </Link>
         </div>
       ) : null}
@@ -187,10 +194,10 @@ export function SourceDialog({
 
 // --- The answer itself ----------------------------------------------------------------
 
-const RATINGS: [FeedbackRating, string][] = [
-  ["HELPFUL", "Helpful"],
-  ["NOT_HELPFUL", "Not helpful"],
-  ["INCORRECT", "Incorrect"],
+const RATINGS: [FeedbackRating, string, IconName][] = [
+  ["HELPFUL", "Helpful", "thumbs-up"],
+  ["NOT_HELPFUL", "Not helpful", "thumbs-down"],
+  ["INCORRECT", "Incorrect", "flag"],
 ];
 
 function Feedback({ messageId }: { messageId: number }) {
@@ -212,16 +219,17 @@ function Feedback({ messageId }: { messageId: number }) {
 
   return (
     <div className="feedback" role="group" aria-label="Rate this answer">
-      <span className="muted small">{rated ? "Thanks for the feedback." : "Was this useful?"}</span>
-      {RATINGS.map(([rating, label]) => (
+      <span className="feedback-label">{rated ? "Thanks for the feedback." : "Was this useful?"}</span>
+      {RATINGS.map(([rating, label, icon]) => (
         <button
           key={rating}
           type="button"
-          className={`chip${rated === rating ? " chip-active" : ""}`}
+          className={`chip chip-sm${rated === rating ? " chip-active" : ""}`}
           aria-pressed={rated === rating}
           disabled={pending}
           onClick={() => rate(rating)}
         >
+          <Icon name={icon} />
           {label}
         </button>
       ))}
@@ -242,19 +250,23 @@ export function Answer({
     <div className="answer">
       {answer.resolvedQuestion ? (
         <p className="answer-resolved muted small">
+          <Icon name="corner-down-left" size={13} />
           Read as a follow-up: searched for “{answer.resolvedQuestion}”.
         </p>
       ) : null}
 
       {answer.abstained ? (
         <div className="abstention">
-          <p className="abstention-title">Not enough evidence to answer</p>
-          <p>{explainAbstention(answer.abstentionReason)}</p>
-          {answer.notes.filter((note) => note.includes("image")).map((note) => (
-            <p key={note} className="muted small">
-              {note}
-            </p>
-          ))}
+          <Icon name="alert-triangle" size={18} />
+          <div className="abstention-body">
+            <p className="abstention-title">Not enough evidence to answer</p>
+            <p>{explainAbstention(answer.abstentionReason)}</p>
+            {answer.notes.filter((note) => note.includes("image")).map((note) => (
+              <p key={note} className="muted small">
+                {note}
+              </p>
+            ))}
+          </div>
         </div>
       ) : (
         <Markdown
@@ -304,7 +316,10 @@ export function Answer({
 
       {answer.citations.length ? (
         <div className="sources">
-          <p className="sources-title">Sources</p>
+          <p className="sources-title">
+            <Icon name="quote" size={13} />
+            Sources
+          </p>
           <ol className="source-list">
             {answer.citations.map((citation) => {
               const window = excerpt(citation.text, 0, Math.min(citation.text.length, 200), 0);
@@ -313,10 +328,8 @@ export function Answer({
                   <button type="button" className="source" onClick={() => onInspect(citation, answer.text)}>
                     <span className="source-marker">{citation.marker}</span>
                     <span className="source-body">
-                      <span className="source-title">
-                        {citation.document_title}
-                        <span className="muted"> · page {citation.page_number}</span>
-                      </span>
+                      <span className="source-title">{citation.document_title}</span>
+                      <span className="source-page">Page {citation.page_number}</span>
                       <span className="source-excerpt">
                         {window.text}
                         {window.clippedEnd || citation.text.length > 200 ? "…" : ""}
@@ -331,9 +344,10 @@ export function Answer({
       ) : null}
 
       <div className="answer-meta">
-        {answer.source === "general" ? (
+        {answer.abstained ? null : answer.source === "general" ? (
           <Badge
             tone="warning"
+            icon="globe"
             title="Your documents had nothing on this, so the answer comes from the model's general knowledge. It has no sources and was not checked against your documents."
           >
             General knowledge · not from your documents
@@ -341,6 +355,7 @@ export function Answer({
         ) : (
           <Badge
             tone={answer.generative ? "info" : "neutral"}
+            icon={answer.generative ? "sparkles" : "quote"}
             title={
               answer.generative
                 ? `Written by ${answer.modelName} and checked against the cited passages`
@@ -350,37 +365,43 @@ export function Answer({
             {answer.generative ? "Written from sources" : "Quoted from sources"}
           </Badge>
         )}
-        <span className="muted small">{formatDuration(answer.durationMs)}</span>
-        <details className="answer-details">
-          <summary>How this answer was produced</summary>
-          <ul className="details-list">
-            <li>
-              {answer.retrieved} passages retrieved, {answer.passagesUsed} used
-              {answer.semantic ? " (keyword and meaning search)" : " (keyword search)"}
-            </li>
-            {answer.reranker ? <li>Ranked by {answer.reranker}</li> : null}
-            <li>Answered by {answer.modelName || "—"}</li>
-            {!answer.abstained && answer.source !== "general" ? (
-              <li>
-                Every figure checked against the cited passages; wording support{" "}
-                {formatPercent(answer.supportRatio)}
-              </li>
-            ) : null}
-            {Object.keys(answer.timings).length ? (
-              <li>
-                Time:{" "}
-                {Object.entries(answer.timings)
-                  .map(([stage, ms]) => `${stage} ${formatDuration(ms)}`)
-                  .join(", ")}
-              </li>
-            ) : null}
-            {answer.notes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-          </ul>
-        </details>
+        <span className="answer-duration">
+          <Icon name="clock" size={13} />
+          {formatDuration(answer.durationMs)}
+        </span>
         {answer.id ? <Feedback messageId={answer.id} /> : null}
       </div>
+      <details className="answer-details">
+        <summary>
+          <Icon name="chevron-right" size={14} />
+          How this answer was produced
+        </summary>
+        <ul className="details-list">
+          <li>
+            {answer.retrieved} passages retrieved, {answer.passagesUsed} used
+            {answer.semantic ? " (keyword and meaning search)" : " (keyword search)"}
+          </li>
+          {answer.reranker ? <li>Ranked by {answer.reranker}</li> : null}
+          <li>Answered by {answer.modelName || "—"}</li>
+          {!answer.abstained && answer.source !== "general" ? (
+            <li>
+              Every figure checked against the cited passages; wording support{" "}
+              {formatPercent(answer.supportRatio)}
+            </li>
+          ) : null}
+          {Object.keys(answer.timings).length ? (
+            <li>
+              Time:{" "}
+              {Object.entries(answer.timings)
+                .map(([stage, ms]) => `${stage} ${formatDuration(ms)}`)
+                .join(", ")}
+            </li>
+          ) : null}
+          {answer.notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      </details>
     </div>
   );
 }

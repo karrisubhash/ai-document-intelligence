@@ -1,5 +1,6 @@
 import { api } from "../../api/client";
 import { useResource } from "../../api/hooks";
+import { Icon } from "../../components/icons";
 import {
   Alert,
   Badge,
@@ -25,7 +26,7 @@ export default function SystemPage() {
         title="System status"
         description="Dependencies, workload and which AI components are configured. No secrets are shown here."
         actions={
-          <Button onClick={status.reload} loading={status.loading}>
+          <Button icon="refresh" onClick={status.reload} loading={status.loading}>
             Check again
           </Button>
         }
@@ -33,7 +34,9 @@ export default function SystemPage() {
       {status.error && !data ? (
         <ErrorState error={status.error} onRetry={status.reload} />
       ) : !data ? (
-        <Skeleton lines={8} />
+        <div className="card card-body">
+          <Skeleton lines={8} />
+        </div>
       ) : (
         <div className="stack">
           {data.debug ? (
@@ -42,24 +45,36 @@ export default function SystemPage() {
               only and must be off in production.
             </Alert>
           ) : null}
-          <p className="muted small">Checked {formatDateTime(data.checked_at)}</p>
+          <p className="checked-at">
+            <Icon name="clock" size={14} />
+            Checked {formatDateTime(data.checked_at)}
+          </p>
 
           <div className="grid-4">
             {Object.entries(data.components).map(([name, component]) => (
               <div key={name} className={`health health-${component.status}`}>
-                <span className="health-name">{humanize(name)}</span>
-                <Badge tone={component.status === "ok" ? "success" : component.status === "skipped" ? "muted" : "danger"}>
-                  {component.status === "ok" ? "Healthy" : component.status === "skipped" ? "Not checked" : "Failing"}
-                </Badge>
-                <span className="muted small">
-                  {component.error ? component.error : `${component.latency_ms} ms`}
+                <div className="health-head">
+                  <span className="health-name">{humanize(name)}</span>
+                  <Badge
+                    tone={component.status === "ok" ? "success" : component.status === "skipped" ? "muted" : "danger"}
+                    dot
+                  >
+                    {component.status === "ok" ? "Healthy" : component.status === "skipped" ? "Not checked" : "Failing"}
+                  </Badge>
+                </div>
+                <span className="health-detail">
+                  {component.error
+                    ? component.error
+                    : component.status === "skipped"
+                      ? "Not checked on this installation"
+                      : `${component.latency_ms} ms`}
                 </span>
               </div>
             ))}
           </div>
 
           <div className="grid-2">
-            <Card title="Workload">
+            <Card title="Workload" icon="activity">
               <DescriptionList
                 items={[
                   ...Object.entries(data.queues).map(
@@ -73,7 +88,7 @@ export default function SystemPage() {
                 ]}
               />
             </Card>
-            <Card title="Content">
+            <Card title="Content" icon="database">
               <DescriptionList
                 items={[
                   ...Object.entries(data.documents.by_status).map(
@@ -87,7 +102,7 @@ export default function SystemPage() {
             </Card>
           </div>
 
-          <Card title="AI configuration">
+          <Card title="AI configuration" icon="cpu">
             <DescriptionList
               items={[
                 [

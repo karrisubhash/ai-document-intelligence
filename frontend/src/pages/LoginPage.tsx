@@ -2,7 +2,52 @@ import { useState, type FormEvent } from "react";
 
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { BrandMark, Icon, type IconName } from "../components/icons";
 import { Alert, Button, Field, errorMessage } from "../components/ui";
+
+const FEATURES: [IconName, string, string][] = [
+  [
+    "quote",
+    "Answers with their sources",
+    "Every answer links to the passage it came from - or says plainly that your documents do not cover it.",
+  ],
+  [
+    "search",
+    "Search by wording and by meaning",
+    "Find a rule, a figure or a reference number across every document you are allowed to read.",
+  ],
+  [
+    "shield",
+    "Access stays where it belongs",
+    "Your department decides what you can see, and every view and change is recorded in the audit log.",
+  ],
+];
+
+/** A cited answer, drawn without words: what the product does, not a claim about any policy. */
+function Illustration() {
+  return (
+    <div className="login-illustration" aria-hidden="true">
+      <span className="login-illustration-question" />
+      <div className="login-illustration-answer">
+        <BrandMark size="sm" />
+        <div className="login-illustration-lines">
+          <span className="login-illustration-bar" />
+          <span className="login-illustration-row">
+            <span className="login-illustration-bar" />
+            <span className="login-illustration-cite">1</span>
+          </span>
+          <span className="login-illustration-bar login-illustration-bar-short" />
+        </div>
+      </div>
+      <div className="login-illustration-source">
+        <Icon name="file-text" size={14} />
+        <span>
+          Source 1 · page 12 · <mark>quoted passage</mark>
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export default function LoginPage() {
   const { login, expired } = useAuth();
@@ -35,67 +80,100 @@ export default function LoginPage() {
 
   return (
     <div className="login">
-      <div className="login-panel">
-        <div className="brand brand-large">
-          <span className="brand-mark" aria-hidden="true" />
+      <div className="login-aside">
+        <div className="brand">
+          <BrandMark />
           <span className="brand-name">Document Intelligence</span>
         </div>
-        <h1 className="login-title">Sign in</h1>
-        <p className="login-subtitle">
-          Search, read and ask questions of your institution's documents.
-        </p>
-
-        {expired ? (
-          <Alert tone="info" title="Your session ended">
-            You were signed out after a period of time or a password change. Sign in to
-            continue.
-          </Alert>
-        ) : null}
-
-        <form className="stack" onSubmit={submit} noValidate>
-          <Field label="Username" required>
-            {(props) => (
-              <input
-                {...props}
-                className="input"
-                name="username"
-                autoComplete="username"
-                autoFocus
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                required
-              />
-            )}
-          </Field>
-          <Field label="Password" required>
-            {(props) => (
-              <input
-                {...props}
-                className="input"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
-            )}
-          </Field>
-          {error ? <Alert tone="danger">{error}</Alert> : null}
-          <Button
-            type="submit"
-            variant="primary"
-            loading={pending}
-            disabled={!username.trim() || !password}
-            className="btn-block"
-          >
-            Sign in
-          </Button>
-        </form>
-        <p className="login-footnote">
-          Accounts are issued by your department administrator.
-        </p>
+        <div className="login-pitch">
+          <p className="login-headline">Answers you can trace back to the page.</p>
+          <p className="login-lead">
+            Search, read and ask questions of your institution's regulations, policies,
+            circulars and forms.
+          </p>
+          <ul className="login-features">
+            {FEATURES.map(([icon, title, text]) => (
+              <li key={title} className="login-feature">
+                <span className="login-feature-icon" aria-hidden="true">
+                  <Icon name={icon} size={18} />
+                </span>
+                <span>
+                  <span className="login-feature-title">{title}</span>
+                  <br />
+                  <span className="login-feature-text">{text}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <Illustration />
       </div>
+
+      <main className="login-main">
+        <div className="login-panel">
+          <div className="brand login-mobile-brand">
+            <BrandMark />
+            <span className="brand-name">Document Intelligence</span>
+          </div>
+          <h1 className="login-title">Sign in</h1>
+          <p className="login-subtitle">
+            Search, read and ask questions of your institution's documents.
+          </p>
+
+          {expired ? (
+            <Alert tone="info" title="Your session ended">
+              You were signed out after a period of time or a password change. Sign in to
+              continue.
+            </Alert>
+          ) : null}
+
+          <form className="stack" onSubmit={submit} noValidate>
+            <Field label="Username" required>
+              {(props) => (
+                <input
+                  {...props}
+                  className="input input-lg"
+                  name="username"
+                  autoComplete="username"
+                  autoFocus
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  required
+                />
+              )}
+            </Field>
+            <Field label="Password" required>
+              {(props) => (
+                <input
+                  {...props}
+                  className="input input-lg"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                />
+              )}
+            </Field>
+            {error ? <Alert tone="danger">{error}</Alert> : null}
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              loading={pending}
+              disabled={!username.trim() || !password}
+              className="btn-block"
+            >
+              Sign in
+            </Button>
+          </form>
+          <p className="login-footnote">
+            <Icon name="lock" size={14} />
+            Accounts are issued by your department administrator.
+          </p>
+        </div>
+      </main>
     </div>
   );
 }

@@ -3,8 +3,10 @@ import { useState, type FormEvent } from "react";
 import { ApiError, api } from "../api/client";
 import { useAction } from "../api/hooks";
 import { useMe } from "../auth/AuthContext";
+import { Icon } from "../components/icons";
 import {
   Alert,
+  Avatar,
   Button,
   Card,
   DescriptionList,
@@ -47,7 +49,17 @@ export default function AccountPage() {
   return (
     <div className="page page-narrow">
       <PageHeader title="Account" description="Your profile and sign-in details." />
-      <Card title="Profile">
+      <Card title="Profile" icon="user">
+        <div className="profile">
+          <Avatar name={displayName(me)} size="lg" />
+          <div>
+            <p className="profile-name">{displayName(me)}</p>
+            <p className="profile-meta">
+              {me.role ? ROLE_LABEL[me.role] : "No role"}
+              {me.department ? ` · ${me.department}` : ""}
+            </p>
+          </div>
+        </div>
         <DescriptionList
           items={[
             ["Name", displayName(me)],
@@ -57,13 +69,18 @@ export default function AccountPage() {
             ["Department", me.department || "None assigned"],
           ]}
         />
-        <p className="muted small">
+        <p className="panel-note">
+          <Icon name="shield" size={14} />
           Your role and department decide which documents you can see. Only an administrator
           can change them.
         </p>
       </Card>
 
-      <Card title="Change password">
+      <Card
+        title="Change password"
+        icon="key"
+        description="Changing it signs you out everywhere else."
+      >
         <form className="stack" onSubmit={submit} noValidate>
           <Field label="Current password" error={fieldErrors.current_password} required>
             {(props) => (
@@ -113,7 +130,7 @@ export default function AccountPage() {
           {change.error && !Object.keys(fieldErrors).length ? (
             <Alert tone="danger">{errorMessage(change.error)}</Alert>
           ) : null}
-          <div>
+          <div className="form-actions">
             <Button
               type="submit"
               variant="primary"

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import { useAction, useResource } from "../api/hooks";
 import { DOCUMENT_TYPES, type SearchHit, type SearchResponse } from "../api/types";
+import { Icon } from "../components/icons";
 import {
   Alert,
   Badge,
@@ -39,22 +40,30 @@ function Snippet({ text, query }: { text: string; query: string }) {
 function Hit({ hit, query, semantic }: { hit: SearchHit; query: string; semantic: boolean }) {
   return (
     <li className="result">
-      <div className="result-head">
-        <Link
-          className="result-title"
-          to={`/documents/${hit.document_id}?tab=text&page=${hit.page_number}&start=${hit.character_start}&end=${hit.character_end}`}
-        >
-          {hit.document_title}
-        </Link>
-        <span className="muted small">Page {hit.page_number}</span>
-        <span className="badge-row">
-          {hit.matched_by.includes("lexical") ? <Badge tone="neutral">Wording</Badge> : null}
-          {hit.matched_by.includes("vector") ? (
-            <Badge tone="info">{semantic ? "Meaning" : "Similar wording"}</Badge>
-          ) : null}
-        </span>
+      <span className="icon-tile" aria-hidden="true">
+        <Icon name="file-text" />
+      </span>
+      <div className="result-body">
+        <div className="result-head">
+          <Link
+            className="result-title"
+            to={`/documents/${hit.document_id}?tab=text&page=${hit.page_number}&start=${hit.character_start}&end=${hit.character_end}`}
+          >
+            {hit.document_title}
+          </Link>
+          <span className="result-page">
+            <Icon name="book-open" size={13} />
+            Page {hit.page_number}
+          </span>
+          <span className="badge-row">
+            {hit.matched_by.includes("lexical") ? <Badge tone="neutral">Wording</Badge> : null}
+            {hit.matched_by.includes("vector") ? (
+              <Badge tone="info">{semantic ? "Meaning" : "Similar wording"}</Badge>
+            ) : null}
+          </span>
+        </div>
+        <Snippet text={hit.text} query={query} />
       </div>
-      <Snippet text={hit.text} query={query} />
     </li>
   );
 }
@@ -64,13 +73,17 @@ const plural = (count: number, one: string, many = `${one}s`) => `${count} ${cou
 export default function SearchPage() {
   useDocumentTitle("Search");
   const navigate = useNavigate();
+  const location = useLocation();
   const departments = useResource(() => api.departments(), []);
   const collections = useResource(() => api.collections(), []);
 
   // The query is deliberately NOT put in the URL. The search API takes it
   // by POST so that what people look for never lands in access logs or
   // browser history; mirroring it into the address bar would undo that.
-  const [query, setQuery] = useState("");
+  // Quick find hands a query over in history state instead, which this
+  // page clears as soon as it has read it.
+  const handoff = ((location.state as { query?: string } | null)?.query ?? "").trim();
+  const [query, setQuery] = useState(handoff);
   const [documentType, setDocumentType] = useState("");
   const [department, setDepartment] = useState("");
   const [collection, setCollection] = useState("");
@@ -99,6 +112,21 @@ export default function SearchPage() {
     if (limit === undefined) setPageSize(outcome.value.limit);
     return true;
   };
+
+  const sentHandoff = useRef(false);
+  useEffect(() => {
+    if (!handoff || sentHandoff.current) return;
+    sentHandoff.current = true;
+    navigate(location.pathname, { replace: true, state: {} });
+    void run({
+      query: handoff,
+      document_type: "",
+      department: "",
+      collection_id: null,
+      include_below_floor: false,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The button that asks for the weaker matches unmounts once they arrive,
   // which dropped keyboard focus to <body>. It moves to their heading instead.
@@ -147,69 +175,90 @@ export default function SearchPage() {
         description="Finds passages by exact wording and by meaning, across every document you are allowed to read."
       />
 
-      <form className="search-form" onSubmit={submit} role="search">
-        <label htmlFor="search-query" className="visually-hidden">
-          Search documents
-        </label>
-        <input
-          id="search-query"
-          type="search"
-          className="input input-lg"
-          placeholder="Search for a rule, a figure, a reference number…"
-          value={query}
-          maxLength={1000}
-          onChange={(event) => setQuery(event.target.value)}
-          autoFocus
-        />
-        <select
-          className="input"
-          aria-label="Type"
-          value={documentType}
-          onChange={(event) => setDocumentType(event.target.value)}
-        >
-          <option value="">Any type</option>
-          {DOCUMENT_TYPES.map((value) => (
-            <option key={value} value={value}>
-              {TYPE_LABEL[value]}
-            </option>
-          ))}
-        </select>
-        <select
-          className="input"
-          aria-label="Department"
-          value={department}
-          onChange={(event) => setDepartment(event.target.value)}
-        >
-          <option value="">Any department</option>
-          {(departments.data ?? []).map((item) => (
-            <option key={item.id} value={item.name}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-        {collections.data?.results.length ? (
-          <select
-            className="input"
-            aria-label="Collection"
-            value={collection}
-            onChange={(event) => setCollection(event.target.value)}
+      <form className="search-panel" onSubmit={submit} role="search">
+        <div className="search-main">
+          <label htmlFor="search-query" className="visually-hidden">
+            Search documents
+          </label>
+          <div className="input-icon">
+            <Icon name="search" size={18} />
+            <input
+              id="search-query"
+              type="search"
+              className="input input-lg"
+              placeholder="Search for a rule, a figure, a reference number…"
+              value={query}
+              maxLength={1000}
+              onChange={(event) => setQuery(event.target.value)}
+              autoFocus
+            />
+          </div>
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            loading={search.pending}
+            disabled={!query.trim()}
           >
-            <option value="">Any collection</option>
-            {collections.data.results.map((item) => (
-              <option key={item.id} value={item.id}>
+            Search
+          </Button>
+        </div>
+        <div className="search-filters">
+          <span className="search-filters-label" aria-hidden="true">
+            <Icon name="filter" size={14} />
+            Filter
+          </span>
+          <select
+            className="input input-sm"
+            aria-label="Type"
+            value={documentType}
+            onChange={(event) => setDocumentType(event.target.value)}
+          >
+            <option value="">Any type</option>
+            {DOCUMENT_TYPES.map((value) => (
+              <option key={value} value={value}>
+                {TYPE_LABEL[value]}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input input-sm"
+            aria-label="Department"
+            value={department}
+            onChange={(event) => setDepartment(event.target.value)}
+          >
+            <option value="">Any department</option>
+            {(departments.data ?? []).map((item) => (
+              <option key={item.id} value={item.name}>
                 {item.name}
               </option>
             ))}
           </select>
-        ) : null}
-        <Button type="submit" variant="primary" loading={search.pending} disabled={!query.trim()}>
-          Search
-        </Button>
+          {collections.data?.results.length ? (
+            <select
+              className="input input-sm"
+              aria-label="Collection"
+              value={collection}
+              onChange={(event) => setCollection(event.target.value)}
+            >
+              <option value="">Any collection</option>
+              {collections.data.results.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
       </form>
 
       {search.error ? <ErrorState error={search.error} title="Search failed" /> : null}
 
-      {search.pending && !result ? <Skeleton lines={6} /> : null}
+      {search.pending && !result ? (
+        <div className="card card-body">
+          <Skeleton lines={6} />
+        </div>
+      ) : null}
 
       {result ? (
         <section aria-live="polite" aria-busy={search.pending}>
@@ -222,6 +271,7 @@ export default function SearchPage() {
             <span className="badge-row">
               <Badge
                 tone={result.semantic ? "info" : "muted"}
+                icon={result.semantic ? "sparkles" : "hash"}
                 title={
                   result.semantic
                     ? `Matched by meaning with ${result.embedding_model}`
@@ -231,7 +281,7 @@ export default function SearchPage() {
                 {result.semantic ? "Keyword + meaning" : "Keyword matching"}
               </Badge>
               {result.ranking?.reranker && !result.ranking.degraded ? (
-                <Badge tone="info" title={`Reordered by ${result.ranking.reranker}`}>
+                <Badge tone="info" icon="layers" title={`Reordered by ${result.ranking.reranker}`}>
                   Ranked by relevance
                 </Badge>
               ) : null}
@@ -247,21 +297,25 @@ export default function SearchPage() {
           ) : null}
 
           {strong.length === 0 && hidden > 0 ? (
-            <EmptyState title="No close match" icon="🔍">
-              {plural(hidden, "passage")} share words or meaning with this search, but none is a
-              close enough match.{" "}
-              {weak.length ? `The closest ${weak.length === 1 ? "is" : plural(weak.length, "is", "are")} below. ` : null}
-              {showingWeaker || weak.length >= hidden ? null : (
-                <Button variant="ghost" onClick={() => void showWeaker()} loading={search.pending}>
-                  {weak.length ? `Show all ${hidden} weaker matches` : "Show the weaker matches"}
-                </Button>
-              )}
-            </EmptyState>
+            <div className="card">
+              <EmptyState title="No close match" icon="search">
+                {plural(hidden, "passage")} share words or meaning with this search, but none is a
+                close enough match.{" "}
+                {weak.length ? `The closest ${weak.length === 1 ? "is" : plural(weak.length, "is", "are")} below. ` : null}
+                {showingWeaker || weak.length >= hidden ? null : (
+                  <Button variant="ghost" onClick={() => void showWeaker()} loading={search.pending}>
+                    {weak.length ? `Show all ${hidden} weaker matches` : "Show the weaker matches"}
+                  </Button>
+                )}
+              </EmptyState>
+            </div>
           ) : strong.length === 0 ? (
-            <EmptyState title="Nothing found" icon="🔍">
-              No passage in the documents you can access matches this. Try other words, or
-              ask a question instead — the assistant can combine several passages.
-            </EmptyState>
+            <div className="card">
+              <EmptyState title="Nothing found" icon="search">
+                No passage in the documents you can access matches this. Try other words, or
+                ask a question instead — the assistant can combine several passages.
+              </EmptyState>
+            </div>
           ) : (
             <ol className="results" aria-label="Search results">
               {strong.map((hit) => (
@@ -275,7 +329,8 @@ export default function SearchPage() {
               <h2 className="results-weak-head" tabIndex={-1} ref={weakerHeading}>
                 Weaker matches
               </h2>
-              <p className="muted small">
+              <p className="panel-note">
+                <Icon name="info" size={14} />
                 Scored below the relevance threshold, so they may only share words with the search.
               </p>
               <ol className="results results-weak" aria-label="Weaker matches">
@@ -292,6 +347,7 @@ export default function SearchPage() {
                 may be more" when every match was already shown. */}
             {strong.length >= limit && limit < maxLimit ? (
               <Button
+                icon="chevron-down"
                 onClick={() => submitted && void run(submitted, Math.min(maxLimit, limit + (pageSize || limit)))}
                 loading={search.pending}
               >
@@ -304,17 +360,23 @@ export default function SearchPage() {
               </Button>
             ) : null}
             {result.results.length || hidden ? (
-              <Button variant="ghost" onClick={() => navigate("/ask", { state: { question: asked } })}>
+              <Button
+                variant="ghost"
+                icon="sparkles"
+                onClick={() => navigate("/ask", { state: { question: asked } })}
+              >
                 Ask this as a question instead
               </Button>
             ) : null}
           </div>
         </section>
       ) : !search.pending && !search.error ? (
-        <EmptyState title="Search your documents" icon="⌕">
-          Exact identifiers such as <code>REG/2024/117</code> work, and so do plain-language
-          phrases. Results only ever come from documents you are allowed to read.
-        </EmptyState>
+        <div className="card">
+          <EmptyState title="Search your documents" icon="search">
+            Exact identifiers such as <code>REG/2024/117</code> work, and so do plain-language
+            phrases. Results only ever come from documents you are allowed to read.
+          </EmptyState>
+        </div>
       ) : null}
     </div>
   );

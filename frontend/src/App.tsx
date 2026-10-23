@@ -1,8 +1,9 @@
-import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { lazy, Suspense, useRef, type ReactNode } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import type { Capabilities } from "./api/types";
 import { useAuth } from "./auth/AuthContext";
+import { BrandMark } from "./components/icons";
 import Layout from "./components/Layout";
 import { Button, EmptyState, Spinner } from "./components/ui";
 import LoginPage from "./pages/LoginPage";
@@ -37,7 +38,7 @@ function Requires({
   const { can } = useAuth();
   if (!capability.some((item) => can(item))) {
     return (
-      <EmptyState title="You do not have access to this page" icon="🔒">
+      <EmptyState title="You do not have access to this page" icon="lock">
         It is available to administrators. If you need it, ask your department
         administrator.
       </EmptyState>
@@ -48,10 +49,38 @@ function Requires({
 
 function NotFound() {
   return (
-    <EmptyState title="Page not found" icon="🧭">
+    <EmptyState title="Page not found" icon="compass">
       The address may be mistyped, or the page may have moved.
     </EmptyState>
   );
+}
+
+/**
+ * A page that quick find can hand work to - a question for Ask, a query for
+ * Search, an upload for Documents - starts afresh when it does, even when
+ * it is already the page on screen: these pages read a hand-over only when
+ * they mount. The key changes only when a NEW hand-over arrives, so the
+ * page clearing its history state afterwards (or Ask moving /ask to
+ * /ask/12) does not remount it again.
+ */
+function useHandoffKey() {
+  const location = useLocation();
+  const handoff = (location.state as { handoff?: string } | null)?.handoff;
+  const key = useRef("initial");
+  if (handoff && handoff !== key.current) key.current = handoff;
+  return key.current;
+}
+
+function ChatRoute() {
+  return <ChatPage key={useHandoffKey()} />;
+}
+
+function SearchRoute() {
+  return <SearchPage key={useHandoffKey()} />;
+}
+
+function DocumentsRoute() {
+  return <DocumentsPage key={useHandoffKey()} />;
 }
 
 export default function App() {
@@ -60,7 +89,10 @@ export default function App() {
   if (state === "checking") {
     return (
       <div className="centered">
-        <Spinner label="Checking your session…" />
+        <div className="session-state">
+          <BrandMark size="lg" />
+          <Spinner label="Checking your session…" />
+        </div>
       </div>
     );
   }
@@ -70,15 +102,21 @@ export default function App() {
   if (state === "unreachable") {
     return (
       <div className="centered">
-        <EmptyState title="The server cannot be reached" icon="⚠">
-          <p>
-            Your session may still be valid - nothing has been signed out. Check your connection,
-            then try again.
-          </p>
-          <Button variant="primary" onClick={() => void refresh().catch(() => undefined)}>
-            Try again
-          </Button>
-        </EmptyState>
+        <div className="session-card">
+          <EmptyState title="The server cannot be reached" icon="wifi-off">
+            <p>
+              Your session may still be valid - nothing has been signed out. Check your
+              connection, then try again.
+            </p>
+            <Button
+              variant="primary"
+              icon="refresh"
+              onClick={() => void refresh().catch(() => undefined)}
+            >
+              Try again
+            </Button>
+          </EmptyState>
+        </div>
       </div>
     );
   }
@@ -94,11 +132,11 @@ export default function App() {
       >
         <Routes>
           <Route path="/" element={<DashboardPage />} />
-          <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/documents" element={<DocumentsRoute />} />
           <Route path="/documents/:id" element={<DocumentDetailPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/ask" element={<ChatPage />} />
-          <Route path="/ask/:conversationId" element={<ChatPage />} />
+          <Route path="/search" element={<SearchRoute />} />
+          <Route path="/ask" element={<ChatRoute />} />
+          <Route path="/ask/:conversationId" element={<ChatRoute />} />
           <Route path="/collections" element={<CollectionsPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route

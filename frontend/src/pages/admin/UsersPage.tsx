@@ -4,8 +4,10 @@ import { ApiError, api } from "../../api/client";
 import { useAction, useDebouncedValue, useResource } from "../../api/hooks";
 import type { AdminUser, Role } from "../../api/types";
 import { useAuth, useMe } from "../../auth/AuthContext";
+import { Icon } from "../../components/icons";
 import {
   Alert,
+  Avatar,
   Badge,
   Button,
   Dialog,
@@ -346,23 +348,26 @@ export default function UsersPage() {
             : "Accounts in your department. You can manage faculty, staff and students."
         }
         actions={
-          <Button variant="primary" onClick={() => setEditing("new")}>
+          <Button variant="primary" icon="plus" onClick={() => setEditing("new")}>
             New account
           </Button>
         }
       />
       <div className="toolbar">
-        <input
-          type="search"
-          className="input toolbar-search"
-          placeholder="Search by name, username or email…"
-          aria-label="Search users"
-          value={searchInput}
-          onChange={(event) => {
-            setSearchInput(event.target.value);
-            setPage(1);
-          }}
-        />
+        <div className="input-icon toolbar-search">
+          <Icon name="search" />
+          <input
+            type="search"
+            className="input"
+            placeholder="Search by name, username or email…"
+            aria-label="Search users"
+            value={searchInput}
+            onChange={(event) => {
+              setSearchInput(event.target.value);
+              setPage(1);
+            }}
+          />
+        </div>
         <select
           className="input"
           aria-label="Role"
@@ -397,9 +402,13 @@ export default function UsersPage() {
       {users.error && !users.data ? (
         <ErrorState error={users.error} onRetry={users.reload} />
       ) : users.loading && !users.data ? (
-        <Skeleton lines={6} />
+        <div className="card card-body">
+          <Skeleton lines={6} />
+        </div>
       ) : !users.data?.results.length ? (
-        <EmptyState title="No accounts match" icon="◉" />
+        <div className="card">
+          <EmptyState title="No accounts match" icon="users" />
+        </div>
       ) : (
         <div className="table-wrap">
           <table className="table">
@@ -419,30 +428,45 @@ export default function UsersPage() {
               {users.data.results.map((user) => (
                 <tr key={user.id}>
                   <td>
-                    <span className="table-title">{displayName(user)}</span>
-                    <span className="table-sub">
-                      {user.username}
-                      {user.email ? ` · ${user.email}` : ""}
-                    </span>
+                    <div className="cell-title">
+                      <Avatar name={displayName(user)} />
+                      <div className="cell-title-text">
+                        <span className="table-title">{displayName(user)}</span>
+                        <span
+                          className="table-sub table-sub-truncate"
+                          title={user.email ? `${user.username} · ${user.email}` : undefined}
+                        >
+                          {user.username}
+                          {user.email ? ` · ${user.email}` : ""}
+                        </span>
+                      </div>
+                    </div>
                   </td>
                   <td>{ROLE_LABEL[user.role] ?? user.role}</td>
                   <td>{user.department || <span className="muted">—</span>}</td>
                   <td>
-                    <Badge tone={user.is_active ? "success" : "muted"}>
+                    <Badge tone={user.is_active ? "success" : "muted"} dot>
                       {user.is_active ? "Active" : "Inactive"}
                     </Badge>
                   </td>
-                  <td>{user.last_login ? formatRelative(user.last_login) : "Never"}</td>
-                  <td>
+                  <td className="nowrap muted">
+                    {user.last_login ? formatRelative(user.last_login) : "Never"}
+                  </td>
+                  <td className="cell-actions">
                     {user.can_manage ? (
                       <div className="button-row">
-                        <Button size="sm" onClick={() => setEditing(user)}>
+                        <Button size="sm" icon="pencil" onClick={() => setEditing(user)}>
                           Edit
                         </Button>
                         {/* Your own password is changed under Account, with
                             the current password - never here. */}
                         {user.id !== me.id ? (
-                          <Button size="sm" variant="ghost" onClick={() => setResetting(user)}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon="key"
+                            onClick={() => setResetting(user)}
+                          >
                             Set password
                           </Button>
                         ) : null}

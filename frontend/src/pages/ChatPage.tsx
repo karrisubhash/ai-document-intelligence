@@ -11,21 +11,29 @@ import {
   fromResponse,
   type AnswerView,
 } from "../components/chat/Answer";
+import { Icon } from "../components/icons";
 import {
   Alert,
   Badge,
   Button,
   ConfirmDialog,
   Dialog,
-  EmptyState,
   ErrorState,
+  IconButton,
   Skeleton,
   errorMessage,
   useDocumentTitle,
   useToast,
 } from "../components/ui";
+import { EXAMPLE_QUESTIONS } from "../lib/examples";
 import { formatRelative } from "../lib/format";
 import { Markdown } from "../lib/markdown";
+
+function fitComposer(box: HTMLTextAreaElement | null) {
+  if (!box) return;
+  box.style.height = "auto";
+  box.style.height = `${Math.min(box.scrollHeight, 220)}px`;
+}
 
 interface Turn {
   key: string;
@@ -37,12 +45,6 @@ interface Turn {
   /** Where the answer being written comes from, when the server said. */
   streamingSource?: string;
 }
-
-const SUGGESTIONS = [
-  "What is the minimum attendance required to sit the end-semester examination?",
-  "How long do I have to apply for revaluation?",
-  "What is the hostel curfew on Saturdays?",
-];
 
 function ConversationList({
   activeId,
@@ -66,52 +68,57 @@ function ConversationList({
 
   return (
     <aside className="conversations" aria-label="Conversations">
-      <Button variant="primary" className="btn-block" onClick={onNew}>
+      <Button variant="primary" icon="square-pen" className="btn-block" onClick={onNew}>
         New question
       </Button>
       {conversations.loading && !conversations.data ? (
-        <Skeleton lines={5} />
+        <div className="conversations-empty">
+          <Skeleton lines={5} />
+        </div>
       ) : conversations.error ? (
         <ErrorState error={conversations.error} onRetry={conversations.reload} />
       ) : conversations.data?.results.length ? (
-        <ul className="conversation-list">
-          {conversations.data.results.map((conversation) => (
-            <li
-              key={conversation.id}
-              className={`conversation${conversation.id === activeId ? " active" : ""}`}
-            >
-              <Link to={`/ask/${conversation.id}`} className="conversation-link">
-                <span className="conversation-title">
-                  {conversation.title || "Untitled conversation"}
-                </span>
-                <span className="conversation-meta">{formatRelative(conversation.updated_at)}</span>
-              </Link>
-              <div className="conversation-actions">
-                <button
-                  type="button"
-                  className="icon-button icon-button-sm"
-                  aria-label={`Rename ${conversation.title || "conversation"}`}
-                  onClick={() => {
-                    setTitle(conversation.title);
-                    setRenaming(conversation);
-                  }}
+        <>
+          <p className="conversations-label">Recent</p>
+          <ul className="conversation-list">
+            {conversations.data.results.map((conversation) => (
+              <li
+                key={conversation.id}
+                className={`conversation${conversation.id === activeId ? " active" : ""}`}
+              >
+                <Link
+                  to={`/ask/${conversation.id}`}
+                  className="conversation-link"
+                  aria-current={conversation.id === activeId ? "page" : undefined}
                 >
-                  ✎
-                </button>
-                <button
-                  type="button"
-                  className="icon-button icon-button-sm"
-                  aria-label={`Delete ${conversation.title || "conversation"}`}
-                  onClick={() => setDeleting(conversation)}
-                >
-                  🗑
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
+                  <span className="conversation-title">
+                    {conversation.title || "Untitled conversation"}
+                  </span>
+                  <span className="conversation-meta">{formatRelative(conversation.updated_at)}</span>
+                </Link>
+                <div className="conversation-actions">
+                  <IconButton
+                    icon="pencil"
+                    size="sm"
+                    label={`Rename ${conversation.title || "conversation"}`}
+                    onClick={() => {
+                      setTitle(conversation.title);
+                      setRenaming(conversation);
+                    }}
+                  />
+                  <IconButton
+                    icon="trash"
+                    size="sm"
+                    label={`Delete ${conversation.title || "conversation"}`}
+                    onClick={() => setDeleting(conversation)}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : (
-        <p className="muted small">Your conversations will appear here.</p>
+        <p className="conversations-empty">Your conversations will appear here.</p>
       )}
       {conversations.data && conversations.data.results.length < conversations.data.count ? (
         <Button variant="ghost" size="sm" onClick={onMore} loading={conversations.loading}>
@@ -152,16 +159,18 @@ function ConversationList({
           </>
         }
       >
-        <label className="field-label" htmlFor="conversation-title">
-          Title
-        </label>
-        <input
-          id="conversation-title"
-          className="input"
-          value={title}
-          maxLength={255}
-          onChange={(event) => setTitle(event.target.value)}
-        />
+        <div className="field">
+          <label className="field-label" htmlFor="conversation-title">
+            Title
+          </label>
+          <input
+            id="conversation-title"
+            className="input"
+            value={title}
+            maxLength={255}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+        </div>
       </Dialog>
 
       <ConfirmDialog
@@ -247,6 +256,17 @@ export default function ChatPage() {
   // then sent to the wrong one.
   const shown = useRef(conversationId);
   const view = useRef(0);
+  // Quick find hands Ask a new question by REPLACING this page. An answer
+  // the replaced page was still waiting for must then do nothing at all: it
+  // used to move the URL back to its own conversation, out from under the
+  // new question.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (shown.current === conversationId) return;
@@ -282,6 +302,23 @@ export default function ChatPage() {
   useEffect(() => {
     thread.current?.scrollTo({ top: thread.current.scrollHeight, behavior: "smooth" });
   }, [turns]);
+
+  // The composer grows with what is typed, up to its maximum height - and
+  // refits when its width changes, which re-wraps the text.
+  useEffect(() => fitComposer(composer.current), [draft]);
+  useEffect(() => {
+    const box = composer.current;
+    if (!box || typeof ResizeObserver !== "function") return;
+    let width = box.clientWidth;
+    const observer = new ResizeObserver(() => {
+      // Width only: refitting changes the height, which must not loop.
+      if (box.clientWidth === width) return;
+      width = box.clientWidth;
+      fitComposer(box);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
 
   // A question handed over from the dashboard or search is sent at once -
   // and cleared from the history entry FIRST, or a reload or a remount of
@@ -323,6 +360,7 @@ export default function ChatPage() {
             patch((turn) => ({ ...turn, streaming: "", streamingSource: source })),
         },
       );
+      if (!mounted.current) return;
       if (view.current !== askedIn) {
         // Saved in its own conversation, which the list now shows; not
         // displayed over the one the user moved to.
@@ -391,133 +429,169 @@ export default function ChatPage() {
       />
 
       <section className="chat-main" aria-label="Conversation">
+        <h1 className="visually-hidden">Ask</h1>
         <div className="thread" ref={thread} aria-live="polite" aria-busy={sending}>
-          {history.error && opening ? (
-            <ErrorState
-              error={history.error}
-              title="This conversation could not be opened"
-            />
-          ) : opening ? (
-            <Skeleton lines={6} />
-          ) : !turns.length ? (
-            <EmptyState title="Ask a question about your documents" icon="✦">
-              <p>
-                Answers are built only from documents you are allowed to read, and every claim
-                cites the passage it came from. When the documents do not say, you will be told
-                so instead of getting a guess.
-              </p>
-              <div className="suggestions">
-                {SUGGESTIONS.map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    type="button"
-                    className="chip"
-                    onClick={() => void send(suggestion)}
-                  >
-                    {suggestion}
-                  </button>
-                ))}
+          <div className="thread-inner">
+            {history.error && opening ? (
+              <ErrorState
+                error={history.error}
+                title="This conversation could not be opened"
+              />
+            ) : opening ? (
+              <Skeleton lines={6} />
+            ) : !turns.length ? (
+              <div className="chat-welcome">
+                <span className="chat-welcome-mark" aria-hidden="true">
+                  <Icon name="sparkles" size={26} />
+                </span>
+                <h2 className="chat-welcome-title">Ask a question about your documents</h2>
+                <p className="chat-welcome-text">
+                  Answers are built only from documents you are allowed to read, and every claim
+                  cites the passage it came from. When the documents do not say, you will be told
+                  so instead of getting a guess.
+                </p>
+                <div className="suggestions">
+                  {EXAMPLE_QUESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      className="suggestion"
+                      onClick={() => void send(suggestion)}
+                    >
+                      <Icon name="message" />
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </EmptyState>
-          ) : (
-            turns.map((turn) => (
-              <article key={turn.key} className="turn">
-                <div className="bubble bubble-user">
-                  <p>{turn.question}</p>
-                </div>
-                <div className="bubble bubble-assistant">
-                  {turn.answer ? (
-                    <Answer
-                      answer={turn.answer}
-                      onInspect={(citation, quote) => setInspecting({ citation, quote })}
-                    />
-                  ) : turn.error ? (
-                    <Alert tone="danger" title="No answer">
-                      {turn.error instanceof ApiError && turn.error.status === 429
-                        ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
-                        : errorMessage(turn.error)}
-                    </Alert>
-                  ) : turn.streaming ? (
-                    // Provisional: the server's final answer replaces it.
-                    <div className="answer answer-streaming" aria-live="polite" aria-busy="true">
-                      <Markdown
-                        source={turn.streaming}
-                        renderCitation={(marker, key) => <sup key={key}>[{marker}]</sup>}
-                      />
-                      {turn.streamingSource === "general" ? (
-                        <div className="answer-meta">
-                          <Badge tone="warning">General knowledge · not from your documents</Badge>
+            ) : (
+              turns.map((turn) => (
+                <article key={turn.key} className="turn">
+                  <div className="bubble bubble-user">
+                    <p>{turn.question}</p>
+                  </div>
+                  <div className="assistant-row">
+                    <span className="assistant-avatar" aria-hidden="true">
+                      <Icon name="sparkles" size={16} />
+                    </span>
+                    <div className="bubble bubble-assistant">
+                      {turn.answer ? (
+                        <Answer
+                          answer={turn.answer}
+                          onInspect={(citation, quote) => setInspecting({ citation, quote })}
+                        />
+                      ) : turn.error ? (
+                        <Alert tone="danger" title="No answer">
+                          {turn.error instanceof ApiError && turn.error.status === 429
+                            ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
+                            : errorMessage(turn.error)}
+                        </Alert>
+                      ) : turn.streaming ? (
+                        // Provisional: the server's final answer replaces it.
+                        <div className="answer answer-streaming" aria-live="polite" aria-busy="true">
+                          <Markdown
+                            source={turn.streaming}
+                            renderCitation={(marker, key) => <sup key={key}>[{marker}]</sup>}
+                          />
+                          {turn.streamingSource === "general" ? (
+                            <div className="answer-meta">
+                              <Badge tone="warning" icon="globe">
+                                General knowledge · not from your documents
+                              </Badge>
+                            </div>
+                          ) : null}
                         </div>
-                      ) : null}
+                      ) : (
+                        <div className="thinking">
+                          <span className="typing" aria-hidden="true">
+                            <span />
+                            <span />
+                            <span />
+                          </span>
+                          <span>Searching your documents and checking the evidence…</span>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="thinking">
-                      <span className="spinner" aria-hidden="true" />
-                      <span>Searching your documents and checking the evidence…</span>
-                    </div>
-                  )}
-                </div>
-              </article>
-            ))
-          )}
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
         </div>
 
         <form className="composer" onSubmit={submit}>
-          {scope ? (
-            <div className="scope">
-              <span>
-                Asking about <strong>{scope.title || `document ${scope.id}`}</strong> only
-              </span>
-              <button type="button" className="link-button" onClick={() => setScope(null)}>
-                Search all documents
-              </button>
+          <div className="composer-inner">
+            <div className="composer-box">
+              <label htmlFor="composer" className="visually-hidden">
+                Your question
+              </label>
+              <textarea
+                id="composer"
+                ref={composer}
+                className="composer-input"
+                rows={1}
+                maxLength={2000}
+                placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onKeyDown}
+                disabled={opening}
+              />
+              <div className="composer-bar">
+                <div className="composer-scope">
+                  {scope ? (
+                    <span className="scope-chip">
+                      <Icon name="file-text" size={14} />
+                      <span className="scope-chip-text">
+                        Asking about <strong>{scope.title || `document ${scope.id}`}</strong> only
+                      </span>
+                      <IconButton
+                        icon="x"
+                        size="sm"
+                        label="Search all documents"
+                        onClick={() => setScope(null)}
+                      />
+                    </span>
+                  ) : collections.data?.results.length ? (
+                    <>
+                      <label htmlFor="composer-collection">
+                        <Icon name="folder" size={14} />
+                        Ask within
+                      </label>
+                      <select
+                        id="composer-collection"
+                        className="input input-sm"
+                        value={collectionId}
+                        onChange={(event) => setCollectionId(event.target.value)}
+                      >
+                        <option value="">All documents</option>
+                        {collections.data.results.map((collection) => (
+                          <option key={collection.id} value={collection.id}>
+                            {collection.name}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : null}
+                </div>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  icon="arrow-up"
+                  loading={sending}
+                  disabled={!draft.trim() || opening}
+                >
+                  Ask
+                </Button>
+              </div>
             </div>
-          ) : collections.data?.results.length ? (
-            <div className="scope">
-              <label htmlFor="composer-collection">Ask within</label>
-              <select
-                id="composer-collection"
-                className="input"
-                value={collectionId}
-                onChange={(event) => setCollectionId(event.target.value)}
-              >
-                <option value="">All documents</option>
-                {collections.data.results.map((collection) => (
-                  <option key={collection.id} value={collection.id}>
-                    {collection.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-          <label htmlFor="composer" className="visually-hidden">
-            Your question
-          </label>
-          <div className="composer-row">
-            <textarea
-              id="composer"
-              ref={composer}
-              className="input composer-input"
-              rows={2}
-              maxLength={2000}
-              placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onKeyDown}
-              disabled={opening}
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              loading={sending}
-              disabled={!draft.trim() || opening}
-            >
-              Ask
-            </Button>
+            {turns.length ? (
+              <p className="composer-hint">
+                Follow-up questions like “what about MECH?” use this conversation for context.
+              </p>
+            ) : null}
           </div>
-          <p className="composer-hint muted small">
-            Follow-up questions like “what about MECH?” use this conversation for context.
-          </p>
         </form>
       </section>
 

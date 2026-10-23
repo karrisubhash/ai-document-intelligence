@@ -5,6 +5,7 @@ import { useResource } from "../../api/hooks";
 import type { DocumentDetail } from "../../api/types";
 import { formatBytes, formatDateTime } from "../../lib/format";
 import { ACCEPT_ATTRIBUTE, validateFile } from "../../lib/files";
+import { FileTypeIcon, Icon } from "../icons";
 import { Alert, Badge, Button, ErrorState, Skeleton, errorMessage, useToast } from "../ui";
 
 export default function VersionsPanel({
@@ -63,7 +64,8 @@ export default function VersionsPanel({
   return (
     <div className="stack">
       <div className="panel-intro">
-        <p className="muted small">
+        <p className="panel-note">
+          <Icon name="info" size={14} />
           Every upload is kept as its own immutable version. Search and answers use the
           current version only; earlier ones stay available as a record.
         </p>
@@ -78,6 +80,7 @@ export default function VersionsPanel({
               onChange={(event) => upload(event.target.files?.[0] ?? null)}
             />
             <Button
+              icon="upload"
               onClick={() => input.current?.click()}
               loading={progress !== null}
             >
@@ -95,7 +98,9 @@ export default function VersionsPanel({
             <tr>
               <th scope="col">Version</th>
               <th scope="col">File</th>
-              <th scope="col">Size</th>
+              <th scope="col" className="num">
+                Size
+              </th>
               <th scope="col">Uploaded</th>
               <th scope="col">SHA-256</th>
               <th scope="col">
@@ -106,23 +111,33 @@ export default function VersionsPanel({
           <tbody>
             {(versions.data ?? []).map((version) => (
               <tr key={version.id}>
-                <td>
-                  v{version.version_number}{" "}
-                  {version.id === document.current_version?.id ? (
-                    <Badge tone="info">Current</Badge>
-                  ) : null}
+                <td className="nowrap">
+                  <span className="badge-row">
+                    <span className="strong">v{version.version_number}</span>
+                    {version.id === document.current_version?.id ? (
+                      <Badge tone="info" dot>
+                        Current
+                      </Badge>
+                    ) : null}
+                  </span>
                 </td>
-                <td>{version.file_name}</td>
-                <td>{formatBytes(version.file_size)}</td>
+                <td>
+                  <span className="cell-title">
+                    <FileTypeIcon fileName={version.file_name} size="sm" />
+                    <span className="cell-title-text">{version.file_name}</span>
+                  </span>
+                </td>
+                <td className="num">{formatBytes(version.file_size)}</td>
                 <td>{formatDateTime(version.created_at)}</td>
                 <td>
                   <code className="checksum" title={version.checksum}>
                     {version.checksum?.slice(0, 12)}…
                   </code>
                 </td>
-                <td>
+                <td className="cell-actions">
                   <Button
                     size="sm"
+                    icon="download"
                     loading={downloading === version.version_number}
                     onClick={() => download(version.version_number, version.file_name)}
                   >
