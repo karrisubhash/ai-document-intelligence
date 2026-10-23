@@ -40,7 +40,8 @@ npm run build        # typecheck + production bundle in dist/
 `e2e/platform.spec.ts` drives a real browser through the whole product path — upload,
 processing, search, a cited answer, a follow-up, an abstention, the department boundary,
 administration and the audit trail — against real Django, Celery, PostgreSQL, Redis and
-models. It uses the Chrome or Edge already installed (`E2E_CHANNEL=chrome|msedge`), so no
+models. `e2e/selection.spec.ts` then deletes documents, conversations and collections by
+selection. It uses the Chrome or Edge already installed (`E2E_CHANNEL=chrome|msedge`), so no
 browser download is needed. See [docs/development/testing.md](../docs/development/testing.md)
 for preparing the disposable database and accounts it expects.
 

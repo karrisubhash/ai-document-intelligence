@@ -35,6 +35,12 @@ something the documents cannot answer; a faculty member of another department is
 nothing; a department admin creates an account and finds the other department's denied
 attempt in the audit log; a system admin checks every dependency.
 
+`frontend/e2e/selection.spec.ts` runs after it (files run in name order) and deletes by
+selection, as the faculty member of the other department: ticked documents and then the
+rest of the page, "all matching" through the API with its counted snapshot (a misspelt
+filter is refused), all of his conversations, and several collections whose documents
+stay. It creates what it deletes and leaves nothing behind.
+
 It needs a disposable database and the accounts `seed_e2e` creates:
 
 ```bash
