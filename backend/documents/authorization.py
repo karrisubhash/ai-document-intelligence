@@ -84,6 +84,23 @@ def visible_documents(user, queryset):
     return queryset.filter(visible)
 
 
+def manageable_documents(user, queryset):
+    """Scope a queryset to what `user` may manage (for bulk actions).
+
+    Mirrors can_manage_document exactly, unset department included: a
+    department admin with no department manages only their own documents.
+    """
+    if is_system_admin(user):
+        return queryset
+
+    profile = get_profile(user)
+    manageable = Q(owner=user)
+    if profile.role == UserProfile.Role.DEPARTMENT_ADMIN and profile.department:
+        manageable |= Q(department=profile.department)
+
+    return queryset.filter(manageable)
+
+
 # --- Collections (spec 14) ------------------------------------------------
 #
 # The roles that may curate collections: the spec's ORG_ADMIN and MANAGER
@@ -115,6 +132,17 @@ def visible_collections(user, queryset):
     if profile.department:
         visible |= Q(department=profile.department)
     return queryset.filter(visible)
+
+
+def manageable_collections(user, queryset):
+    """can_manage_collection as a filter, for bulk actions."""
+    if is_system_admin(user):
+        return queryset
+    profile = get_profile(user)
+    manageable = Q(created_by=user)
+    if profile.role == UserProfile.Role.DEPARTMENT_ADMIN and profile.department:
+        manageable |= Q(department=profile.department)
+    return queryset.filter(manageable)
 
 
 def can_manage_collection(user, collection) -> bool:

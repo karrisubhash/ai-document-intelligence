@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -174,5 +174,172 @@ describe("ChatPage", () => {
     open(HOSTEL);
     expect(await screen.findByText("What is the hostel fee?")).toBeInTheDocument();
     expect(screen.getByLabelText("Your question")).toBeEnabled();
+  });
+});
+
+describe("ChatPage bulk delete", { timeout: 15000 }, () => {
+  // The first query waits for the app shell and the sidebar to load.
+  const LOADED = { timeout: 5000 };
+  const summary = (id: number, title: string) => ({
+    id,
+    title,
+    department: "Physics",
+    created_at: HOSTEL.created_at,
+    updated_at: HOSTEL.updated_at,
+    message_count: 2,
+  });
+  const THREE = [summary(7, "Hostel fees"), summary(8, "Exam dates"), summary(9, "Library hours")];
+
+  it("deletes the selected conversations and leaves one that was open", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue({
+      count: 3,
+      next: null,
+      previous: null,
+      results: THREE,
+    });
+    const remove = vi
+      .spyOn(api, "bulkDeleteConversations")
+      .mockResolvedValue({ deleted: [7, 8], not_found: [] });
+    renderAt("/ask/7");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select conversations" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Hostel fees" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Exam dates" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    // Rename and delete-one are out of the way while selecting.
+    expect(screen.queryByRole("button", { name: "Delete Hostel fees" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 conversations?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    expect(remove).toHaveBeenCalledWith({ ids: [7, 8] });
+    expect(await screen.findByText("Deleted 2 conversations.")).toBeInTheDocument();
+    // The open conversation was among them, so the page leaves it. Router
+    // navigations commit in a transition, after the toast's urgent update.
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(/^\/ask$/));
+  });
+
+  it("deletes every conversation, including ones not loaded yet", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue({
+      count: 120,
+      next: "?page=2",
+      previous: null,
+      results: THREE,
+    });
+    const remove = vi
+      .spyOn(api, "bulkDeleteConversations")
+      .mockResolvedValueOnce({
+        deleted: Array.from({ length: 100 }, (_, n) => n + 1),
+        not_found: [],
+        remaining: 20,
+        as_of: "2026-10-20T09:00:00Z",
+      })
+      .mockResolvedValueOnce({
+        deleted: Array.from({ length: 20 }, (_, n) => n + 101),
+        not_found: [],
+        remaining: 0,
+        as_of: "2026-10-20T09:00:00Z",
+      });
+    renderAt("/ask");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select conversations" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all conversations" }));
+    expect(screen.getByText("All 120 selected")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete all 120 conversations?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));
+
+    expect(remove).toHaveBeenCalledTimes(2);
+    // The second round keeps to the first answer's snapshot.
+    expect(remove).toHaveBeenLastCalledWith({ all: true, as_of: "2026-10-20T09:00:00Z" });
+    expect(await screen.findByText("Deleted 120 conversations.")).toBeInTheDocument();
+  });
+
+  it("deletes exactly the conversations shown when all of them are loaded", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue({
+      count: 3,
+      next: null,
+      previous: null,
+      results: THREE,
+    });
+    const remove = vi
+      .spyOn(api, "bulkDeleteConversations")
+      .mockResolvedValue({ deleted: [7, 8, 9], not_found: [] });
+    renderAt("/ask");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select conversations" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all conversations" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete all 3 conversations?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));
+
+    // Ids, not all: true - a conversation started in another tab since is
+    // not on screen, so it is not deleted.
+    expect(remove).toHaveBeenCalledWith({ ids: [7, 8, 9] });
+  });
+
+  it("keeps the dialog open with the error, and cannot be cancelled mid-run", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue({
+      count: 3,
+      next: null,
+      previous: null,
+      results: THREE,
+    });
+    let fail: (error: Error) => void = () => undefined;
+    vi.spyOn(api, "bulkDeleteConversations").mockImplementation(
+      () => new Promise((_, reject) => (fail = reject)),
+    );
+    renderAt("/ask");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select conversations" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Exam dates" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 1 conversation?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    // While it runs, Cancel is disabled and Escape does not close it.
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Delete 1 conversation?" })).toBeInTheDocument();
+
+    fail(new Error("Server unavailable"));
+    expect(await within(dialog).findByText("That did not work")).toBeInTheDocument();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+  });
+
+  it("narrows 'all' back to the loaded ones when one is unticked", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue({
+      count: 120,
+      next: "?page=2",
+      previous: null,
+      results: THREE,
+    });
+    const remove = vi
+      .spyOn(api, "bulkDeleteConversations")
+      .mockResolvedValue({ deleted: [8, 9], not_found: [] });
+    renderAt("/ask");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Select conversations" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all conversations" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Hostel fees" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 conversations?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    expect(remove).toHaveBeenCalledWith({ ids: [8, 9] });
   });
 });

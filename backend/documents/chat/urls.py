@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     ChatStreamView,
     ChatView,
+    ConversationBulkDeleteView,
     ConversationDetailView,
     ConversationListView,
 )
@@ -14,6 +15,11 @@ urlpatterns = [
         "conversations/",
         ConversationListView.as_view(),
         name="conversation-list",
+    ),
+    path(
+        "conversations/bulk-delete/",
+        ConversationBulkDeleteView.as_view(),
+        name="conversation-bulk-delete",
     ),
     path(
         "conversations/<int:pk>/",

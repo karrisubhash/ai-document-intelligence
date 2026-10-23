@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +132,7 @@ describe("CollectionsPage", () => {
       current_version: null,
       is_archived: false,
       archived_at: null,
+      can_manage: true,
       created_at: "2026-10-01T10:00:00Z",
       updated_at: "2026-10-01T10:00:00Z",
     });
@@ -142,5 +143,105 @@ describe("CollectionsPage", () => {
 
     expect(await screen.findByRole("option", { name: "Fee schedule" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Workshop rules" })).not.toBeInTheDocument();
+  });
+});
+
+describe("CollectionsPage bulk actions", { timeout: 15000 }, () => {
+  // The first query waits for the app shell and the collections to load.
+  const LOADED = { timeout: 5000 };
+  const collection = (id: number, name: string, can_manage = true): Collection => ({
+    ...RULES,
+    id,
+    name,
+    can_manage,
+    documents: [],
+    document_count: 0,
+  });
+
+  it("deletes the selected collections, offering only the ones the user manages", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    vi.spyOn(api, "collections").mockResolvedValue(
+      page([collection(7, "Exam rules"), collection(8, "Fees"), collection(9, "Theirs", false)]),
+    );
+    const remove = vi
+      .spyOn(api, "bulkDeleteCollections")
+      .mockResolvedValue({ deleted: [7, 8], forbidden: [], not_found: [] });
+    renderAt("/collections");
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select Exam rules" }, LOADED));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Select Theirs" })).not.toBeInTheDocument();
+
+    // "Theirs" is not the user's to delete, so this is not "all collections".
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Select all collections you can delete" }),
+    );
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 collections?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+
+    expect(remove).toHaveBeenCalledWith({ ids: [7, 8] });
+    expect(await screen.findByText("Deleted 2 collections.")).toBeInTheDocument();
+  });
+
+  it("shows a failed delete inside the dialog", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    vi.spyOn(api, "collections").mockResolvedValue(
+      page([collection(7, "Exam rules"), collection(8, "Fees")]),
+    );
+    vi.spyOn(api, "bulkDeleteCollections").mockRejectedValue(new Error("Server unavailable"));
+    renderAt("/collections");
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select all collections" }, LOADED));
+    await userEvent.click(screen.getByRole("button", { name: "Delete all" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 collections?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+
+    // A toast would sit under the modal's backdrop, unannounced.
+    expect(await within(dialog).findByText("That did not work")).toBeInTheDocument();
+  });
+
+  it("removes the selected documents from a collection in one request", async () => {
+    vi.spyOn(api, "me").mockResolvedValue(FACULTY);
+    vi.spyOn(api, "collections").mockResolvedValue(
+      page([
+        {
+          ...RULES,
+          documents: [
+            { id: 3, title: "Attendance policy" },
+            { id: 4, title: "Fee schedule" },
+            { id: 5, title: "Leave rules" },
+          ],
+          document_count: 3,
+        },
+      ]),
+    );
+    const change = vi.spyOn(api, "setCollectionDocuments").mockResolvedValue(RULES);
+    renderAt("/collections");
+
+    await userEvent.click(
+      await screen.findByRole("checkbox", { name: "Select Attendance policy in Exam rules" }, LOADED),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select Leave rules in Exam rules" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove selected" }));
+
+    expect(change).toHaveBeenCalledWith(7, [3, 5], false);
+  });
+
+  it("shows no selection to a reader", async () => {
+    vi.spyOn(api, "me").mockResolvedValue({
+      ...FACULTY,
+      role: "STUDENT",
+      capabilities: { ...capabilities, create_collections: false },
+    });
+    vi.spyOn(api, "collections").mockResolvedValue(
+      page([collection(7, "Exam rules", false), collection(8, "Fees", false)]),
+    );
+    renderAt("/collections");
+
+    expect(await screen.findByText("Exam rules", {}, LOADED)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 });

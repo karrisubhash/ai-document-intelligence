@@ -19,6 +19,7 @@ import type {
   ChatResponse,
   ClassificationResult,
   AnswerSource,
+  BulkDeleteResult,
   Collection,
   Conversation,
   ConversationSummary,
@@ -459,6 +460,22 @@ export const api = {
     return request<DocumentDetail>(doc(id), { method: "PATCH", body: form });
   },
   deleteDocument: (id: number) => request<void>(doc(id), { method: "DELETE" }),
+  /** At most 100 ids; `all` takes the listing's filters and deletes ≤100 per call. */
+  bulkDeleteDocuments: (
+    target:
+      | { ids: number[] }
+      | {
+          all: true;
+          filters: Omit<DocumentQuery, "page" | "ordering">;
+          /** Count only, delete nothing - the confirmation's numbers and snapshot. */
+          preview?: boolean;
+          as_of?: string;
+        },
+  ) =>
+    request<BulkDeleteResult>("/api/v1/documents/bulk-delete/", {
+      method: "POST",
+      body: target,
+    }),
   archive: (id: number) => request<DocumentDetail>(doc(id, "archive/"), { method: "POST" }),
   restore: (id: number) => request<DocumentDetail>(doc(id, "restore/"), { method: "POST" }),
   reprocess: (id: number) =>
@@ -496,6 +513,12 @@ export const api = {
     request<Collection>("/api/v1/collections/", { method: "POST", body }),
   deleteCollection: (id: number) =>
     request<void>(`/api/v1/collections/${id}/`, { method: "DELETE" }),
+  /** At most 100 ids, or every collection the caller may manage. */
+  bulkDeleteCollections: (target: { ids: number[] } | { all: true; as_of?: string }) =>
+    request<BulkDeleteResult>("/api/v1/collections/bulk-delete/", {
+      method: "POST",
+      body: target,
+    }),
   setCollectionDocuments: (id: number, documentIds: number[], add: boolean) =>
     request<Collection>(`/api/v1/collections/${id}/documents/`, {
       method: add ? "POST" : "DELETE",
@@ -517,6 +540,12 @@ export const api = {
     }),
   deleteConversation: (id: number) =>
     request<void>(`/api/v1/chat/conversations/${id}/`, { method: "DELETE" }),
+  /** At most 100 ids, or every one of the caller's conversations. */
+  bulkDeleteConversations: (target: { ids: number[] } | { all: true; as_of?: string }) =>
+    request<BulkDeleteResult>("/api/v1/chat/conversations/bulk-delete/", {
+      method: "POST",
+      body: target,
+    }),
   feedback: (messageId: number, rating: FeedbackRating, comment = "") =>
     request<unknown>(`/api/v1/messages/${messageId}/feedback/`, {
       method: "POST",

@@ -4392,6 +4392,120 @@ mark.evidence {
   color: var(--text-3);
 }
 
+/* --- Bulk selection ----------------------------------------------------------------------- */
+
+/* The bar that acts on what is ticked (documents, collections), the
+   selection column, and the selected rows. */
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  box-shadow: var(--shadow-xs);
+}
+
+.bulk-bar-count {
+  margin-right: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
+.bulk-bar-action {
+  margin-left: auto;
+}
+
+/* Nothing ticked yet: the bar offers selection, quietly. */
+.bulk-bar-idle {
+  border-color: var(--border);
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+.bulk-bar-idle .bulk-bar-count {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.table .table-select {
+  width: 1%;
+  padding-right: 0;
+}
+
+.select-box {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.select-box:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.table tbody tr.selected,
+.table tbody tr.selected:hover {
+  background: var(--accent-soft);
+}
+
+/* --text-3 on the tint is under 4.5:1 in the light theme. */
+.table tbody tr.selected .table-sub,
+.table tbody tr.selected .muted {
+  color: var(--text-2);
+}
+
+/* A collection's members, each with its own checkbox. */
+.member-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Conversations: the select mode in the conversations panel. */
+.conversation-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.conversation-select-idle {
+  display: flex;
+}
+
+.conversation-select {
+  display: flex;
+  align-items: center;
+  padding-left: 10px;
+}
+
+/* A partly done bulk action: some left in place, refused or failed. */
+.toast-warning {
+  border-color: var(--warning-border);
+}
+
 /* --- Responsive ------------------------------------------------------------------------------- */
 
 @media (max-width: 1200px) {

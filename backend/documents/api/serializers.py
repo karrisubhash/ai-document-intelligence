@@ -199,6 +199,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
     current_version = DocumentVersionSummarySerializer(read_only=True)
     owner_username = serializers.SerializerMethodField()
     is_archived = serializers.BooleanField(read_only=True)
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
@@ -213,6 +214,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
             "current_version",
             "is_archived",
             "archived_at",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
@@ -220,6 +222,14 @@ class DocumentListSerializer(serializers.ModelSerializer):
 
     def get_owner_username(self, document):
         return document.owner.get_username() if document.owner_id else ""
+
+    def get_can_manage(self, document):
+        # Which rows the listing offers to select for bulk delete - a UI
+        # hint only, as on DocumentSerializer; the delete decides again.
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return authorization.can_manage_document(request.user, document)
 
 
 class DocumentListQuerySerializer(serializers.Serializer):
@@ -345,6 +355,89 @@ class DocumentListQuerySerializer(serializers.Serializer):
         validated = super().to_internal_value(data)
         validated["owner_id"] = validated.pop("owner")
         return validated
+
+
+# One request deletes at most this many documents. A document's delete
+# cascades through its versions, pages, chunks and embeddings, so an
+# unbounded request could outlive the worker timeout half-way through;
+# "delete everything matching" is a client loop over `remaining` instead.
+BULK_DELETE_LIMIT = 100
+
+
+def _only_with_all(attrs, *names):
+    for name in names:
+        if attrs.get(name):
+            raise serializers.ValidationError({name: ["Only applies with all: true."]})
+
+
+class BulkSelectionSerializer(serializers.Serializer):
+    """What a bulk action acts on: exactly one of `ids` (the rows the caller
+    selected, at most BULK_DELETE_LIMIT) or `all: true`. Shared by every
+    bulk-delete endpoint - documents, collections and conversations.
+
+    With `all`, one request deletes at most BULK_DELETE_LIMIT and answers
+    with `remaining` and an `as_of` instant. The client repeats, passing
+    `as_of` back, so a row created after the first request - by a colleague,
+    or in another tab - is never swept up by a delete nobody confirmed.
+
+    Unknown keys are refused, not ignored: on a delete, an option that is
+    silently dropped (a misspelt filter) WIDENS what is deleted.
+    """
+
+    ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=False,
+        max_length=BULK_DELETE_LIMIT,
+    )
+    all = serializers.BooleanField(required=False, default=False)
+    as_of = serializers.DateTimeField(required=False)
+
+    def validate(self, attrs):
+        unknown = set(self.initial_data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(
+                {name: ["Unknown field."] for name in sorted(unknown)}
+            )
+        if bool(attrs.get("ids")) == attrs["all"]:
+            raise serializers.ValidationError(
+                "Send either a list of ids or all: true, not both."
+            )
+        if not attrs["all"]:
+            _only_with_all(attrs, "as_of")
+        return attrs
+
+
+class BulkDeleteSerializer(BulkSelectionSerializer):
+    """Body of POST /api/v1/documents/bulk-delete/.
+
+    With `all: true`, every document the caller may delete that matches
+    `filters`, which takes the listing's query parameters (validated by
+    DocumentListQuerySerializer, so "all" means what the listing showed).
+    `preview: true` deletes nothing and answers the counts and `as_of` - what
+    a confirmation dialog shows, and the snapshot the delete then keeps to.
+    """
+
+    filters = serializers.DictField(required=False, default=dict)
+    preview = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if not attrs["all"]:
+            _only_with_all(attrs, "filters", "preview")
+            return attrs
+        # DocumentListQuerySerializer, like any serializer, drops keys it
+        # does not declare; for the listing that only shows more rows.
+        unknown = set(attrs["filters"]) - set(DocumentListQuerySerializer().fields)
+        if unknown:
+            raise serializers.ValidationError(
+                {"filters": [f"Unknown filter: {name}." for name in sorted(unknown)]}
+            )
+        query = DocumentListQuerySerializer(data=attrs["filters"], context=self.context)
+        if not query.is_valid():
+            raise serializers.ValidationError({"filters": query.errors})
+        attrs["filters"] = query.validated_data
+        return attrs
 
 
 class UploadSerializer(serializers.Serializer):

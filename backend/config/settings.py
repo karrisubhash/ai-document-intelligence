@@ -155,6 +155,9 @@ REST_FRAMEWORK = {
         "search_burst": os.getenv("THROTTLE_SEARCH_BURST", "20/minute"),
         # The most expensive path in the system.
         "chat": os.getenv("THROTTLE_CHAT", "60/hour"),
+        # Each request deletes (or is refused, and audits) up to 100
+        # documents. Deleting 10,000 documents takes ~100 requests.
+        "bulk_delete": os.getenv("THROTTLE_BULK_DELETE", "300/hour"),
     },
 }
 

@@ -20,8 +20,10 @@ import {
   Dialog,
   ErrorState,
   IconButton,
+  SelectBox,
   Skeleton,
   errorMessage,
+  plural,
   useDocumentTitle,
   useToast,
 } from "../components/ui";
@@ -66,11 +68,118 @@ function ConversationList({
   const [title, setTitle] = useState("");
   const [pending, setPending] = useState(false);
 
+  // Multi-select for deleting several at once. `all` means every one of the
+  // user's conversations, including older ones not loaded yet.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [all, setAll] = useState(false);
+  const [confirmingBulk, setConfirmingBulk] = useState(false);
+  const [bulkError, setBulkError] = useState<unknown>(null);
+  const modeButton = useRef<HTMLButtonElement>(null);
+  const loaded = conversations.data?.results ?? [];
+  const total = conversations.data?.count ?? 0;
+  const chosen = all ? total : selected.size;
+  const isChosen = (id: number) => all || selected.has(id);
+  const stopSelecting = () => {
+    setSelecting(false);
+    setSelected(new Set());
+    setAll(false);
+  };
+  const toggle = (id: number, on: boolean) => {
+    // Unticking one while "all" is on leaves every LOADED one but it.
+    const base = all ? new Set(loaded.map((item) => item.id)) : new Set(selected);
+    if (on) base.add(id);
+    else base.delete(id);
+    setAll(false);
+    setSelected(base);
+  };
+
+  const deleteChosen = async () => {
+    setPending(true);
+    setBulkError(null);
+    // Outside the try: what was deleted before a failure is still gone.
+    const deleted: number[] = [];
+    try {
+      if (all && loaded.length < total) {
+        // Older ones are not loaded: the server deletes them in rounds,
+        // within the snapshot of the first answer.
+        let asOf: string | undefined;
+        for (;;) {
+          const result = await api.bulkDeleteConversations({ all: true, as_of: asOf });
+          deleted.push(...result.deleted);
+          asOf = result.as_of;
+          if (!result.remaining || result.deleted.length === 0) break;
+        }
+      } else {
+        // Exactly the ones on screen - never one started since in another tab.
+        const ids = all ? loaded.map((item) => item.id) : [...selected];
+        for (let start = 0; start < ids.length; start += 100) {
+          const result = await api.bulkDeleteConversations({ ids: ids.slice(start, start + 100) });
+          deleted.push(...result.deleted);
+        }
+      }
+      toast(`Deleted ${deleted.length} ${plural(deleted.length, "conversation")}.`, "success");
+      setConfirmingBulk(false);
+      stopSelecting();
+      window.setTimeout(() => modeButton.current?.focus(), 0);
+    } catch (caught) {
+      // Shown in the dialog: a toast would sit under its backdrop.
+      setBulkError(caught);
+      setSelected((current) => new Set([...current].filter((id) => !deleted.includes(id))));
+    } finally {
+      setPending(false);
+      if (activeId !== null && deleted.includes(activeId)) navigate("/ask", { replace: true });
+      if (deleted.length) onChanged();
+    }
+  };
+
   return (
     <aside className="conversations" aria-label="Conversations">
       <Button variant="primary" icon="square-pen" className="btn-block" onClick={onNew}>
         New question
       </Button>
+      {loaded.length ? (
+        <div className={selecting ? "conversation-select-bar" : "conversation-select-idle"}>
+          {selecting ? (
+            <>
+              <SelectBox
+                label="Select all conversations"
+                checked={all || (selected.size > 0 && loaded.every((item) => selected.has(item.id)))}
+                indeterminate={!all && selected.size > 0 && !loaded.every((item) => selected.has(item.id))}
+                onChange={(on) => {
+                  setAll(on);
+                  setSelected(new Set());
+                }}
+              />
+              <span className="small" aria-live="polite">
+                {all ? `All ${total}` : selected.size} selected
+              </span>
+              <Button
+                variant="danger"
+                size="sm"
+                icon="trash"
+                disabled={chosen === 0}
+                onClick={() => {
+                  setBulkError(null);
+                  setConfirmingBulk(true);
+                }}
+              >
+                Delete selected
+              </Button>
+            </>
+          ) : null}
+          {/* One button for both, so focus stays on it as the mode flips. */}
+          <Button
+            ref={modeButton}
+            variant="ghost"
+            size="sm"
+            icon={selecting ? "check" : "list-checks"}
+            onClick={selecting ? stopSelecting : () => setSelecting(true)}
+          >
+            {selecting ? "Done" : "Select conversations"}
+          </Button>
+        </div>
+      ) : null}
       {conversations.loading && !conversations.data ? (
         <div className="conversations-empty">
           <Skeleton lines={5} />
@@ -86,6 +195,15 @@ function ConversationList({
                 key={conversation.id}
                 className={`conversation${conversation.id === activeId ? " active" : ""}`}
               >
+                {selecting ? (
+                  <span className="conversation-select">
+                    <SelectBox
+                      label={`Select ${conversation.title || "Untitled conversation"}`}
+                      checked={isChosen(conversation.id)}
+                      onChange={(on) => toggle(conversation.id, on)}
+                    />
+                  </span>
+                ) : null}
                 <Link
                   to={`/ask/${conversation.id}`}
                   className="conversation-link"
@@ -96,23 +214,27 @@ function ConversationList({
                   </span>
                   <span className="conversation-meta">{formatRelative(conversation.updated_at)}</span>
                 </Link>
-                <div className="conversation-actions">
-                  <IconButton
-                    icon="pencil"
-                    size="sm"
-                    label={`Rename ${conversation.title || "conversation"}`}
-                    onClick={() => {
-                      setTitle(conversation.title);
-                      setRenaming(conversation);
-                    }}
-                  />
-                  <IconButton
-                    icon="trash"
-                    size="sm"
-                    label={`Delete ${conversation.title || "conversation"}`}
-                    onClick={() => setDeleting(conversation)}
-                  />
-                </div>
+                {/* Not rendered while selecting: a class's display: flex
+                    would override the hidden attribute. */}
+                {selecting ? null : (
+                  <div className="conversation-actions">
+                    <IconButton
+                      icon="pencil"
+                      size="sm"
+                      label={`Rename ${conversation.title || "conversation"}`}
+                      onClick={() => {
+                        setTitle(conversation.title);
+                        setRenaming(conversation);
+                      }}
+                    />
+                    <IconButton
+                      icon="trash"
+                      size="sm"
+                      label={`Delete ${conversation.title || "conversation"}`}
+                      onClick={() => setDeleting(conversation)}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -195,6 +317,25 @@ function ConversationList({
         }}
       >
         <p>The questions and answers in it are removed. The documents are not affected.</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={confirmingBulk}
+        title={
+          all
+            ? `Delete all ${total} ${plural(total, "conversation")}?`
+            : `Delete ${chosen} ${plural(chosen, "conversation")}?`
+        }
+        confirmLabel={all ? "Delete all" : "Delete"}
+        pending={pending}
+        error={bulkError}
+        onClose={() => setConfirmingBulk(false)}
+        onConfirm={() => void deleteChosen()}
+      >
+        <p>
+          The questions and answers in {chosen === 1 ? "it are" : "them are"} removed permanently.
+          The documents are not affected.
+        </p>
       </ConfirmDialog>
     </aside>
   );

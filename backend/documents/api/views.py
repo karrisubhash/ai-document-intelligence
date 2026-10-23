@@ -1,9 +1,12 @@
-from django.db import transaction
+import logging
+
+from django.db import DatabaseError, transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from accounts.services import UnknownDepartment, resolve_department
@@ -17,6 +20,7 @@ from documents.models import (
     DocumentVersion,
     ProcessingJob,
 )
+from documents.observability import telemetry
 from documents.permissions import DocumentAccessPolicy
 from documents.services import (
     DocumentArchived,
@@ -31,6 +35,8 @@ from documents.services import (
 from documents.throttling import BurstUserThrottle
 
 from .serializers import (
+    BULK_DELETE_LIMIT,
+    BulkDeleteSerializer,
     ClassificationResultSerializer,
     DocumentChunkSerializer,
     DocumentContentSerializer,
@@ -45,6 +51,8 @@ from .serializers import (
     ExtractionResultSerializer,
     ProcessingJobSerializer,
 )
+
+logger = logging.getLogger("adi.documents")
 
 
 def _live_content(version):
@@ -83,6 +91,50 @@ def _query_number(raw):
         return None
 
 
+def _bulk_delete_one(user, pk):
+    """Delete one document of a bulk request, deciding access as destroy does.
+
+    Returns "deleted", "forbidden" (the caller can see it but not manage it)
+    or "not_found" - which, as in DocumentAccessPolicy, also covers a
+    document the caller may not see, so a list of guessed ids enumerates
+    nothing. Every refusal of a real document is still audited as DENIED.
+
+    One transaction per document: the audit row and the delete commit
+    together, and a failure part-way leaves the earlier deletes done. The
+    row lock makes a concurrent delete of the same document wait and then
+    find it gone, rather than audit a delete that did not happen here.
+    """
+    with transaction.atomic():
+        document = Document.objects.select_for_update().filter(pk=pk).first()
+        if document is None:
+            return "not_found"
+
+        can_view = authorization.can_view_document(user, document)
+        if can_view and authorization.can_manage_document(user, document):
+            record_event(
+                user=user,
+                action=AuditLog.Action.DOCUMENT_DELETE,
+                document=document,
+                result=AuditLog.Result.ALLOWED,
+                document_title=document.title,
+                bulk=True,
+            )
+            document.delete()
+            return "deleted"
+
+        record_event(
+            user=user,
+            action=AuditLog.Action.DOCUMENT_DELETE,
+            document=document,
+            result=AuditLog.Result.DENIED,
+            bulk=True,
+        )
+    telemetry.authorization_denied(
+        AuditLog.Action.DOCUMENT_DELETE, user_id=user.id, document_id=pk
+    )
+    return "forbidden" if can_view else "not_found"
+
+
 class DocumentViewSet(viewsets.ModelViewSet):
     serializer_class = DocumentSerializer
     permission_classes = [DocumentAccessPolicy]
@@ -100,6 +152,9 @@ class DocumentViewSet(viewsets.ModelViewSet):
             self.action == "versions" and self.request.method == "POST"
         ):
             self.throttle_scope = "upload"
+        elif self.action == "bulk_delete":
+            # Up to BULK_DELETE_LIMIT transactions and audit rows a request.
+            self.throttle_scope = "bulk_delete"
         else:
             self.throttle_scope = None
         return super().get_throttles()
@@ -489,6 +544,74 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 ),
             }
         )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="bulk-delete",
+        parser_classes=[JSONParser],
+    )
+    def bulk_delete(self, request):
+        """Delete several documents, or all that match the listing's filters.
+
+        Each document is decided and audited exactly as a single DELETE is
+        (see _bulk_delete_one). With `all`, only documents the caller may
+        delete are taken, at most BULK_DELETE_LIMIT per request, and only
+        ones created by `as_of` (see BulkSelectionSerializer); `remaining`
+        says how many still match, so a client repeats until it is 0, and
+        `skipped` how many match that the caller may see but not delete.
+        `preview` answers those counts without deleting anything.
+        """
+        serializer = BulkDeleteSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        user = request.user
+
+        outcome = {"deleted": [], "forbidden": [], "not_found": [], "failed": []}
+        if data["all"]:
+            as_of = data.get("as_of") or timezone.now()
+            # Scoped by authorization first, then narrowed - the same
+            # boundary the listing relies on (see discovery.py).
+            matching = discovery.apply(
+                authorization.visible_documents(user, Document.objects.all()),
+                data["filters"],
+            ).filter(created_at__lte=as_of)
+            targets = authorization.manageable_documents(user, matching)
+            ids = (
+                []
+                if data["preview"]
+                else list(targets.values_list("pk", flat=True)[:BULK_DELETE_LIMIT])
+            )
+        else:
+            ids = data["ids"]
+
+        # Ascending, so two overlapping requests lock rows in the same order.
+        for pk in sorted(set(ids)):
+            try:
+                result = _bulk_delete_one(user, pk)
+            except DatabaseError:
+                # Its own transaction has rolled back and there is no outer
+                # one, so the rest of the batch can go on - and the deletes
+                # already committed are still reported, not lost in a 500.
+                # (A document still being processed can fail its delete:
+                # the pipeline keeps writing rows that reference it.)
+                logger.warning(
+                    "documents.bulk_delete_failed",
+                    extra={"document_id": pk},
+                    exc_info=True,
+                )
+                result = "failed"
+            outcome[result].append(pk)
+
+        if data["all"]:
+            outcome["remaining"] = targets.count()
+            # Counted directly, not as a difference of two counts taken at
+            # different moments - a concurrent delete made that negative.
+            outcome["skipped"] = matching.exclude(pk__in=targets.values("pk")).count()
+            outcome["as_of"] = as_of
+        return Response(outcome)
 
     @action(detail=True, methods=["post"])
     def archive(self, request, pk=None):
