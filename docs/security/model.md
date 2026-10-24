@@ -29,6 +29,20 @@
   cannot reset or edit a superuser, and a department administrator cannot touch a Django
   staff account. The API returns `can_manage` per account so the screens offer only what
   will succeed.
+- **Self-service sign-up** (`SIGNUP_ENABLED`, on by default; institutional decision I7)
+  files a *request*, never an account: a pending applicant is not a `User` at all, so no
+  path - Django's admin, a shell, an "Active" checkbox - can let one in early. Approval is
+  the only way a request becomes an account, and it is held to the same rules as creating
+  one by hand: a department admin approves only requests for their own department, into
+  it, as FACULTY, STAFF or STUDENT; an applicant can ask for no administrative role. The
+  chosen password is validated and kept only as a hash, handed to the account on approval
+  and cleared from the request. The endpoint enforces CSRF, is throttled per address
+  (20/hour, and at nginx with sign-in), and stops accepting requests at
+  `SIGNUP_MAX_PENDING` waiting. It does say whether a username is taken - unavoidable for
+  a form that lets people choose one - with the same answer for an account and a waiting
+  request; the throttle bounds how fast that can be asked. Sign-in tells an applicant their
+  request is waiting or declined only when they give its password. With sign-up on, the
+  active departments' names are public, because the form offers them.
 
 **Not implemented:** SSO/SAML/OIDC, MFA, account lockout beyond throttling, password
 expiry. These are institutional decisions with integration work attached.

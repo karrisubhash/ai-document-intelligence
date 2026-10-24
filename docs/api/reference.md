@@ -44,9 +44,15 @@ already in progress, an archived document). **429** is a rate limit.
 | POST | `/api/auth/logout/` | signed in | Ends the session; with a token, deletes it |
 | POST | `/api/auth/password/` | signed in | `{current_password, new_password}`; ends other sessions, revokes tokens |
 | POST | `/api/auth/token/` | anyone | Script login; expiring token |
+| GET | `/api/auth/signup/` | anyone | `{enabled, departments, roles}` for the sign-up form; with `SIGNUP_ENABLED=False`, `enabled: false` and nothing else. Unthrottled |
+| POST | `/api/auth/signup/` | anyone | `{username, email, first_name, last_name?, password, department?, role?, note?}` files a request - it creates no account. **201** `{status: "PENDING"}`. CSRF enforced; password validated and stored only as a hash; `role` is FACULTY, STAFF or STUDENT; a username an account or a waiting request holds (case-insensitive) is **400** with the same message either way. **403** when turned off, **429** past 20/hour per address or with `SIGNUP_MAX_PENDING` requests waiting. Audited (`SIGNUP_REQUEST`) |
 | GET | `/api/auth/me/` | signed in | Profile, role, department and `capabilities` |
 | GET | `/api/departments/` | signed in | Active departments `{id, name, code}` |
-| GET | `/api/dashboard/` | signed in | Counts and lists over the caller's visible documents |
+| GET | `/api/dashboard/` | signed in | Counts and lists over the caller's visible documents; `pending_signup_requests` - how many requests this administrator reviews - is null for non-administrators |
+
+Signing in (session or token) with the password of a request that is still waiting, or was
+declined, is **403** `{detail, code}` with `code` `signup_pending` or `signup_rejected` (the
+detail carries the reviewer's reason). Without the right password it is the ordinary **400**.
 
 ## Documents
 
@@ -120,6 +126,9 @@ change their own role or deactivate themselves.
 | GET · PATCH | `/api/admin/users/{id}/` | admins, scoped | Username immutable. Deactivation deletes the account's sessions and tokens. Superusers can be edited only by superusers; staff accounts not by department admins |
 | POST | `/api/admin/users/{id}/set-password/` | admins, scoped | Ends the user's sessions and tokens |
 | GET | `/api/admin/users/roles/` | admins | Roles this admin may assign |
+| GET | `/api/admin/signup-requests/[{id}/]` | admins, scoped | Filters `status` (`PENDING`, `APPROVED`, `REJECTED`) and `search`. Department admins see requests naming their department; one that names none is for system admins. Never the password hash |
+| POST | `/api/admin/signup-requests/{id}/approve/` | admins, scoped | `{role?, department?}`, defaulting to what was asked for and held to the rules for creating an account by hand (a department admin grants FACULTY, STAFF or STUDENT in their own, active department). Creates the account with the password the applicant chose. **409** if already decided, or if an account has taken the username since. Audited (`SIGNUP_APPROVE`, with the new account's id) |
+| POST | `/api/admin/signup-requests/{id}/reject/` | admins, scoped | `{note?}` - shown to the applicant when they next try to sign in. **409** if already decided. The applicant may apply again. Audited (`SIGNUP_REJECT`) |
 | GET · POST · PATCH | `/api/admin/departments/[{id}/]` | read: admins · write: system admins | Paginated. Case-insensitive unique names; rename rewrites every reference atomically, and is refused (400) when records already use the new spelling - that would merge two tenants; no DELETE (deactivate instead). `member_count` and `document_count` are null for departments other than a department admin's own |
 | GET | `/api/admin/audit/` | admins, scoped | `action`, `result`, `user`, `document`, `since`, `until` (dates or full ISO datetimes). Department admins see rows by their members or on their documents; for another department's document both the id and the title are withheld (`document_withheld: true`), and filtering by such an id returns nothing |
 | GET | `/api/admin/jobs/` | admins, scoped | `status`, `error_code`, `stalled=true` |
