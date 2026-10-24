@@ -358,6 +358,18 @@ class SigningInBeforeApprovalTests(SignupTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_even_when_the_account_was_renamed_onto_the_name(self):
+        """Renaming (possible in the Django admin) creates no account, so the
+        request keeps its hash; the account still answers for its name."""
+        pending(status=SignupRequest.Status.REJECTED)
+        account = User.objects.create_user(username="someone", password="theirs-9876")
+        account.username = "newcomer"
+        account.save()
+
+        response = self.login()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_the_token_endpoint_says_the_same(self):
         pending()
 
