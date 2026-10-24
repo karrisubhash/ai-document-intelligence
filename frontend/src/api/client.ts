@@ -16,6 +16,7 @@ import type {
   AdminDepartment,
   AdminUser,
   AuditEntry,
+  BulkRejectResult,
   ChatResponse,
   ClassificationResult,
   AnswerSource,
@@ -590,6 +591,19 @@ export const api = {
     request<SignupRequest>(`/api/v1/admin/signup-requests/${id}/reject/`, {
       method: "POST",
       body: { note },
+    }),
+  /**
+   * Every waiting request the caller decides that matches `search`, at most
+   * 100 a call; `preview` declines nothing and returns the count and the
+   * snapshot (`as_of`) to repeat with.
+   */
+  adminBulkRejectSignups: (
+    target: { all: true; search?: string; as_of?: string; preview?: boolean },
+    note = "",
+  ) =>
+    request<BulkRejectResult>("/api/v1/admin/signup-requests/bulk-reject/", {
+      method: "POST",
+      body: { ...target, note },
     }),
   adminDepartments: (page = 1) =>
     request<Paginated<AdminDepartment>>(`/api/v1/admin/departments/${query({ page })}`),

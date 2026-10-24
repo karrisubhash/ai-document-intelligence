@@ -6,7 +6,15 @@ import { useResource, type Resource } from "../api/hooks";
 import type { SignupOptions } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { BrandMark, Icon, type IconName } from "../components/icons";
-import { Alert, Button, ErrorState, Field, Spinner, errorMessage } from "../components/ui";
+import {
+  Alert,
+  Button,
+  ErrorState,
+  Field,
+  Spinner,
+  errorMessage,
+  useDocumentTitle,
+} from "../components/ui";
 import SignupForm from "./SignupForm";
 
 const FEATURES: [IconName, string, string][] = [
@@ -86,7 +94,9 @@ function signupRefusal(caught: unknown) {
   return null;
 }
 
-function SignInForm({ offerSignup }: { offerSignup: boolean }) {
+/** `offerSignup` is null until the server has answered. */
+function SignInForm({ offerSignup }: { offerSignup: boolean | null }) {
+  useDocumentTitle("Sign in");
   const { login, expired } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -142,6 +152,10 @@ function SignInForm({ offerSignup }: { offerSignup: boolean }) {
               className="input input-lg"
               name="username"
               autoComplete="username"
+              // Usernames are matched exactly: a phone keyboard that turns
+              // "nia" into "Nia" signs nobody in.
+              autoCapitalize="none"
+              spellCheck={false}
               autoFocus
               value={username}
               onChange={(event) => setUsername(event.target.value)}
@@ -164,7 +178,10 @@ function SignInForm({ offerSignup }: { offerSignup: boolean }) {
           )}
         </Field>
         {refusal ? (
+          // An alert, like every other sign-in failure: it is the answer to
+          // pressing Sign in, and the only one a waiting applicant gets.
           <Alert
+            role="alert"
             tone={refusal.code === "signup_pending" ? "info" : "warning"}
             title={
               refusal.code === "signup_pending" ? "Waiting for approval" : "Request declined"
@@ -193,12 +210,16 @@ function SignInForm({ offerSignup }: { offerSignup: boolean }) {
           </Link>
         </p>
       ) : null}
-      <p className="login-footnote">
-        <Icon name="lock" size={14} />
-        {offerSignup
-          ? "Every account is approved by an administrator."
-          : "Accounts are issued by your department administrator."}
-      </p>
+      {/* Nothing until the server has said whether sign-up is offered,
+          rather than one sentence that turns into another. */}
+      {offerSignup !== null ? (
+        <p className="login-footnote">
+          <Icon name="lock" size={14} />
+          {offerSignup
+            ? "Every account is approved by an administrator."
+            : "Accounts are issued by your department administrator."}
+        </p>
+      ) : null}
     </>
   );
 }
@@ -231,7 +252,9 @@ function SignupPanel({ options }: { options: Resource<SignupOptions> }) {
 
 export default function LoginPage() {
   const { pathname } = useLocation();
-  const signingUp = pathname === "/signup";
+  // "/signup/" too: the edge serves the app for it, and the signed-in
+  // routes treat the two alike.
+  const signingUp = pathname.replace(/\/+$/, "") === "/signup";
   // Whether to offer sign-up at all. Nothing is offered until the server
   // says so: one that has it turned off, predates it or cannot be reached
   // shows the sign-in form exactly as before.
@@ -277,7 +300,11 @@ export default function LoginPage() {
           {signingUp ? (
             <SignupPanel options={options} />
           ) : (
-            <SignInForm offerSignup={Boolean(options.data?.enabled)} />
+            <SignInForm
+              offerSignup={
+                options.data ? options.data.enabled : options.loading ? null : false
+              }
+            />
           )}
         </div>
       </main>

@@ -478,6 +478,8 @@ export interface SignupOptions {
   enabled: boolean;
   departments: Department[];
   roles: RoleOption[];
+  /** The only email domains a request may use (and their subdomains); empty for any. */
+  email_domains?: string[];
 }
 
 export interface SignupInput {
@@ -510,6 +512,21 @@ export interface SignupRequest {
   decision_note: string;
   /** The account approval created. */
   user: number | null;
+  /**
+   * Accounts the reviewer administers that already use this email address.
+   * Nothing verifies the address, so this is the sign to look twice.
+   */
+  email_in_use?: string[];
+}
+
+/** POST /api/v1/admin/signup-requests/bulk-reject/ */
+export interface BulkRejectResult {
+  rejected: number[];
+  /** Not the caller's to decide, or decided meanwhile - deliberately alike. */
+  not_found: number[];
+  /** With `all`: how many still match. Repeat, passing `as_of`, until 0. */
+  remaining?: number;
+  as_of?: string;
 }
 
 export interface AuditEntry {

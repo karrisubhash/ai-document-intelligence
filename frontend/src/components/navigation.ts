@@ -25,7 +25,12 @@ export const PRIMARY: NavItem[] = [
 export function adminItems(can: (capability: keyof Capabilities) => boolean): NavItem[] {
   const items: NavItem[] = [];
   if (can("administer_users")) {
-    items.push({ to: "/admin/users", label: "Users", icon: "users", keywords: "accounts people" });
+    items.push({
+      to: "/admin/users",
+      label: "Users",
+      icon: "users",
+      keywords: "accounts people sign-up signup requests approve decline",
+    });
   }
   if (can("administer_departments") || can("administer_users")) {
     items.push({ to: "/admin/departments", label: "Departments", icon: "building" });

@@ -185,14 +185,24 @@ export function Alert({
   title,
   children,
   action,
+  role,
 }: {
   tone?: Tone;
   title?: ReactNode;
   children?: ReactNode;
   action?: ReactNode;
+  /**
+   * "alert" for a message that answers what the user just did but is not
+   * an error. A polite status region that arrives already filled is not
+   * reliably read out at all.
+   */
+  role?: "alert" | "status";
 }) {
   return (
-    <div className={`alert alert-${tone}`} role={tone === "danger" ? "alert" : "status"}>
+    <div
+      className={`alert alert-${tone}`}
+      role={role ?? (tone === "danger" ? "alert" : "status")}
+    >
       <Icon name={ALERT_ICON[tone]} size={18} className="alert-icon" />
       <div className="alert-body">
         {title ? <p className="alert-title">{title}</p> : null}
@@ -369,6 +379,7 @@ export function Field({
     id: string;
     "aria-describedby"?: string;
     "aria-invalid"?: boolean;
+    "aria-required"?: boolean;
   }) => ReactElement;
 }) {
   const id = useId();
@@ -379,9 +390,15 @@ export function Field({
     <div className={`field${error ? " field-invalid" : ""}`}>
       <label htmlFor={id} className="field-label">
         {label}
+        {/* Hidden from screen readers, which hear aria-required instead. */}
         {required ? <span className="required" aria-hidden="true"> *</span> : null}
       </label>
-      {children({ id, "aria-describedby": describedBy, "aria-invalid": error ? true : undefined })}
+      {children({
+        id,
+        "aria-describedby": describedBy,
+        "aria-invalid": error ? true : undefined,
+        "aria-required": required || undefined,
+      })}
       {hint ? (
         <p className="field-hint" id={hintId}>
           {hint}

@@ -2044,6 +2044,13 @@ a.table-title:hover {
   overflow-wrap: anywhere;
 }
 
+.signup-warning {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warning);
+}
+
 .cell-title {
   display: flex;
   align-items: center;

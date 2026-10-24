@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { ApiError, api } from "../../api/client";
@@ -23,6 +23,7 @@ import {
   TabPanel,
   Tabs,
   errorMessage,
+  plural,
   useDocumentTitle,
   useToast,
 } from "../../components/ui";
@@ -512,14 +513,30 @@ const SIGNUP_STATUS_LABEL: Record<SignupStatus, string> = {
   REJECTED: "Declined",
 };
 
+// An approval never makes an administrator (the server refuses it too):
+// a stranger is promoted, if ever, by a separate edit of their account.
+const ADMIN_ROLES = new Set<Role>(["SYSTEM_ADMIN", "DEPARTMENT_ADMIN"]);
+
+// A request that named no department, until the reviewer picks one - "No
+// department" included, deliberately: approved by default, the account
+// would see nothing but its own uploads.
+const UNSET = "__unset__";
+
+/** 409: decided elsewhere meanwhile. 404: no longer this reviewer's. */
+function isStale(error: unknown) {
+  return error instanceof ApiError && (error.status === 409 || error.status === 404);
+}
+
 function ApproveDialog({
   signup,
   onClose,
   onApproved,
+  onStale,
 }: {
   signup: SignupRequest;
   onClose: () => void;
   onApproved: (signup: SignupRequest) => void;
+  onStale: () => void;
 }) {
   const me = useMe();
   const { can } = useAuth();
@@ -528,7 +545,8 @@ function ApproveDialog({
   const departments = useResource(() => api.departments(), [], { enabled: system });
   // What they asked for, until the reviewer says otherwise.
   const [role, setRole] = useState<Role>(signup.role);
-  const [department, setDepartment] = useState(signup.department);
+  const [department, setDepartment] = useState(signup.department || UNSET);
+  const offered = (roles.data ?? []).filter((option) => !ADMIN_ROLES.has(option.value));
 
   const approve = useAction(() =>
     api.adminApproveSignup(signup.id, {
@@ -542,13 +560,14 @@ function ApproveDialog({
   const close = () => {
     if (!approve.pending) onClose();
   };
+  const inUse = signup.email_in_use ?? [];
 
   return (
     <Dialog
       open
       onClose={close}
       title={`Approve ${displayName(signup)}`}
-      description="Creates their account. They sign in with the password they chose."
+      description="Creates their account; they sign in with the password they chose. The details below are as they typed them - nothing has checked them, so be sure who this is."
       footer={
         <>
           <Button variant="ghost" onClick={close} disabled={approve.pending}>
@@ -558,9 +577,11 @@ function ApproveDialog({
             variant="primary"
             icon="check"
             loading={approve.pending}
+            disabled={system && department === UNSET}
             onClick={async () => {
               const result = await approve.run();
               if (result.ok) onApproved(result.value);
+              else if (isStale(result.error)) onStale();
             }}
           >
             Approve and create account
@@ -571,11 +592,18 @@ function ApproveDialog({
       <div className="stack">
         <DescriptionList
           items={[
+            ["Name", [signup.first_name, signup.last_name].filter(Boolean).join(" ")],
             ["Username", signup.username],
             ["Email", signup.email],
             ...(signup.note ? ([["Their note", signup.note]] as [string, string][]) : []),
           ]}
         />
+        {inUse.length ? (
+          <Alert tone="warning" title="An account already uses this email address">
+            {inUse.join(", ")}. It may be the same person with a second account, or someone
+            using their address - check before approving.
+          </Alert>
+        ) : null}
         <div className="form-row">
           <Field label="Role" error={errors.role} hint={`They asked to be: ${ROLE_LABEL[signup.role]}.`}>
             {(props) => (
@@ -585,12 +613,12 @@ function ApproveDialog({
                 value={role}
                 onChange={(event) => setRole(event.target.value as Role)}
               >
-                {(roles.data ?? []).map((option) => (
+                {offered.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
                 ))}
-                {!roles.data?.some((option) => option.value === role) ? (
+                {!offered.some((option) => option.value === role) ? (
                   <option value={role}>{ROLE_LABEL[role]}</option>
                 ) : null}
               </select>
@@ -599,7 +627,14 @@ function ApproveDialog({
           <Field
             label="Department"
             error={errors.department}
-            hint={system ? "Decides which documents they can read." : undefined}
+            required={system && !signup.department}
+            hint={
+              system
+                ? signup.department
+                  ? "Decides which documents they can read."
+                  : "Their department was not listed - check their note."
+                : undefined
+            }
           >
             {(props) =>
               system ? (
@@ -609,18 +644,27 @@ function ApproveDialog({
                   value={department}
                   onChange={(event) => setDepartment(event.target.value)}
                 >
+                  {department === UNSET ? (
+                    <option value={UNSET} disabled>
+                      Choose…
+                    </option>
+                  ) : null}
                   <option value="">No department</option>
                   {(departments.data ?? []).map((option) => (
                     <option key={option.id} value={option.name}>
                       {option.name}
                     </option>
                   ))}
-                  {/* Asked for before it was retired: shown as what it is,
-                      and refused by the server if kept. */}
+                  {/* What they asked for, while the list loads or if it
+                      fails - not displayed as "No department" while being
+                      sent - and, once loaded, marked if it was retired
+                      since (the server refuses it). */}
                   {signup.department &&
-                  departments.data &&
-                  !departments.data.some((option) => option.name === signup.department) ? (
-                    <option value={signup.department}>{signup.department} (inactive)</option>
+                  !departments.data?.some((option) => option.name === signup.department) ? (
+                    <option value={signup.department}>
+                      {signup.department}
+                      {departments.data ? " (inactive)" : ""}
+                    </option>
                   ) : null}
                 </select>
               ) : (
@@ -641,10 +685,12 @@ function DeclineDialog({
   signup,
   onClose,
   onDeclined,
+  onStale,
 }: {
   signup: SignupRequest;
   onClose: () => void;
   onDeclined: () => void;
+  onStale: () => void;
 }) {
   const [note, setNote] = useState("");
   const decline = useAction(() => api.adminRejectSignup(signup.id, note.trim()));
@@ -659,6 +705,7 @@ function DeclineDialog({
       onConfirm={async () => {
         const result = await decline.run();
         if (result.ok) onDeclined();
+        else if (isStale(result.error)) onStale();
       }}
     >
       <p>No account is created. They can send a new request later.</p>
@@ -678,26 +725,157 @@ function DeclineDialog({
   );
 }
 
+/**
+ * Every waiting request this reviewer decides that matches `search` - how a
+ * queue flooded with junk is cleared. Counted by the server first, and that
+ * count's snapshot kept to: a request filed while the dialog is open is not
+ * declined by a confirmation that never showed it.
+ */
+function DeclineAllDialog({
+  search,
+  onClose,
+  onFinished,
+}: {
+  search: string;
+  onClose: () => void;
+  onFinished: (declined: number) => void;
+}) {
+  const [note, setNote] = useState("");
+  const preview = useResource(
+    () => api.adminBulkRejectSignups({ all: true, search, preview: true }),
+    [search],
+  );
+  const run = useAction(async () => {
+    let declined = 0;
+    // Rounds of at most 100, within the preview's snapshot. A round that
+    // declines nothing ends it: what remains is no longer this reviewer's.
+    for (;;) {
+      const result = await api.adminBulkRejectSignups(
+        { all: true, search, as_of: preview.data?.as_of },
+        note.trim(),
+      );
+      declined += result.rejected.length;
+      if (!result.remaining || result.rejected.length === 0) break;
+    }
+    return declined;
+  });
+  const count = preview.data?.remaining ?? 0;
+  const noun = plural(count, "request");
+
+  return (
+    <ConfirmDialog
+      open
+      title={
+        preview.data
+          ? `Decline ${count} waiting ${noun}${search ? ` matching “${search}”` : ""}?`
+          : "Decline waiting requests?"
+      }
+      confirmLabel={preview.data ? `Decline ${count} ${noun}` : "Decline"}
+      pending={run.pending || preview.loading}
+      error={run.error ?? preview.error}
+      onClose={onClose}
+      onConfirm={async () => {
+        if (!count) return onClose();
+        const result = await run.run();
+        if (result.ok) onFinished(result.value);
+      }}
+    >
+      <p>
+        No accounts are created, and each is recorded in the audit log as declined. Requests
+        sent after this dialog opened are left alone.
+      </p>
+      <Field label="Reason" hint="Optional. Shown to each of them when they next try to sign in.">
+        {(props) => (
+          <textarea
+            {...props}
+            className="input"
+            rows={2}
+            maxLength={500}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
+        )}
+      </Field>
+    </ConfirmDialog>
+  );
+}
+
 function SignupRequests({ onDecided }: { onDecided: () => void }) {
   const toast = useToast();
   const [status, setStatus] = useState<SignupStatus>("PENDING");
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
+  const search = useDebouncedValue(searchInput.trim(), 300);
   const [approving, setApproving] = useState<SignupRequest | null>(null);
   const [declining, setDeclining] = useState<SignupRequest | null>(null);
+  const [decliningAll, setDecliningAll] = useState(false);
 
   const requests = useResource(
-    () => api.adminSignupRequests({ status, page }),
-    [status, page],
+    () => api.adminSignupRequests({ status, page, search }),
+    [status, page, search],
   );
+
+  // Focus, which the dialogs cannot hand back themselves: they unmount while
+  // still open, so the browser restores nothing and focus fell to the page -
+  // a keyboard reviewer started again from the top after every decision.
+  // Back to the button that opened the dialog when it closes without one;
+  // after a decision that row is gone, so to the first remaining row's
+  // Approve once the list has reloaded.
+  const statusSelect = useRef<HTMLSelectElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const focusNextRow = useRef(false);
+  const remember = () => {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  };
+  // Deferred: until the dialog has gone, the page behind it is inert.
+  const focusLater = (target: () => HTMLElement | null | undefined) =>
+    window.setTimeout(() => (target() ?? statusSelect.current)?.focus(), 0);
+  const backToOpener = () =>
+    focusLater(() => (opener.current?.isConnected ? opener.current : null));
+  useEffect(() => {
+    if (!focusNextRow.current || requests.loading) return;
+    focusNextRow.current = false;
+    focusLater(() => list.current?.querySelector<HTMLElement>("[data-approve]"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requests.data, requests.loading]);
+
+  // A page that no longer exists - its last row decided elsewhere, say -
+  // goes back to the first rather than leaving the old rows on screen.
+  useEffect(() => {
+    if (requests.status === 404 && page > 1) setPage(1);
+  }, [requests.status, page]);
+
   const decided = () => {
-    requests.reload();
+    focusNextRow.current = true;
+    // Deciding the only row on a later page empties it: step back a page
+    // rather than reload one the server will no longer serve.
+    if (page > 1 && requests.data?.results.length === 1) setPage(page - 1);
+    else requests.reload();
     onDecided();
   };
+
+  const count = requests.data?.count ?? 0;
 
   return (
     <>
       <div className="toolbar">
+        <div className="input-icon toolbar-search">
+          <Icon name="search" />
+          <input
+            type="search"
+            className="input"
+            placeholder="Search by name, username or email…"
+            aria-label="Search requests"
+            value={searchInput}
+            onChange={(event) => {
+              setSearchInput(event.target.value);
+              setPage(1);
+            }}
+          />
+        </div>
         <select
+          ref={statusSelect}
           className="input"
           aria-label="Status"
           value={status}
@@ -712,6 +890,18 @@ function SignupRequests({ onDecided }: { onDecided: () => void }) {
             </option>
           ))}
         </select>
+        {status === "PENDING" && count > 0 ? (
+          <Button
+            variant="ghost"
+            icon="x"
+            onClick={() => {
+              remember();
+              setDecliningAll(true);
+            }}
+          >
+            {search ? "Decline all matching…" : "Decline all…"}
+          </Button>
+        ) : null}
       </div>
 
       {requests.error && !requests.data ? (
@@ -723,16 +913,22 @@ function SignupRequests({ onDecided }: { onDecided: () => void }) {
       ) : !requests.data?.results.length ? (
         <div className="card">
           <EmptyState
-            title={status === "PENDING" ? "Nobody is waiting" : "No requests here"}
+            title={
+              search
+                ? "No requests match"
+                : status === "PENDING"
+                  ? "Nobody is waiting"
+                  : "No requests here"
+            }
             icon="inbox"
           >
-            {status === "PENDING"
+            {status === "PENDING" && !search
               ? "New sign-up requests for you to review will appear here."
               : null}
           </EmptyState>
         </div>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap" ref={list}>
           <table className="table table-stack">
             <thead>
               <tr>
@@ -777,6 +973,12 @@ function SignupRequests({ onDecided }: { onDecided: () => void }) {
                     ) : (
                       signup.note || <span className="muted">—</span>
                     )}
+                    {signup.email_in_use?.length ? (
+                      <span className="table-sub signup-warning">
+                        <Icon name="alert-triangle" size={12} />
+                        Email already used by {signup.email_in_use.join(", ")}
+                      </span>
+                    ) : null}
                   </td>
                   <td className="nowrap muted" data-label={status === "PENDING" ? "Sent" : "Decided"}>
                     {formatRelative(signup.status === "PENDING" ? signup.created_at : signup.reviewed_at)}
@@ -787,10 +989,29 @@ function SignupRequests({ onDecided }: { onDecided: () => void }) {
                   <td className="cell-actions">
                     {signup.status === "PENDING" ? (
                       <div className="button-row">
-                        <Button size="sm" variant="primary" icon="check" onClick={() => setApproving(signup)}>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          icon="check"
+                          data-approve
+                          aria-label={`Approve ${displayName(signup)}`}
+                          onClick={() => {
+                            remember();
+                            setApproving(signup);
+                          }}
+                        >
                           Approve
                         </Button>
-                        <Button size="sm" variant="ghost" icon="x" onClick={() => setDeclining(signup)}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon="x"
+                          aria-label={`Decline ${displayName(signup)}`}
+                          onClick={() => {
+                            remember();
+                            setDeclining(signup);
+                          }}
+                        >
                           Decline
                         </Button>
                       </div>
@@ -806,31 +1027,52 @@ function SignupRequests({ onDecided }: { onDecided: () => void }) {
           </table>
         </div>
       )}
-      {requests.data ? (
-        <Pagination page={page} count={requests.data.count} onPage={setPage} />
-      ) : null}
+      {requests.data ? <Pagination page={page} count={count} onPage={setPage} /> : null}
 
       {approving ? (
         <ApproveDialog
           key={approving.id}
           signup={approving}
-          onClose={() => setApproving(null)}
+          onClose={() => {
+            setApproving(null);
+            backToOpener();
+          }}
           onApproved={(signup) => {
             setApproving(null);
             decided();
             toast(`Approved. ${signup.username} can sign in now.`);
           }}
+          onStale={decided}
         />
       ) : null}
       {declining ? (
         <DeclineDialog
           key={declining.id}
           signup={declining}
-          onClose={() => setDeclining(null)}
+          onClose={() => {
+            setDeclining(null);
+            backToOpener();
+          }}
           onDeclined={() => {
             setDeclining(null);
             decided();
             toast(`Request from ${declining.username} declined.`);
+          }}
+          onStale={decided}
+        />
+      ) : null}
+      {decliningAll ? (
+        <DeclineAllDialog
+          search={search}
+          onClose={() => {
+            setDecliningAll(false);
+            backToOpener();
+          }}
+          onFinished={(declined) => {
+            setDecliningAll(false);
+            setPage(1);
+            decided();
+            toast(`Declined ${declined} ${plural(declined, "request")}.`);
           }}
         />
       ) : null}

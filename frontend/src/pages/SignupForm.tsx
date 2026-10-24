@@ -5,7 +5,7 @@ import { ApiError, api } from "../api/client";
 import { useAction } from "../api/hooks";
 import type { Role, SignupOptions } from "../api/types";
 import { Icon } from "../components/icons";
-import { Alert, Button, Field, errorMessage } from "../components/ui";
+import { Alert, Button, Field, errorMessage, useDocumentTitle } from "../components/ui";
 
 /**
  * "My department is not listed" is a real answer - the request goes to a
@@ -51,10 +51,14 @@ function Sent({ username }: { username: string }) {
         Request sent
       </h1>
       <p className="login-subtitle">
-        An administrator will review it. Once it is approved, sign in as{" "}
-        <strong>{username}</strong> with the password you chose.
+        An administrator will review it. No email will come: to see whether it has been
+        approved, sign in as <strong>{username}</strong> with the password you chose. If it
+        is still waiting after a few days, contact your department office.
       </p>
-      <Link to="/" className="btn btn-primary btn-lg btn-block">
+      {/* Replacing this page, so Back does not return to a filled-in form
+          that would only be refused: the name is already taken - by this
+          request. */}
+      <Link to="/" replace className="btn btn-primary btn-lg btn-block">
         Back to sign in
       </Link>
     </div>
@@ -62,6 +66,7 @@ function Sent({ username }: { username: string }) {
 }
 
 export default function SignupForm({ options }: { options: SignupOptions }) {
+  useDocumentTitle("Request an account");
   const [draft, setDraft] = useState<Draft>({
     first_name: "",
     last_name: "",
@@ -77,6 +82,12 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
   });
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [sentAs, setSentAs] = useState<string | null>(null);
+  // Bumped by each attempt that fails, so the effect below runs once the
+  // errors it caused have rendered.
+  const [failures, setFailures] = useState(0);
+  const form = useRef<HTMLFormElement>(null);
+  const submitButton = useRef<HTMLButtonElement>(null);
+  const domains = options.email_domains ?? [];
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
 
@@ -97,6 +108,16 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
   const fieldless =
     send.error && !Object.keys(server).some((key) => key !== "non_field_errors");
 
+  // After a failed attempt, to the first field it was about: on a phone
+  // that field may be scrolled out of sight, and a screen reader reads its
+  // label and error from there. Otherwise back to the button - it disabled
+  // itself while sending, which dropped focus to the page.
+  useEffect(() => {
+    if (!failures) return;
+    const invalid = form.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
+    (invalid ?? submitButton.current)?.focus();
+  }, [failures]);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const found: Record<string, string> = {};
@@ -110,13 +131,20 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
     else if (draft.password !== draft.confirm) found.confirm = "The passwords do not match.";
     setProblems(found);
     if (Object.keys(found).length) {
-      // What the server said about the last attempt no longer applies.
-      send.clearError();
+      setFailures((count) => count + 1);
       return;
     }
     const result = await send.run();
-    if (result.ok) setSentAs(draft.username.trim());
-    else setDraft((current) => ({ ...current, password: "", confirm: "" }));
+    if (result.ok) {
+      setSentAs(draft.username.trim());
+      return;
+    }
+    // Typed again only when the password itself was the problem - not for
+    // a taken username or a dropped connection.
+    if (result.error instanceof ApiError && result.error.fieldErrors().password) {
+      setDraft((current) => ({ ...current, password: "", confirm: "" }));
+    }
+    setFailures((count) => count + 1);
   };
 
   if (sentAs) return <Sent username={sentAs} />;
@@ -128,7 +156,7 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
         An administrator reviews every request. You can sign in once yours is approved.
       </p>
 
-      <form className="stack" onSubmit={submit} noValidate>
+      <form ref={form} className="stack" onSubmit={submit} noValidate>
         <div className="form-row">
           <Field label="First name" error={errors.first_name} required>
             {(props) => (
@@ -159,7 +187,11 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
         <Field
           label="Email"
           error={errors.email}
-          hint="Your institution's address helps an administrator recognise you."
+          hint={
+            domains.length
+              ? `An address at ${domains.join(" or ")}.`
+              : "Administrators see it when they review your request."
+          }
           required
         >
           {(props) => (
@@ -177,7 +209,7 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
         <Field
           label="Username"
           error={errors.username}
-          hint="You will sign in with this. Letters, digits and @ . + - _ only."
+          hint="You will sign in with this, exactly as typed. English letters, digits and @ . + - _ only."
           required
         >
           {(props) => (
@@ -267,7 +299,11 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
         <Field
           label="Note for the administrator"
           error={errors.note}
-          hint="Optional. Anything that helps them recognise you, such as a student or staff number."
+          hint={
+            draft.department === NOT_LISTED
+              ? "Say which department you belong to, so an administrator can place you."
+              : "Optional. Anything that helps them recognise you, such as a student or staff number."
+          }
         >
           {(props) => (
             <textarea
@@ -284,6 +320,7 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
           <Alert tone="danger">{errors.non_field_errors || sendError(send.error)}</Alert>
         ) : null}
         <Button
+          ref={submitButton}
           type="submit"
           variant="primary"
           size="lg"

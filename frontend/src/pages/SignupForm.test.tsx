@@ -60,6 +60,8 @@ describe("sign-up", () => {
     vi.mocked(api.signupOptions).mockResolvedValue({ enabled: false, departments: [], roles: [] });
     renderApp();
 
+    // The footnote appears only once the server has answered, so this waits
+    // for the answer rather than passing on the loading state.
     expect(await screen.findByText("Accounts are issued by your department administrator.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Request an account" })).not.toBeInTheDocument();
   });
@@ -117,16 +119,53 @@ describe("sign-up", () => {
     // Not chosen yet is not the same as "not listed".
     expect(await screen.findByText(/Choose your department/)).toBeInTheDocument();
     expect(signup).not.toHaveBeenCalled();
+    // Taken to the field it is about.
+    expect(screen.getByLabelText(/^Department/)).toHaveFocus();
 
     await userEvent.selectOptions(
       screen.getByLabelText(/^Department/),
       "My department is not listed",
     );
-    await fill(/^Password/, "a-long-enough-passphrase");
-    await fill(/^Confirm password/, "a-long-enough-passphrase");
+    // The passwords were kept: nothing was wrong with them.
+    expect(screen.getByLabelText(/^Password/)).toHaveValue("a-long-enough-passphrase");
+    expect(screen.getByText(/Say which department you belong to/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Send request" }));
 
     expect(signup).toHaveBeenCalledWith(expect.objectContaining({ department: "" }));
+  });
+
+  it("takes a failed check to the first field it is about", async () => {
+    renderApp("/signup");
+
+    await screen.findByRole("heading", { name: "Request an account" });
+    await fill(/^Email/, "nia@example.edu");
+    await userEvent.click(screen.getByRole("button", { name: "Send request" }));
+
+    expect(await screen.findByText("Enter your first name.")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^First name/)).toHaveFocus();
+  });
+
+  it("tells assistive technology which fields are required", async () => {
+    renderApp("/signup");
+
+    await screen.findByRole("heading", { name: "Request an account" });
+
+    expect(screen.getByLabelText(/^First name/)).toHaveAttribute("aria-required", "true");
+    expect(screen.getByLabelText(/^Password/)).toHaveAttribute("aria-required", "true");
+    expect(screen.getByLabelText(/^Last name/)).not.toHaveAttribute("aria-required");
+  });
+
+  it("names the email domains the server accepts", async () => {
+    vi.mocked(api.signupOptions).mockResolvedValue({ ...OPTIONS, email_domains: ["example.edu"] });
+    renderApp("/signup");
+
+    expect(await screen.findByText("An address at example.edu.")).toBeInTheDocument();
+  });
+
+  it("is reached with a trailing slash too", async () => {
+    renderApp("/signup/");
+
+    expect(await screen.findByRole("heading", { name: "Request an account" })).toBeInTheDocument();
   });
 
   it("catches mismatched passwords before sending anything", async () => {
@@ -166,8 +205,31 @@ describe("sign-up", () => {
     const username = screen.getByLabelText(/^Username/);
     expect(await screen.findByText("This username is taken. Choose another.")).toBeInTheDocument();
     expect(username).toHaveAttribute("aria-invalid", "true");
-    // Typed again, not left in a form that failed.
+    expect(username).toHaveFocus();
+    // Not typed again for a problem that was not theirs.
+    expect(screen.getByLabelText(/^Password/)).toHaveValue("a-long-enough-passphrase");
+  });
+
+  it("clears the passwords when the server refused the password", async () => {
+    vi.spyOn(api, "signup").mockRejectedValue(
+      new ApiError(400, "password: This password is too common.", {
+        password: ["This password is too common."],
+      }),
+    );
+    renderApp("/signup");
+
+    await screen.findByRole("heading", { name: "Request an account" });
+    await fill(/^First name/, "Nia");
+    await fill(/^Email/, "nia@example.edu");
+    await fill(/^Username/, "nia");
+    await userEvent.selectOptions(screen.getByLabelText(/^Department/), "Physics");
+    await fill(/^Password/, "password123");
+    await fill(/^Confirm password/, "password123");
+    await userEvent.click(screen.getByRole("button", { name: "Send request" }));
+
+    expect(await screen.findByText("This password is too common.")).toBeInTheDocument();
     expect(screen.getByLabelText(/^Password/)).toHaveValue("");
+    expect(screen.getByLabelText(/^Password/)).toHaveFocus();
   });
 });
 
@@ -188,6 +250,36 @@ describe("signing in before approval", () => {
     expect(await screen.findByText("Waiting for approval")).toBeInTheDocument();
     expect(screen.getByText(/waiting for an administrator's approval/)).toBeInTheDocument();
     expect(screen.queryByText(/do not match an active account/)).not.toBeInTheDocument();
+    // Announced, like every other answer to pressing Sign in.
+    expect(screen.getByText("Waiting for approval").closest(".alert")).toHaveAttribute(
+      "role",
+      "alert",
+    );
+  });
+
+  it("tells a declined applicant, with the administrator's reason", async () => {
+    vi.spyOn(api, "login").mockRejectedValue(
+      new ApiError(403, "Your account request was declined. The administrator said: Wrong department.", {
+        detail: "Your account request was declined. The administrator said: Wrong department.",
+        code: "signup_rejected",
+      }),
+    );
+    renderApp();
+
+    await userEvent.type(await screen.findByLabelText(/^Username/), "nia");
+    await userEvent.type(screen.getByLabelText(/^Password/), "a-long-enough-passphrase");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText("Request declined")).toBeInTheDocument();
+    expect(screen.getByText(/Wrong department\./)).toBeInTheDocument();
+  });
+
+  it("keeps a phone keyboard from capitalising the username", async () => {
+    renderApp();
+
+    const username = await screen.findByLabelText(/^Username/);
+    expect(username).toHaveAttribute("autocapitalize", "none");
+    expect(username).toHaveAttribute("spellcheck", "false");
   });
 
   it("still treats any other refusal as a failed sign-in", async () => {

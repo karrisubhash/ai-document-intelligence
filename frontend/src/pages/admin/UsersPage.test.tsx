@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -122,11 +122,28 @@ describe("UsersPage", () => {
 });
 
 describe("sign-up requests", () => {
+  const SYSTEM_ADMIN: Me = {
+    ...ADMIN,
+    username: "root",
+    role: "SYSTEM_ADMIN",
+    department: "",
+    capabilities: { ...ADMIN.capabilities, administer_departments: true, view_system_status: true },
+  };
+
+  async function openApprove(name = "Nia Okafor") {
+    await userEvent.click(
+      await screen.findByRole("button", { name: `Approve ${name}` }, { timeout: 15_000 }),
+    );
+    return screen.findByRole("dialog", { name: new RegExp(`Approve ${name}`) });
+  }
+
   it("counts who is waiting on the tab", async () => {
     renderUsers();
 
     const tab = await screen.findByRole("tab", { name: /Sign-up requests/ }, { timeout: 15_000 });
     expect(await within(tab).findByText("1")).toBeInTheDocument();
+    // Waiting requests only - not every request ever decided.
+    expect(api.adminSignupRequests).toHaveBeenCalledWith({ status: "PENDING" });
   });
 
   it("approves with the role chosen, leaving the department to the server", async () => {
@@ -137,8 +154,7 @@ describe("sign-up requests", () => {
 
     expect(await screen.findByText("Roll number CS-2031.", {}, { timeout: 15_000 })).toBeInTheDocument();
     const listed = vi.mocked(api.adminSignupRequests).mock.calls.length;
-    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
-    const dialog = await screen.findByRole("dialog", { name: /Approve Nia Okafor/ });
+    const dialog = await openApprove();
     // What they asked for, until the reviewer says otherwise.
     expect(within(dialog).getByLabelText(/^Role/)).toHaveValue("STUDENT");
     await userEvent.selectOptions(within(dialog).getByLabelText(/^Role/), "STAFF");
@@ -152,7 +168,53 @@ describe("sign-up requests", () => {
     expect(vi.mocked(api.adminSignupRequests).mock.calls.length).toBe(listed + 2);
   });
 
-  it("says why an approval failed when the request was decided elsewhere", async () => {
+  it("makes a system admin choose a department for a request that named none", async () => {
+    vi.mocked(api.me).mockResolvedValue(SYSTEM_ADMIN);
+    vi.mocked(api.adminSignupRequests).mockResolvedValue(page([{ ...APPLICANT, department: "" }]));
+    vi.spyOn(api, "departments").mockResolvedValue([
+      { id: 1, name: "Chemistry", code: "CHE" },
+      { id: 2, name: "Computer Science", code: "CSE" },
+    ]);
+    vi.mocked(api.adminRoles).mockResolvedValue([
+      { value: "SYSTEM_ADMIN", label: "System Admin" },
+      { value: "DEPARTMENT_ADMIN", label: "Department Admin" },
+      { value: "FACULTY", label: "Faculty" },
+      { value: "STAFF", label: "Staff" },
+      { value: "STUDENT", label: "Student" },
+    ]);
+    const approve = vi
+      .spyOn(api, "adminApproveSignup")
+      .mockResolvedValue({ ...APPLICANT, status: "APPROVED", user: 9 });
+    renderUsers("/admin/users?tab=requests");
+
+    const dialog = await openApprove();
+    const button = within(dialog).getByRole("button", { name: "Approve and create account" });
+    // Not approved into no department by default.
+    expect(button).toBeDisabled();
+    // Never an administrator, from an approval.
+    const roles = within(within(dialog).getByLabelText(/^Role/)).getAllByRole("option");
+    expect(roles.map((option) => option.textContent)).toEqual(["Faculty", "Staff", "Student"]);
+
+    await within(dialog).findByRole("option", { name: "Chemistry" });
+    await userEvent.selectOptions(within(dialog).getByLabelText(/^Department/), "Chemistry");
+    await userEvent.click(button);
+
+    expect(approve).toHaveBeenCalledWith(7, { role: "STUDENT", department: "Chemistry" });
+  });
+
+  it("warns when an account already uses the address", async () => {
+    vi.mocked(api.adminSignupRequests).mockResolvedValue(
+      page([{ ...APPLICANT, email_in_use: ["asha"] }]),
+    );
+    renderUsers("/admin/users?tab=requests");
+
+    const dialog = await openApprove();
+
+    expect(within(dialog).getByText("An account already uses this email address")).toBeInTheDocument();
+    expect(within(dialog).getByText(/asha\./)).toBeInTheDocument();
+  });
+
+  it("refreshes a request decided elsewhere, and says so", async () => {
     vi.spyOn(api, "adminApproveSignup").mockRejectedValue(
       new ApiError(409, "This request was already approved.", {
         detail: "This request was already approved.",
@@ -160,13 +222,49 @@ describe("sign-up requests", () => {
     );
     renderUsers("/admin/users?tab=requests");
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Approve" }, { timeout: 15_000 }),
-    );
-    const dialog = await screen.findByRole("dialog", { name: /Approve Nia Okafor/ });
+    const dialog = await openApprove();
+    const listed = vi.mocked(api.adminSignupRequests).mock.calls.length;
     await userEvent.click(within(dialog).getByRole("button", { name: "Approve and create account" }));
 
     expect(await within(dialog).findByText("This request was already approved.")).toBeInTheDocument();
+    // The stale row and the count are fetched again.
+    expect(vi.mocked(api.adminSignupRequests).mock.calls.length).toBe(listed + 2);
+  });
+
+  it("steps back a page when deciding empties the last one", async () => {
+    const pageOne = { count: 51, next: null, previous: null, results: [APPLICANT] };
+    const pageTwo = { count: 51, next: null, previous: "x", results: [{ ...APPLICANT, id: 8 }] };
+    vi.mocked(api.adminSignupRequests).mockImplementation(async (params = {}) =>
+      params.page === 2 ? pageTwo : pageOne,
+    );
+    vi.spyOn(api, "adminRejectSignup").mockResolvedValue({ ...APPLICANT, id: 8, status: "REJECTED" });
+    renderUsers("/admin/users?tab=requests");
+
+    await userEvent.click(await screen.findByRole("button", { name: /Next/ }, { timeout: 15_000 }));
+    await waitFor(() =>
+      expect(api.adminSignupRequests).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })),
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Decline Nia Okafor" }));
+    const dialog = await screen.findByRole("dialog", { name: /Decline Nia Okafor/ });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Decline request" }));
+
+    await waitFor(() =>
+      expect(api.adminSignupRequests).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "PENDING", page: 1, search: "" }),
+      ),
+    );
+    expect(api.adminSignupRequests).not.toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
+  });
+
+  it("gives focus back to the button that opened a dialog closed without a decision", async () => {
+    renderUsers("/admin/users?tab=requests");
+
+    const opener = await screen.findByRole("button", { name: "Approve Nia Okafor" }, { timeout: 15_000 });
+    await userEvent.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: /Approve Nia Okafor/ });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Approve Nia Okafor" })).toHaveFocus());
   });
 
   it("declines with the reason given", async () => {
@@ -176,7 +274,7 @@ describe("sign-up requests", () => {
     renderUsers("/admin/users?tab=requests");
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Decline" }, { timeout: 15_000 }),
+      await screen.findByRole("button", { name: "Decline Nia Okafor" }, { timeout: 15_000 }),
     );
     const dialog = await screen.findByRole("dialog", { name: /Decline Nia Okafor/ });
     await userEvent.type(within(dialog).getByLabelText(/^Reason/), "Use your college email.");
@@ -184,5 +282,33 @@ describe("sign-up requests", () => {
 
     expect(reject).toHaveBeenCalledWith(7, "Use your college email.");
     expect(await screen.findByText("Request from nia declined.")).toBeInTheDocument();
+  });
+
+  it("declines every waiting request matching a search, within the count it showed", async () => {
+    const bulk = vi
+      .spyOn(api, "adminBulkRejectSignups")
+      .mockImplementation(async (target) =>
+        target.preview
+          ? { rejected: [], not_found: [], remaining: 2, as_of: "2026-10-24T10:00:00Z" }
+          : { rejected: [7, 8], not_found: [], remaining: 0, as_of: "2026-10-24T10:00:00Z" },
+      );
+    renderUsers("/admin/users?tab=requests");
+
+    await userEvent.type(
+      await screen.findByLabelText("Search requests", {}, { timeout: 15_000 }),
+      "spam",
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Decline all matching…" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Decline 2 waiting requests matching “spam”?",
+    });
+    await userEvent.type(within(dialog).getByLabelText(/^Reason/), "Junk.");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Decline 2 requests" }));
+
+    expect(bulk).toHaveBeenLastCalledWith(
+      { all: true, search: "spam", as_of: "2026-10-24T10:00:00Z" },
+      "Junk.",
+    );
+    expect(await screen.findByText("Declined 2 requests.")).toBeInTheDocument();
   });
 });
