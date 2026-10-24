@@ -900,9 +900,12 @@ file, several, or a zip of them; it reads a zip's directory in the page
 (`frontend/src/lib/zip.ts`) and sends each file inside as an ordinary upload, so each meets
 this check, the malware scan and the audit trail on its own, and the API still refuses a
 `.zip` itself. Folders, OS metadata (`__MACOSX/`, `.DS_Store`), nested zips, encrypted
-entries and unsupported types are listed as skipped, with the reason. Each upload in a
-batch carries an `Idempotency-Key`, so retrying one whose response was lost cannot create a
-second copy.
+entries and unsupported types are listed as skipped, with the reason. Every upload from the
+dialog carries an `Idempotency-Key` derived from the file and its title, type and
+department, so a retry after a lost response, a Stop, or choosing the same zip again after
+half of it went through (within the 24 hours keys are kept) returns the documents already
+made instead of second copies. A key whose document has since been deleted is answered
+404, and the dialog sends that file once more under a fresh key.
 
 **This is deliberately the cheap half of the job.** It reads a client-supplied *name*, so it
 proves nothing about content: a `.pdf` that is not a PDF is admitted here and still fails at

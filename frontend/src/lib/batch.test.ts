@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { PYTHON_ZIP, buildZip, fromBase64, zipFile } from "../test/zips";
-import { MAX_BATCH_FILES, isSystemFile, planFiles, type PlannedFile } from "./batch";
+import {
+  MAX_BATCH_FILES,
+  addPlanned,
+  isSystemFile,
+  planFiles,
+  uploadKey,
+  type PlannedFile,
+} from "./batch";
 
 const file = (name: string, content = "content", type = "") => new File([content], name, { type });
 const pick = (items: PlannedFile[]) =>
@@ -74,27 +81,58 @@ describe("planFiles", () => {
     expect(folder).toMatchObject({ name: "Minutes", skip: expect.stringMatching(/folder/) });
   });
 
-  it(`uploads at most ${MAX_BATCH_FILES} at a time, counting what is already chosen`, async () => {
-    const many = Array.from({ length: MAX_BATCH_FILES + 2 }, (_, i) => file(`doc-${i}.txt`));
-    const items = await planFiles(many);
-    expect(items.filter((item) => !item.skip)).toHaveLength(MAX_BATCH_FILES);
-    expect(items.at(-1)?.skip).toMatch(/limit of 100/);
-
-    const first = await planFiles(many.slice(0, MAX_BATCH_FILES - 1));
-    const more = await planFiles([file("x.txt"), file("y.txt"), file("bad.xlsx")], first);
-    expect(more.slice(-3).map((item) => item.skip)).toEqual([
-      undefined,
-      expect.stringMatching(/limit/),
-      expect.stringMatching(/Unsupported/),
-    ]);
+  it("keeps titles within the server's limit", async () => {
+    const [item] = await planFiles([file(`${"long ".repeat(80)}.pdf`)]);
+    expect(item.title.length).toBe(255);
   });
 
-  it("gives every file its own idempotency key and keeps titles within the server's limit", async () => {
-    const items = await planFiles([file(`${"long ".repeat(80)}.pdf`), file("b.pdf")]);
-    expect(items[0].title.length).toBe(255);
-    expect(items[0].key).toMatch(/^[0-9a-f]{32}$/);
-    expect(items[0].key).not.toBe(items[1].key);
-    expect(items[0].id).not.toBe(items[1].id);
+  it("identifies a file by what it is, and a zipped file by its content wherever it is", async () => {
+    const pdf = new File(["x"], "a.pdf", { lastModified: 1000 });
+    const [one] = await planFiles([pdf]);
+    const [again] = await planFiles([pdf]);
+    const [edited] = await planFiles([new File(["x"], "a.pdf", { lastModified: 2000 })]);
+    expect(again.identity).toBe(one.identity);
+    expect(again.id).not.toBe(one.id);
+    expect(edited.identity).not.toBe(one.identity);
+
+    const zipped = await buildZip([{ name: "x/notes.txt", data: "same" }]);
+    const rezipped = await buildZip([{ name: "other/notes.txt", data: "same" }]);
+    const changed = await buildZip([{ name: "x/notes.txt", data: "different" }]);
+    const [a] = await planFiles([zipFile(zipped, "one.zip")]);
+    const [b] = await planFiles([zipFile(rezipped, "two.zip")]);
+    const [c] = await planFiles([zipFile(changed, "one.zip")]);
+    expect(b.identity).toBe(a.identity);
+    expect(c.identity).not.toBe(a.identity);
+  });
+});
+
+describe("uploadKey", () => {
+  it("is the same for the same file and settings, and differs when either does", async () => {
+    const key = await uploadKey("file a", '["A","GENERAL",""]');
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+    expect(await uploadKey("file a", '["A","GENERAL",""]')).toBe(key);
+    expect(await uploadKey("file b", '["A","GENERAL",""]')).not.toBe(key);
+    expect(await uploadKey("file a", '["A","POLICY",""]')).not.toBe(key);
+  });
+});
+
+describe("addPlanned", () => {
+  it("adds after what is listed, leaving out a file already there", async () => {
+    const pdf = file("a.pdf");
+    const first = await planFiles([pdf]);
+    const next = addPlanned(first, await planFiles([pdf, file("b.pdf")]));
+    expect(Array.isArray(next) && next.map((item) => item.name)).toEqual(["a.pdf", "b.pdf"]);
+  });
+
+  it(`refuses a whole choice that would pass ${MAX_BATCH_FILES} files, rather than half of it`, async () => {
+    const many = await planFiles(Array.from({ length: MAX_BATCH_FILES - 1 }, (_, i) => file(`doc-${i}.txt`)));
+    const fits = addPlanned(many, await planFiles([file("last.txt"), file("bad.xlsx")]));
+    expect(Array.isArray(fits) && fits.length).toBe(MAX_BATCH_FILES + 1);
+
+    const refused = addPlanned(many, await planFiles([file("x.txt"), file("y.txt")]));
+    expect(refused).toBe(
+      `That would be ${MAX_BATCH_FILES + 1} files to upload, and at most ${MAX_BATCH_FILES} go at a time. Choose fewer, or split the zip.`,
+    );
   });
 });
 

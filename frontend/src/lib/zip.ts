@@ -49,6 +49,9 @@ export class ZipError extends Error {
 }
 
 const DAMAGED = "This zip is damaged or is not a zip file.";
+const NO_INFLATE = "This browser cannot open zip files. Unzip it and choose the files instead.";
+const UNREADABLE =
+  "The zip could not be read again; it may have been moved or changed since it was chosen.";
 
 export interface ZipEntry {
   /** The path inside the archive, "/"-separated. */
@@ -119,14 +122,21 @@ export async function listZip(file: Blob): Promise<ZipEntry[]> {
   }
   if (end < 0) throw new ZipError(DAMAGED);
 
+  const endAt = tailStart + end;
   let disk = tail.getUint16(end + 4, true);
   let directoryDisk = tail.getUint16(end + 6, true);
   let count = tail.getUint16(end + 10, true);
   let directorySize = tail.getUint32(end + 12, true);
   let directoryOffset = tail.getUint32(end + 16, true);
 
-  if (end >= 20 && tail.getUint32(end - 20, true) === ZIP64_LOCATOR) {
-    const recordOffset = uint64(tail, end - 20 + 8);
+  // The ZIP64 locator sits just before the end record: in the tail, unless
+  // a comment of nearly 64 KiB pushed it out.
+  let locator: DataView | null = null;
+  if (end >= 20) locator = new DataView(tail.buffer, tail.byteOffset + end - 20, 20);
+  else if (endAt >= 20) locator = await view(file, endAt - 20, endAt);
+  const zip64 = locator?.getUint32(0, true) === ZIP64_LOCATOR;
+  if (locator && zip64) {
+    const recordOffset = uint64(locator, 8);
     const record = await view(file, recordOffset, recordOffset + 56);
     if (record.byteLength < 56 || record.getUint32(0, true) !== ZIP64_EOCD) {
       throw new ZipError(DAMAGED);
@@ -145,6 +155,16 @@ export async function listZip(file: Blob): Promise<ZipEntry[]> {
     throw new ZipError(
       `This zip holds ${count.toLocaleString("en")} files; at most ${MAX_ZIP_ENTRIES.toLocaleString("en")} can be opened.`,
     );
+  }
+  // Bytes in front of the archive - a self-extracting stub, a zip appended
+  // to another file - shift every offset it records by their length. Where
+  // the directory really starts is known: right before the end record. (Not
+  // for ZIP64, whose own record sits between them.)
+  let shift = 0;
+  if (!zip64) {
+    shift = endAt - directorySize - directoryOffset;
+    if (shift < 0) throw new ZipError(DAMAGED);
+    directoryOffset += shift;
   }
   if (directorySize > MAX_DIRECTORY_BYTES || directoryOffset + directorySize > file.size) {
     throw new ZipError(DAMAGED);
@@ -208,12 +228,20 @@ export async function listZip(file: Blob): Promise<ZipEntry[]> {
       compressedSize,
       method,
       crc32,
-      offset,
+      offset: offset + shift,
       encrypted: (flags & 0x0001) !== 0,
       directory: path.endsWith("/"),
       link: madeBy === 3 && (unixMode & 0o170000) === 0o120000,
     });
     at = next;
+  }
+  // 65,536 entries or more, written without ZIP64, wrap the end record's
+  // 16-bit count around; another header after the last one counted means
+  // this listing would be part of the archive, presented as all of it.
+  if (at + 4 <= directory.byteLength && directory.getUint32(at, true) === CENTRAL_HEADER) {
+    throw new ZipError(
+      `This zip holds more files than it says; at most ${MAX_ZIP_ENTRIES.toLocaleString("en")} can be opened.`,
+    );
   }
   return entries;
 }
@@ -268,7 +296,7 @@ export async function readZipEntry(file: Blob, entry: ZipEntry, limit: number): 
     throw new ZipError(`It is compressed in a way the browser cannot open (method ${entry.method}).`);
   }
   if (entry.method === DEFLATED && typeof DecompressionStream === "undefined") {
-    throw new ZipError("This browser cannot open zip files. Unzip it and choose the files instead.");
+    throw new ZipError(NO_INFLATE);
   }
 
   const local = await view(file, entry.offset, entry.offset + 30);
@@ -281,18 +309,22 @@ export async function readZipEntry(file: Blob, entry: ZipEntry, limit: number): 
   const end = start + entry.compressedSize;
   if (end > file.size) throw new ZipError(DAMAGED);
 
-  const raw = sliceStream(file, start, end);
-  const stream =
-    entry.method === DEFLATED
-      ? raw.pipeThrough(
-          // Typed as taking any BufferSource, which TypeScript will not
-          // match to the Uint8Array chunks piped into it.
-          new DecompressionStream("deflate-raw") as unknown as TransformStream<
-            Uint8Array,
-            Uint8Array
-          >,
-        )
-      : raw;
+  let stream = sliceStream(file, start, end);
+  if (entry.method === DEFLATED) {
+    let inflate: TransformStream<Uint8Array, Uint8Array>;
+    try {
+      // Typed as taking any BufferSource, which TypeScript will not match
+      // to the Uint8Array chunks piped into it.
+      inflate = new DecompressionStream("deflate-raw") as unknown as TransformStream<
+        Uint8Array,
+        Uint8Array
+      >;
+    } catch {
+      // Chrome 80-102 have DecompressionStream, but not "deflate-raw".
+      throw new ZipError(NO_INFLATE);
+    }
+    stream = stream.pipeThrough(inflate);
+  }
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -311,6 +343,11 @@ export async function readZipEntry(file: Blob, entry: ZipEntry, limit: number): 
     }
   } catch (caught) {
     if (caught instanceof ZipError) throw caught;
+    // The zip could not be read again (moved, changed or deleted since it
+    // was chosen) - not data that would not inflate.
+    if (caught instanceof DOMException && ["NotReadableError", "NotFoundError"].includes(caught.name)) {
+      throw new ZipError(UNREADABLE);
+    }
     throw new ZipError("It is damaged inside the zip.");
   }
   if (total !== entry.size || crc !== entry.crc32) {

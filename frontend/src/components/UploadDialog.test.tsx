@@ -7,6 +7,7 @@ import { ApiError, api, type UploadInput } from "../api/client";
 import type { DocumentDetail, Me } from "../api/types";
 import App from "../App";
 import { AuthProvider } from "../auth/AuthContext";
+import { MAX_BATCH_FILES } from "../lib/batch";
 import { PYTHON_ZIP, fromBase64, zipFile } from "../test/zips";
 import UploadDialog from "./UploadDialog";
 import { ToastProvider } from "./ui";
@@ -42,12 +43,12 @@ const titleOf = (call: unknown[]) => (call[0] as UploadInput).title;
 
 function renderDialog() {
   const handlers = { onClose: vi.fn(), onUploaded: vi.fn(), onBatchUploaded: vi.fn() };
-  render(
+  const { unmount } = render(
     <AuthProvider>
       <UploadDialog open {...handlers} />
     </AuthProvider>,
   );
-  return handlers;
+  return { ...handlers, unmount };
 }
 
 async function choose(files: File[], options: { applyAccept?: boolean } = {}) {
@@ -81,6 +82,7 @@ describe("UploadDialog, one file", () => {
 
     await waitFor(() => expect(onUploaded).toHaveBeenCalledWith({ id: 1, title: "Exam rules" }));
     expect(upload).toHaveBeenCalledTimes(1);
+    expect(keyOf(upload.mock.calls[0])).toMatch(/^[0-9a-f]{64}$/);
     expect(upload.mock.calls[0][0]).toEqual({
       title: "Exam rules",
       document_type: "GENERAL",
@@ -113,8 +115,8 @@ describe("UploadDialog, several files", () => {
     expect(await within(dialog).findByText("2 documents uploaded")).toBeInTheDocument();
     expect(upload.mock.calls.map(titleOf).sort()).toEqual(["Fee schedule", "Leave policy"]);
     const keys = upload.mock.calls.map(keyOf);
-    expect(keys[0]).toMatch(/^[0-9a-f]{32}$/);
-    expect(keys[1]).toMatch(/^[0-9a-f]{32}$/);
+    expect(keys[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(keys[1]).toMatch(/^[0-9a-f]{64}$/);
     expect(keys[0]).not.toBe(keys[1]);
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
@@ -211,28 +213,98 @@ describe("UploadDialog, several files", () => {
     expect(within(dialog).getByRole("button", { name: "Upload 2 remaining" })).toBeInTheDocument();
   });
 
-  it("stops after the files already on their way", async () => {
-    const pending: (() => void)[] = [];
+  it("stops at once, and sends what was cut off again under the same keys", async () => {
+    let stalled = true;
     const upload = vi.spyOn(api, "upload").mockImplementation(
-      (input) =>
-        new Promise((resolve) => {
-          pending.push(() => resolve(asDocument(input)));
+      (input, _progress, options) =>
+        new Promise((resolve, reject) => {
+          if (!stalled) return resolve(asDocument(input));
+          options?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The upload was stopped.", "AbortError")),
+          );
         }),
     );
     const { onClose } = renderDialog();
 
     const dialog = await choose([file("a.txt"), file("b.txt"), file("c.txt")]);
     await userEvent.click(within(dialog).getByRole("button", { name: "Upload 3 documents" }));
-    await waitFor(() => expect(pending).toHaveLength(2));
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
     // Not closable while files are on their way.
     await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(onClose).not.toHaveBeenCalled();
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Stop" }));
-    pending.forEach((finish) => finish());
-    expect(await within(dialog).findByText("2 of 3 uploaded")).toBeInTheDocument();
-    expect(upload).toHaveBeenCalledTimes(2);
-    expect(within(dialog).getByRole("button", { name: "Upload 1 remaining" })).toBeInTheDocument();
+    expect(await within(dialog).findByText("0 of 3 uploaded")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Not uploaded")).toHaveLength(3);
+
+    stalled = false;
+    await userEvent.click(within(dialog).getByRole("button", { name: "Upload 3 remaining" }));
+    expect(await within(dialog).findByText("3 documents uploaded")).toBeInTheDocument();
+    const keysOf = (title: string) =>
+      upload.mock.calls.filter((call) => titleOf(call) === title).map(keyOf);
+    expect(new Set(keysOf("A")).size).toBe(1);
+    expect(keysOf("A")).toHaveLength(2);
+  });
+
+  it("sends the same keys when the same files are chosen again, so nothing is made twice", async () => {
+    const upload = vi.spyOn(api, "upload").mockImplementation(async (input) => asDocument(input));
+    const chosen = [
+      new File(["a"], "a.txt", { lastModified: 1 }),
+      new File(["b"], "b.txt", { lastModified: 1 }),
+    ];
+
+    const first = renderDialog();
+    let dialog = await choose(chosen);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Upload 2 documents" }));
+    await within(dialog).findByText("2 documents uploaded");
+    first.unmount();
+
+    renderDialog();
+    dialog = await choose(chosen);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Upload 2 documents" }));
+    await within(dialog).findByText("2 documents uploaded");
+
+    const keys = upload.mock.calls.map(keyOf);
+    expect(keys.slice(2).sort()).toEqual(keys.slice(0, 2).sort());
+  });
+
+  it("sends a file again under a fresh key when its earlier document was deleted", async () => {
+    let replayed = true;
+    const upload = vi.spyOn(api, "upload").mockImplementation(async (input) => {
+      if (replayed) {
+        // What the server answers a key whose document is gone.
+        replayed = false;
+        throw new ApiError(404, "Not found.", { detail: "Not found." });
+      }
+      return asDocument(input);
+    });
+    const { onUploaded } = renderDialog();
+
+    const dialog = await choose([file("notes.pdf")]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
+    await waitFor(() => expect(onUploaded).toHaveBeenCalledWith({ id: 1, title: "Notes" }));
+    const [derived, fresh] = upload.mock.calls.map(keyOf);
+    expect(derived).toMatch(/^[0-9a-f]{64}$/);
+    expect(fresh).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it("refuses a choice that would pass the limit, adding none of it", async () => {
+    renderDialog();
+    const many = Array.from({ length: MAX_BATCH_FILES + 1 }, (_, i) => file(`doc-${i}.txt`));
+    const dialog = await choose(many);
+    expect(
+      await within(dialog).findByText(new RegExp(`at most ${MAX_BATCH_FILES} go at a time`)),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByRole("list", { name: "Chosen files" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the focus in the list when a file is removed", async () => {
+    renderDialog();
+    const dialog = await choose([file("a.pdf"), file("b.pdf"), file("c.pdf")]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove b.pdf" }));
+    expect(within(dialog).getByRole("button", { name: "Remove c.pdf" })).toHaveFocus();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove c.pdf" }));
+    expect(within(dialog).getByRole("button", { name: "Remove a.pdf" })).toHaveFocus();
   });
 
   it("goes back to the single form when all but one file are removed", async () => {

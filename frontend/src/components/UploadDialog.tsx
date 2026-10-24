@@ -4,7 +4,15 @@ import { ApiError, api } from "../api/client";
 import { useResource } from "../api/hooks";
 import { DOCUMENT_TYPES, type DocumentDetail, type DocumentType } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { MAX_BATCH_FILES, planFiles, type PickedFolder, type PlannedFile } from "../lib/batch";
+import {
+  MAX_BATCH_FILES,
+  addPlanned,
+  planFiles,
+  randomKey,
+  uploadKey,
+  type PickedFolder,
+  type PlannedFile,
+} from "../lib/batch";
 import { BATCH_ACCEPT_ATTRIBUTE } from "../lib/files";
 import { formatBytes } from "../lib/format";
 import { TYPE_LABEL } from "../lib/labels";
@@ -85,9 +93,28 @@ export default function UploadDialog({
   const [stopping, setStopping] = useState(false);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const pickButton = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  // The list as last set, for a choice that finishes opening after other
+  // changes were made: it is added to the list as it is then.
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  // Every change to the list goes through here, so the ref never trails it.
+  const updateFiles = (next: PlannedFile[]) => {
+    filesRef.current = next;
+    setFiles(next);
+  };
+  // Choices are opened one after another, so a drop made while a zip is
+  // still opening is added after it rather than lost.
+  const adding = useRef<Promise<void>>(Promise.resolve());
+  const pendingAdds = useRef(0);
   // Read by the upload workers between files, so a Stop, or a refusal that
   // every file would get, takes effect before the next one starts.
   const stopRef = useRef(false);
+  const controller = useRef<AbortController | null>(null);
+  // Each file's key for the settings it was last sent with (see uploadKey).
+  const keys = useRef(new Map<string, { settings: string; key: string }>());
+  const focusAfterRemove = useRef<number | null>(null);
   // A zip is opened asynchronously; what it held is dropped if the dialog
   // was closed or reopened meanwhile.
   const generation = useRef(0);
@@ -96,7 +123,11 @@ export default function UploadDialog({
     if (!open) return;
     generation.current += 1;
     stopRef.current = false;
-    setFiles([]);
+    controller.current = null;
+    adding.current = Promise.resolve();
+    pendingAdds.current = 0;
+    keys.current = new Map();
+    updateFiles([]);
     setStatuses({});
     setPhase("choosing");
     setOpening(false);
@@ -108,6 +139,17 @@ export default function UploadDialog({
     setHalted(null);
     setStopping(false);
   }, [open]);
+
+  // A removed row's button had the focus; it goes to the row that took its
+  // place, or to the button that adds files, never to the page behind.
+  useEffect(() => {
+    const index = focusAfterRemove.current;
+    if (index === null) return;
+    focusAfterRemove.current = null;
+    const buttons = list.current?.querySelectorAll<HTMLButtonElement>(".upload-row button");
+    const target = buttons?.length ? buttons[Math.min(index, buttons.length - 1)] : pickButton.current;
+    target?.focus();
+  }, [files]);
 
   // One file chosen on its own keeps the form it always had: a title to
   // edit, and the document opens once it is uploaded.
@@ -136,51 +178,108 @@ export default function UploadDialog({
     else onClose();
   };
 
-  const add = async (picked: (File | PickedFolder)[]) => {
-    if (!picked.length || phase !== "choosing" || opening || uploadingSingle) return;
+  const add = (picked: (File | PickedFolder)[]) => {
+    if (!picked.length || phase !== "choosing" || uploadingSingle) return;
     const run = generation.current;
+    pendingAdds.current += 1;
     setOpening(true);
     setErrors({});
     setFailure(null);
-    try {
-      const next = await planFiles(picked, files);
-      if (run === generation.current) setFiles(next);
-    } finally {
-      if (run === generation.current) setOpening(false);
-    }
+    adding.current = adding.current
+      .then(async () => {
+        const planned = await planFiles(picked);
+        if (run !== generation.current) return;
+        const next = addPlanned(filesRef.current, planned);
+        if (typeof next === "string") {
+          setErrors({ file: next });
+        } else {
+          updateFiles(next);
+        }
+      })
+      .catch(() => setFailure("Those files could not be read."))
+      .finally(() => {
+        if (run === generation.current && --pendingAdds.current === 0) setOpening(false);
+      });
   };
 
   const remove = (id: string) => {
-    setFiles((current) => current.filter((file) => file.id !== id));
+    focusAfterRemove.current = filesRef.current.findIndex((file) => file.id === id);
+    updateFiles(filesRef.current.filter((file) => file.id !== id));
     setErrors({});
   };
 
   const setStatus = (id: string, status: Status) =>
     setStatuses((current) => ({ ...current, [id]: status }));
 
-  const uploadOne = async (file: PlannedFile) => {
+  const keyFor = async (file: PlannedFile, title: string, fresh = false) => {
+    const settings = JSON.stringify([title, documentType, anyDepartment ? department : ""]);
+    const known = keys.current.get(file.id);
+    if (!fresh && known?.settings === settings) return known.key;
+    const key = fresh ? randomKey() : await uploadKey(file.identity, settings);
+    keys.current.set(file.id, { settings, key });
+    return key;
+  };
+
+  /**
+   * One upload, under the file's key. The server answers a key it has seen
+   * with the document it made then - unless that document has been deleted
+   * since (404), or the key was its for a different request (422, a file
+   * that only looked the same). Either way the file is new to it, and goes
+   * once more under a fresh key.
+   */
+  const send = async (
+    file: PlannedFile,
+    title: string,
+    content: File,
+    onProgress: (fraction: number) => void,
+    signal?: AbortSignal,
+  ) => {
+    const upload = {
+      title,
+      document_type: documentType,
+      department: anyDepartment ? department : undefined,
+      file: content,
+    };
+    try {
+      return await api.upload(upload, onProgress, { idempotencyKey: await keyFor(file, title), signal });
+    } catch (caught) {
+      if (!(caught instanceof ApiError) || (caught.status !== 404 && caught.status !== 422)) throw caught;
+      return api.upload(upload, onProgress, {
+        idempotencyKey: await keyFor(file, title, true),
+        signal,
+      });
+    }
+  };
+
+  const uploadOne = async (file: PlannedFile, signal: AbortSignal) => {
     setStatus(file.id, { state: "uploading", progress: 0 });
     let content: File;
     try {
       content = await file.load();
     } catch (caught) {
-      const reason = caught instanceof ZipError ? caught.message : "It could not be read.";
+      const reason =
+        caught instanceof ZipError
+          ? caught.message
+          : "It could not be read; it may have been moved or changed since it was chosen.";
       setStatus(file.id, { state: "failed", reason, retry: false });
       return;
     }
     try {
-      const document = await api.upload(
-        {
-          title: file.title.trim() || file.name,
-          document_type: documentType,
-          department: anyDepartment ? department : undefined,
-          file: content,
-        },
+      const document = await send(
+        file,
+        file.title.trim() || file.name,
+        content,
         (fraction) => setStatus(file.id, { state: "uploading", progress: fraction }),
-        { idempotencyKey: file.key },
+        signal,
       );
       setStatus(file.id, { state: "done", document });
     } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        // Stopped. Sent again later under the same key, it cannot become
+        // a second copy even if this attempt reached the server.
+        setStatus(file.id, { state: "waiting" });
+        return;
+      }
       if (!(caught instanceof ApiError)) {
         setStatus(file.id, { state: "failed", reason: errorMessage(caught), retry: true });
         return;
@@ -193,28 +292,31 @@ export default function UploadDialog({
         if (caught.status === 429) setHalted(limitMessage(caught.retryAfter));
         return;
       }
-      if (caught.status === 403) {
-        stopRef.current = true;
-        setHalted(caught.message);
-      }
       const fields = caught.fieldErrors();
+      const everyFile = fields.department ?? fields.document_type;
+      if (caught.status === 403 || everyFile) {
+        // Refused for who is asking, or for a setting all the files share:
+        // the rest would be refused the same way.
+        stopRef.current = true;
+        setHalted(everyFile ?? caught.message);
+      }
       const reason =
         caught.status === 409
           ? "An earlier try is still in progress. Try again in a moment."
-          : (fields.file ??
-            fields.title ??
-            fields.department ??
-            fields.non_field_errors ??
-            caught.message);
-      // Refused for what it is (400, 413) or who is asking (403): sending
-      // it again changes nothing. A lost connection or a 5xx might.
-      const retry = caught.status === 0 || caught.status === 409 || caught.status >= 500;
+          : (fields.file ?? fields.title ?? everyFile ?? fields.non_field_errors ?? caught.message);
+      // Refused for what it is (400, 413), it would be refused again. A
+      // lost connection or a 5xx might not recur, nor a 403 that was a
+      // session or CSRF cookie renewed since.
+      const retry =
+        caught.status === 0 || caught.status === 403 || caught.status === 409 || caught.status >= 500;
       setStatus(file.id, { state: "failed", reason, retry });
     }
   };
 
   const runBatch = async (queue: PlannedFile[]) => {
     const run = generation.current;
+    const control = new AbortController();
+    controller.current = control;
     stopRef.current = false;
     setStopping(false);
     setHalted(null);
@@ -224,15 +326,20 @@ export default function UploadDialog({
     setPhase("uploading");
     let next = 0;
     const worker = async () => {
-      while (!stopRef.current && next < queue.length) await uploadOne(queue[next++]);
+      while (!stopRef.current && next < queue.length) await uploadOne(queue[next++], control.signal);
     };
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
-    if (run === generation.current) setPhase("finished");
+    if (run === generation.current) {
+      controller.current = null;
+      setPhase("finished");
+    }
   };
 
+  // Stops now: what is on its way is cancelled too, safely, as above.
   const stop = () => {
     stopRef.current = true;
     setStopping(true);
+    controller.current?.abort();
   };
 
   const submitSingle = async (file: PlannedFile) => {
@@ -245,16 +352,7 @@ export default function UploadDialog({
 
     setProgress(0);
     try {
-      const created = await api.upload(
-        {
-          title: file.title.trim(),
-          document_type: documentType,
-          department: anyDepartment ? department : undefined,
-          file: await file.load(),
-        },
-        setProgress,
-      );
-      onUploaded(created);
+      onUploaded(await send(file, file.title.trim(), await file.load(), setProgress));
     } catch (caught) {
       setProgress(null);
       if (caught instanceof ApiError) {
@@ -294,11 +392,13 @@ export default function UploadDialog({
   const onDrop = (event: DragEvent) => {
     event.preventDefault();
     setDragging(false);
-    void add(droppedItems(event));
+    add(droppedItems(event));
   };
 
-  const setTitle = (title: string) =>
-    setFiles(([first, ...rest]) => [{ ...first, title }, ...rest]);
+  const setTitle = (title: string) => {
+    const [first, ...rest] = filesRef.current;
+    updateFiles([{ ...first, title }, ...rest]);
+  };
 
   const tracking = phase !== "choosing";
   const fileError = errors.file || (single ? files[0].skip : undefined);
@@ -398,7 +498,7 @@ export default function UploadDialog({
                 const picked = Array.from(event.target.files ?? []);
                 // Cleared, so choosing the same file again is a change.
                 event.target.value = "";
-                void add(picked);
+                add(picked);
               }}
               aria-describedby="upload-file-hint"
             />
@@ -406,10 +506,11 @@ export default function UploadDialog({
               <>
                 <p className="dropzone-title">Drop more here, or</p>
                 <Button
+                  ref={pickButton}
                   size="sm"
                   icon="plus"
                   onClick={() => input.current?.click()}
-                  disabled={opening || uploadingSingle}
+                  disabled={uploadingSingle}
                 >
                   Add files
                 </Button>
@@ -421,10 +522,10 @@ export default function UploadDialog({
                 </span>
                 <p className="dropzone-title">Drop files or a .zip here</p>
                 <Button
+                  ref={pickButton}
                   size="sm"
                   icon="file"
                   onClick={() => input.current?.click()}
-                  disabled={opening}
                 >
                   Choose files
                 </Button>
@@ -469,11 +570,12 @@ export default function UploadDialog({
         {files.length ? (
           <div className="upload-files">
             {summary ? (
-              <p className="upload-summary" role={tracking ? "status" : undefined}>
+              <p className="upload-summary" role="status">
                 {summary}
               </p>
             ) : null}
-            <ul className="upload-list" aria-label="Chosen files">
+            {/* Focusable, so the list scrolls from the keyboard when no row has a button. */}
+            <ul ref={list} className="upload-list" aria-label="Chosen files" tabIndex={0}>
               {files.map((file) => (
                 <UploadRow
                   key={file.id}
@@ -482,9 +584,7 @@ export default function UploadDialog({
                   phase={phase}
                   inline={!single}
                   onRemove={
-                    phase === "choosing" && !uploadingSingle && !opening
-                      ? () => remove(file.id)
-                      : undefined
+                    phase === "choosing" && !uploadingSingle ? () => remove(file.id) : undefined
                   }
                 />
               ))}

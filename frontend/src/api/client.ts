@@ -354,6 +354,11 @@ export interface ChatInput {
   collection_id?: number | null;
 }
 
+export interface UploadOptions {
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}
+
 /**
  * Uploads through XMLHttpRequest rather than fetch, because fetch still
  * cannot report upload progress - and a 40 MB scan with no progress bar
@@ -363,11 +368,16 @@ export function uploadWithProgress<T>(
   path: string,
   form: FormData,
   onProgress: (fraction: number) => void,
-  options: { idempotencyKey?: string } = {},
+  options: UploadOptions = {},
 ): Promise<T> {
   return ensureCsrf().then(
     () =>
       new Promise<T>((resolve, reject) => {
+        const { signal } = options;
+        if (signal?.aborted) {
+          reject(new DOMException("The upload was stopped.", "AbortError"));
+          return;
+        }
         const xhr = new XMLHttpRequest();
         xhr.open("POST", `${API_BASE_URL}${path}`);
         xhr.setRequestHeader("Accept", "application/json");
@@ -377,6 +387,9 @@ export function uploadWithProgress<T>(
           if (event.lengthComputable) onProgress(event.loaded / event.total);
         };
         xhr.onerror = () => reject(new ApiError(0, describe(0, null), null));
+        // As fetch() does: a stopped upload rejects as an abort, not an error.
+        xhr.onabort = () => reject(new DOMException("The upload was stopped.", "AbortError"));
+        signal?.addEventListener("abort", () => xhr.abort(), { once: true });
         xhr.onload = () => {
           let parsed: unknown = xhr.responseText;
           try {
@@ -463,11 +476,7 @@ export const api = {
     request<Paginated<DocumentSummary>>(`/api/v1/documents/${query({ ...params })}`),
   document: (id: number) => request<DocumentDetail>(doc(id)),
   /** With an idempotency key, a retry of a lost response returns the first upload. */
-  upload: (
-    input: UploadInput,
-    onProgress: (fraction: number) => void,
-    options: { idempotencyKey?: string } = {},
-  ) => {
+  upload: (input: UploadInput, onProgress: (fraction: number) => void, options: UploadOptions = {}) => {
     const form = new FormData();
     form.append("title", input.title);
     form.append("document_type", input.document_type);

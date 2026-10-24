@@ -182,7 +182,13 @@ describe("fetchBlob", () => {
 
 describe("upload", () => {
   /** Just enough XMLHttpRequest to answer one upload. */
-  function stubXhr(status: number, body: unknown, headers: Record<string, string> = {}) {
+  /** Answers once sent - or, with `hang`, never, until aborted. */
+  function stubXhr(
+    status: number,
+    body: unknown,
+    headers: Record<string, string> = {},
+    hang = false,
+  ) {
     const sent: { headers: Record<string, string> } = { headers: {} };
     class FakeXhr {
       status = status;
@@ -190,6 +196,7 @@ describe("upload", () => {
       upload = { onprogress: null };
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
       open() {}
       setRequestHeader(name: string, value: string) {
         sent.headers[name] = value;
@@ -198,7 +205,10 @@ describe("upload", () => {
         return headers[name] ?? null;
       }
       send() {
-        queueMicrotask(() => this.onload?.());
+        if (!hang) queueMicrotask(() => this.onload?.());
+      }
+      abort() {
+        this.onabort?.();
       }
     }
     vi.stubGlobal("XMLHttpRequest", FakeXhr);
@@ -229,5 +239,22 @@ describe("upload", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(429);
     expect((error as ApiError).retryAfter).toBe(1150);
+  });
+
+  it("rejects a stopped upload as an abort, as fetch does", async () => {
+    document.cookie = "csrftoken=abc123; path=/";
+    stubXhr(202, { id: 1 }, {}, true);
+    const control = new AbortController();
+    const pending = api.upload(input, () => undefined, { signal: control.signal });
+    await Promise.resolve();
+    control.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+
+    // Stopped before it began: never sent.
+    const sent = stubXhr(202, { id: 2 });
+    await expect(
+      api.upload(input, () => undefined, { signal: control.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(sent.headers).toEqual({});
   });
 });

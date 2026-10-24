@@ -16,8 +16,12 @@ import {
 } from "./files";
 import { ZipError, canRead, listZip, readZipEntry, type ZipEntry } from "./zip";
 
-/** How many documents one upload may create - as many as one bulk delete removes. */
-export const MAX_BATCH_FILES = 100;
+/**
+ * The most files one dialog uploads. A choice that would pass it is refused
+ * whole rather than cut short: a zip half-listed left its other half with
+ * no way into the dialog but choosing the zip again.
+ */
+export const MAX_BATCH_FILES = 200;
 
 export interface PlannedFile {
   id: string;
@@ -29,8 +33,8 @@ export interface PlannedFile {
   from?: string;
   /** Why it will not be uploaded. Absent for a file that will be. */
   skip?: string;
-  /** Sent as Idempotency-Key, so a retry can never create a second copy. */
-  key: string;
+  /** What makes two choices the same file: the source of its idempotency key. */
+  identity: string;
   load: () => Promise<File>;
 }
 
@@ -53,14 +57,41 @@ export function isSystemFile(path: string): boolean {
   );
 }
 
+const hex = (bytes: Uint8Array) =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
 /** 128 random bits as hex. crypto.randomUUID needs a secure context; this does not. */
 export function randomKey(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return hex(bytes);
 }
 
-function planned(name: string, size: number, load: () => Promise<File>, from?: string): PlannedFile {
+/**
+ * The Idempotency-Key for uploading this file with these settings (title,
+ * type, department). Derived, not random: the same file chosen again - in
+ * this dialog or a later one, within the server's 24 hours - gets the same
+ * key, and the server answers with the document it already made instead of
+ * a copy. So choosing a zip again after half of it went through uploads
+ * only the other half. Any change of settings is a different key, as the
+ * server would refuse the old one for a different request (422).
+ *
+ * Without SubtleCrypto (a page served over plain http) the key is random:
+ * a retry in the same dialog still cannot duplicate, a later choice can.
+ */
+export async function uploadKey(identity: string, settings: string): Promise<string> {
+  if (!globalThis.crypto?.subtle) return randomKey();
+  const data = new TextEncoder().encode(`${identity}\u0000${settings}`);
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", data)));
+}
+
+function planned(
+  name: string,
+  size: number,
+  identity: string,
+  load: () => Promise<File>,
+  from?: string,
+): PlannedFile {
   return {
     id: randomKey(),
     name,
@@ -69,10 +100,12 @@ function planned(name: string, size: number, load: () => Promise<File>, from?: s
     size,
     from,
     skip: fileProblem(name, size) ?? undefined,
-    key: randomKey(),
+    identity,
     load,
   };
 }
+
+const fileIdentity = (file: File) => `file\u0000${file.name}\u0000${file.size}\u0000${file.lastModified}`;
 
 function fromEntry(archive: File, entry: ZipEntry): PlannedFile {
   const folder = entry.path.slice(0, entry.path.length - entry.name.length).replace(/\/$/, "");
@@ -80,6 +113,9 @@ function fromEntry(archive: File, entry: ZipEntry): PlannedFile {
   const item = planned(
     entry.name,
     entry.size,
+    // Content, not place: the same file zipped again, or in another zip,
+    // is the same upload.
+    `entry\u0000${entry.name}\u0000${entry.size}\u0000${entry.crc32}`,
     async () => {
       const blob = await readZipEntry(archive, entry, MAX_UPLOAD_BYTES);
       return new File([blob], entry.name, {
@@ -98,23 +134,23 @@ function fromEntry(archive: File, entry: ZipEntry): PlannedFile {
 }
 
 async function openZip(archive: File): Promise<PlannedFile[]> {
+  const unusable = (reason: string) => {
+    const item = planned(archive.name, archive.size, fileIdentity(archive), () =>
+      Promise.reject(new ZipError(reason)),
+    );
+    item.skip = reason;
+    return [item];
+  };
   let entries: ZipEntry[];
   try {
     entries = await listZip(archive);
   } catch (caught) {
-    const item = planned(archive.name, archive.size, () => Promise.reject(caught));
-    item.skip = caught instanceof ZipError ? caught.message : "This zip could not be opened.";
-    return [item];
+    return unusable(caught instanceof ZipError ? caught.message : "This zip could not be opened.");
   }
   const files = entries
     .filter((entry) => !entry.directory && !isSystemFile(entry.path))
     .map((entry) => fromEntry(archive, entry));
-  if (!files.length) {
-    const item = planned(archive.name, archive.size, () => Promise.reject(new ZipError("Empty")));
-    item.skip = "This zip has no files in it.";
-    return [item];
-  }
-  return files;
+  return files.length ? files : unusable("This zip has no files in it.");
 }
 
 /** A dropped folder, which the browser hands over as an empty, typeless file. */
@@ -122,35 +158,37 @@ export interface PickedFolder {
   folder: string;
 }
 
-/**
- * Plans `picked` after the `already` planned, in the order chosen, a zip's
- * files in its own order. Past MAX_BATCH_FILES uploadable files, the rest
- * are listed as skipped, so nobody is left wondering where they went.
- */
-export async function planFiles(
-  picked: (File | PickedFolder)[],
-  already: PlannedFile[] = [],
-): Promise<PlannedFile[]> {
-  const added: PlannedFile[] = [];
+/** Plans what was picked, in the order chosen; a zip's files in its own order. */
+export async function planFiles(picked: (File | PickedFolder)[]): Promise<PlannedFile[]> {
+  const plans: PlannedFile[] = [];
   for (const file of picked) {
     if (!(file instanceof File)) {
-      const item = planned(file.folder, 0, () => Promise.reject(new Error("A folder")));
+      const item = planned(file.folder, 0, `folder\u0000${file.folder}`, () =>
+        Promise.reject(new Error("A folder")),
+      );
       item.skip = "A folder is not opened. Choose the files in it, or zip it.";
-      added.push(item);
+      plans.push(item);
     } else if (isZip(file.name)) {
-      added.push(...(await openZip(file)));
+      plans.push(...(await openZip(file)));
     } else {
-      added.push(planned(file.name, file.size, () => Promise.resolve(file)));
+      plans.push(planned(file.name, file.size, fileIdentity(file), () => Promise.resolve(file)));
     }
   }
-  let uploadable = already.filter((item) => !item.skip).length;
-  for (const item of added) {
-    if (item.skip) continue;
-    if (uploadable >= MAX_BATCH_FILES) {
-      item.skip = `Over the limit of ${MAX_BATCH_FILES} files at a time. Upload it next.`;
-    } else {
-      uploadable += 1;
-    }
+  return plans;
+}
+
+/**
+ * `current` with `added` after it, leaving out what is already listed (the
+ * same file twice is one document). A message instead, and nothing added,
+ * if that would pass MAX_BATCH_FILES files to upload.
+ */
+export function addPlanned(current: PlannedFile[], added: PlannedFile[]): PlannedFile[] | string {
+  const seen = new Set(current.map((file) => file.identity));
+  const fresh = added.filter((file) => !seen.has(file.identity) && seen.add(file.identity));
+  const next = [...current, ...fresh];
+  const uploadable = next.filter((file) => !file.skip).length;
+  if (uploadable > MAX_BATCH_FILES) {
+    return `That would be ${uploadable.toLocaleString("en")} files to upload, and at most ${MAX_BATCH_FILES} go at a time. Choose fewer, or split the zip.`;
   }
-  return [...already, ...added];
+  return next;
 }
