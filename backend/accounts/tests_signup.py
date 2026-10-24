@@ -178,6 +178,17 @@ class SignupSubmissionTests(SignupTestCase):
         # Which of the two holds a name is nobody else's business.
         self.assertEqual(by_account.data["username"], by_request.data["username"])
 
+    def test_the_form_refuses_a_held_name_before_anything_else(self):
+        """Not left to the unique constraint, which fires only once the rest
+        of the form is valid: the applicant would fix their password and only
+        then be told the name was never available."""
+        pending("waiting")
+
+        response = self.apply(username="Waiting", password="short")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+
     def test_a_declined_applicant_may_apply_again(self):
         pending(status=SignupRequest.Status.REJECTED)
 
