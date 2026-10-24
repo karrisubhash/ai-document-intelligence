@@ -1935,7 +1935,12 @@ select.input-sm {
   flex-wrap: nowrap;
 }
 
+/* Positioned, so the absolutely positioned visually-hidden labels inside a
+   table (a column's "Actions") are clipped with it: unpositioned, they kept
+   their place at the table's far edge and widened the whole page whenever
+   the table scrolled sideways. */
 .table-wrap {
+  position: relative;
   overflow-x: auto;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -5140,6 +5145,30 @@ mark.evidence {
 
   .composer-scope select.input {
     max-width: 150px;
+  }
+
+  /* An alert's actions go under its text, lined up with it (past the 18px
+     icon and its 12px gap), instead of squeezing beside it and running off
+     a 320px screen - a failed document's See what failed and Reprocess. */
+  .alert {
+    flex-wrap: wrap;
+  }
+
+  .alert-action {
+    flex-basis: 100%;
+    padding-left: 30px;
+  }
+
+  /* A segmented control (Processing's Failed / Running / Queued / Stalled /
+     All) tightens, and scrolls inside itself if it still does not fit. */
+  .segmented {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .segment {
+    padding: 0 9px;
   }
 
   /* A collection's document titles get two lines instead of one cut short. */
