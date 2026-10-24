@@ -504,6 +504,10 @@ export default function DocumentsPage() {
           setUploading(false);
           navigate(`/documents/${document.id}`);
         }}
+        onBatchUploaded={() => {
+          setUploading(false);
+          documents.reload();
+        }}
       />
 
       <BulkDeleteDialog

@@ -1874,20 +1874,118 @@ select.input-sm {
   color: var(--text);
 }
 
-.dropzone-file {
+/* Once files are chosen, the drop zone steps back to one line above the list. */
+.dropzone-compact {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 14px 16px;
+}
+
+.dropzone-compact .field-hint {
+  flex-basis: 100%;
+}
+
+.upload-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-summary {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+/* A shadow at an edge says more rows are scrolled out of sight that way: the
+   covers scroll with the rows and hide each shadow at its end of the list. */
+.upload-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(40vh, 340px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(var(--surface) 30%, transparent) top / 100% 28px no-repeat local,
+    linear-gradient(transparent, var(--surface) 70%) bottom / 100% 28px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(16, 24, 40, 0.16), transparent) top / 100% 10px
+      no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(16, 24, 40, 0.16), transparent) bottom / 100%
+      10px no-repeat scroll,
+    var(--surface);
+}
+
+/* On a phone the dialog itself scrolls; a second scroller inside it is one
+   a thumb keeps getting stuck in. */
+@media (max-width: 560px) {
+  .upload-list {
+    max-height: none;
+  }
+}
+
+.upload-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  width: 100%;
-  text-align: left;
+  padding: 10px 12px;
 }
 
-.dropzone-file-text {
+.upload-row + .upload-row {
+  border-top: 1px solid var(--border);
+}
+
+.upload-row-text {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 2px;
   overflow-wrap: anywhere;
+}
+
+.upload-row-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.upload-row-note {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.upload-row-skipped .upload-row-name,
+.upload-row-skipped .upload-row-note {
+  color: var(--text-2);
+}
+
+.upload-row > .badge {
+  flex-shrink: 0;
+}
+
+/* On a phone the badge goes under the name, which otherwise wrapped a few
+   letters to a line beside it. */
+@media (max-width: 480px) {
+  .upload-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 6px 12px;
+  }
+
+  .upload-row > .badge {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .upload-row > .icon-button {
+    grid-column: 3;
+    grid-row: 1;
+  }
 }
 
 /* --- Toolbars, tables, pagination ---------------------------------------------------- */

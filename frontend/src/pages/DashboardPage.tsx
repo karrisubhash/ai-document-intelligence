@@ -322,6 +322,10 @@ export default function DashboardPage() {
           setUploading(false);
           navigate(`/documents/${document.id}`);
         }}
+        onBatchUploaded={() => {
+          setUploading(false);
+          navigate("/documents");
+        }}
       />
     </div>
   );

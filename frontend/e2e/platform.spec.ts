@@ -39,7 +39,7 @@ async function signOut(page: Page) {
 
 async function upload(page: Page, file: { name: string; mimeType: string; buffer: Buffer }, title: string) {
   await page.getByRole("button", { name: "Upload document" }).first().click();
-  const dialog = page.getByRole("dialog", { name: "Upload a document" });
+  const dialog = page.getByRole("dialog", { name: "Upload documents" });
   await dialog.locator('input[type="file"]').setInputFiles(file);
   await dialog.getByLabel(/^Title/).fill(title);
   await dialog.getByRole("button", { name: "Upload", exact: true }).click();
