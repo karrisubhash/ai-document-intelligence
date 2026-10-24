@@ -139,6 +139,15 @@ export default function AuditPage() {
                         <Avatar name={entry.username} size="sm" />
                         {entry.username}
                       </span>
+                    ) : entry.action === "SIGNUP_REQUEST" && entry.metadata.username ? (
+                      // Nobody is signed in to ask for an account; the
+                      // applicant is named by the name they asked for.
+                      <span className="cell-person">
+                        <Avatar name={String(entry.metadata.username)} size="sm" />
+                        <span>
+                          {String(entry.metadata.username)} <span className="muted">(applicant)</span>
+                        </span>
+                      </span>
                     ) : (
                       <span className="cell-person">
                         <span className="avatar avatar-sm avatar-unknown" aria-hidden="true">

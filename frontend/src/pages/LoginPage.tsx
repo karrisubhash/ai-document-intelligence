@@ -1,9 +1,13 @@
 import { useState, type FormEvent } from "react";
+import { Link, useLocation } from "react-router-dom";
 
-import { ApiError } from "../api/client";
+import { ApiError, api } from "../api/client";
+import { useResource, type Resource } from "../api/hooks";
+import type { SignupOptions } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { BrandMark, Icon, type IconName } from "../components/icons";
-import { Alert, Button, Field, errorMessage } from "../components/ui";
+import { Alert, Button, ErrorState, Field, Spinner, errorMessage } from "../components/ui";
+import SignupForm from "./SignupForm";
 
 const FEATURES: [IconName, string, string][] = [
   [
@@ -68,21 +72,40 @@ function Illustration() {
   );
 }
 
-export default function LoginPage() {
+/**
+ * A sign-in refused because the account does not exist YET: the applicant's
+ * own request, proved with its password (accounts.api.views), is waiting or
+ * was declined. Anything else is an ordinary failure.
+ */
+function signupRefusal(caught: unknown) {
+  if (!(caught instanceof ApiError) || caught.status !== 403) return null;
+  const code = (caught.payload as { code?: unknown } | null)?.code;
+  if (code === "signup_pending" || code === "signup_rejected") {
+    return { code, message: caught.message };
+  }
+  return null;
+}
+
+function SignInForm({ offerSignup }: { offerSignup: boolean }) {
   const { login, expired } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<ReturnType<typeof signupRefusal>>(null);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setPending(true);
     setError(null);
+    setRefusal(null);
     try {
       await login(username.trim(), password);
     } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 429) {
+      const signup = signupRefusal(caught);
+      if (signup) {
+        setRefusal(signup);
+      } else if (caught instanceof ApiError && caught.status === 429) {
         setError("Too many sign-in attempts. Wait a minute before trying again.");
       } else if (caught instanceof ApiError && caught.status === 400) {
         setError("That username and password do not match an active account.");
@@ -96,6 +119,123 @@ export default function LoginPage() {
       setPending(false);
     }
   };
+
+  return (
+    <>
+      <h1 className="login-title">Sign in</h1>
+      <p className="login-subtitle">
+        Search, read and ask questions of your institution's documents.
+      </p>
+
+      {expired ? (
+        <Alert tone="info" title="Your session ended">
+          You were signed out after a period of time or a password change. Sign in to
+          continue.
+        </Alert>
+      ) : null}
+
+      <form className="stack" onSubmit={submit} noValidate>
+        <Field label="Username" required>
+          {(props) => (
+            <input
+              {...props}
+              className="input input-lg"
+              name="username"
+              autoComplete="username"
+              autoFocus
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              required
+            />
+          )}
+        </Field>
+        <Field label="Password" required>
+          {(props) => (
+            <input
+              {...props}
+              className="input input-lg"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          )}
+        </Field>
+        {refusal ? (
+          <Alert
+            tone={refusal.code === "signup_pending" ? "info" : "warning"}
+            title={
+              refusal.code === "signup_pending" ? "Waiting for approval" : "Request declined"
+            }
+          >
+            {refusal.message}
+          </Alert>
+        ) : null}
+        {error ? <Alert tone="danger">{error}</Alert> : null}
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          loading={pending}
+          disabled={!username.trim() || !password}
+          className="btn-block"
+        >
+          Sign in
+        </Button>
+      </form>
+      {offerSignup ? (
+        <p className="login-switch">
+          New here?{" "}
+          <Link to="/signup" className="link">
+            Request an account
+          </Link>
+        </p>
+      ) : null}
+      <p className="login-footnote">
+        <Icon name="lock" size={14} />
+        {offerSignup
+          ? "Every account is approved by an administrator."
+          : "Accounts are issued by your department administrator."}
+      </p>
+    </>
+  );
+}
+
+function SignupPanel({ options }: { options: Resource<SignupOptions> }) {
+  if (options.data?.enabled) return <SignupForm options={options.data} />;
+  if (options.data || options.status === 404) {
+    // Turned off here, or a server that predates sign-up.
+    return (
+      <>
+        <h1 className="login-title">Request an account</h1>
+        <Alert tone="info" title="Sign-up is not available here">
+          Accounts are issued by your department administrator. Ask them for one.
+        </Alert>
+        <p className="login-switch">
+          <Link to="/" className="link">
+            Back to sign in
+          </Link>
+        </p>
+      </>
+    );
+  }
+  if (options.error) return <ErrorState error={options.error} onRetry={options.reload} />;
+  return (
+    <div className="centered-block">
+      <Spinner />
+    </div>
+  );
+}
+
+export default function LoginPage() {
+  const { pathname } = useLocation();
+  const signingUp = pathname === "/signup";
+  // Whether to offer sign-up at all. Nothing is offered until the server
+  // says so: one that has it turned off, predates it or cannot be reached
+  // shows the sign-in form exactly as before.
+  const options = useResource(() => api.signupOptions(), []);
 
   return (
     <div className="login">
@@ -129,68 +269,16 @@ export default function LoginPage() {
       </div>
 
       <main className="login-main">
-        <div className="login-panel">
+        <div className={`login-panel${signingUp ? " login-panel-wide" : ""}`}>
           <div className="brand login-mobile-brand">
             <BrandMark />
             <span className="brand-name">Document Intelligence</span>
           </div>
-          <h1 className="login-title">Sign in</h1>
-          <p className="login-subtitle">
-            Search, read and ask questions of your institution's documents.
-          </p>
-
-          {expired ? (
-            <Alert tone="info" title="Your session ended">
-              You were signed out after a period of time or a password change. Sign in to
-              continue.
-            </Alert>
-          ) : null}
-
-          <form className="stack" onSubmit={submit} noValidate>
-            <Field label="Username" required>
-              {(props) => (
-                <input
-                  {...props}
-                  className="input input-lg"
-                  name="username"
-                  autoComplete="username"
-                  autoFocus
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  required
-                />
-              )}
-            </Field>
-            <Field label="Password" required>
-              {(props) => (
-                <input
-                  {...props}
-                  className="input input-lg"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                />
-              )}
-            </Field>
-            {error ? <Alert tone="danger">{error}</Alert> : null}
-            <Button
-              type="submit"
-              variant="primary"
-              size="lg"
-              loading={pending}
-              disabled={!username.trim() || !password}
-              className="btn-block"
-            >
-              Sign in
-            </Button>
-          </form>
-          <p className="login-footnote">
-            <Icon name="lock" size={14} />
-            Accounts are issued by your department administrator.
-          </p>
+          {signingUp ? (
+            <SignupPanel options={options} />
+          ) : (
+            <SignInForm offerSignup={Boolean(options.data?.enabled)} />
+          )}
         </div>
       </main>
     </div>

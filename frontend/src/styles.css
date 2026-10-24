@@ -2035,6 +2035,15 @@ a.table-title:hover {
   white-space: nowrap;
 }
 
+/* An applicant's note is free text up to 500 characters, typed by a
+   stranger: it wraps, even with no spaces in it, rather than widening the
+   table. */
+.table td.signup-note {
+  min-width: 180px;
+  max-width: 320px;
+  overflow-wrap: anywhere;
+}
+
 .cell-title {
   display: flex;
   align-items: center;
@@ -3006,6 +3015,12 @@ a.table-title:hover {
   width: min(400px, 100%);
 }
 
+/* The sign-up form puts two fields side by side, and .form-row wraps a
+   field narrower than 200px onto its own line. */
+.login-panel-wide {
+  width: min(480px, 100%);
+}
+
 .login-mobile-brand {
   display: none;
 }
@@ -3028,6 +3043,35 @@ a.table-title:hover {
   gap: 6px;
   font-size: 13px;
   color: var(--text-3);
+}
+
+.login-switch {
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.signup-sent {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+/* Focused by script so a screen reader reads the outcome; not a control. */
+.signup-sent .login-title:focus {
+  outline: none;
+}
+
+.signup-sent-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  color: var(--success);
 }
 
 /* --- Dashboard ------------------------------------------------------------------------- */

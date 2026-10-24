@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { ApiError, api } from "../../api/client";
 import { useAction, useDebouncedValue, useResource } from "../../api/hooks";
-import type { AdminUser, Role } from "../../api/types";
+import type { AdminUser, Role, SignupRequest, SignupStatus } from "../../api/types";
 import { useAuth, useMe } from "../../auth/AuthContext";
 import { Icon } from "../../components/icons";
 import {
@@ -10,6 +11,8 @@ import {
   Avatar,
   Badge,
   Button,
+  ConfirmDialog,
+  DescriptionList,
   Dialog,
   EmptyState,
   ErrorState,
@@ -17,6 +20,8 @@ import {
   PageHeader,
   Pagination,
   Skeleton,
+  TabPanel,
+  Tabs,
   errorMessage,
   useDocumentTitle,
   useToast,
@@ -320,17 +325,22 @@ function PasswordDialog({
   );
 }
 
-export default function UsersPage() {
-  useDocumentTitle("Users");
+type Editing = AdminUser | "new" | null;
+
+function Accounts({
+  editing,
+  setEditing,
+}: {
+  editing: Editing;
+  setEditing: (value: Editing) => void;
+}) {
   const toast = useToast();
-  const { can } = useAuth();
   const me = useMe();
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
   const [role, setRole] = useState("");
   const [active, setActive] = useState("");
   const search = useDebouncedValue(searchInput.trim(), 300);
-  const [editing, setEditing] = useState<AdminUser | "new" | null>(null);
   const [resetting, setResetting] = useState<AdminUser | null>(null);
 
   const users = useResource(
@@ -339,20 +349,7 @@ export default function UsersPage() {
   );
 
   return (
-    <div className="page">
-      <PageHeader
-        title="Users"
-        description={
-          can("administer_departments")
-            ? "Every account on the platform."
-            : "Accounts in your department. You can manage faculty, staff and students."
-        }
-        actions={
-          <Button variant="primary" icon="plus" onClick={() => setEditing("new")}>
-            New account
-          </Button>
-        }
-      />
+    <>
       <div className="toolbar">
         <div className="input-icon toolbar-search">
           <Icon name="search" />
@@ -505,6 +502,390 @@ export default function UsersPage() {
         user={resetting}
         onClose={() => setResetting(null)}
       />
+    </>
+  );
+}
+
+const SIGNUP_STATUS_LABEL: Record<SignupStatus, string> = {
+  PENDING: "Waiting",
+  APPROVED: "Approved",
+  REJECTED: "Declined",
+};
+
+function ApproveDialog({
+  signup,
+  onClose,
+  onApproved,
+}: {
+  signup: SignupRequest;
+  onClose: () => void;
+  onApproved: (signup: SignupRequest) => void;
+}) {
+  const me = useMe();
+  const { can } = useAuth();
+  const system = can("administer_departments");
+  const roles = useResource(() => api.adminRoles(), []);
+  const departments = useResource(() => api.departments(), [], { enabled: system });
+  // What they asked for, until the reviewer says otherwise.
+  const [role, setRole] = useState<Role>(signup.role);
+  const [department, setDepartment] = useState(signup.department);
+
+  const approve = useAction(() =>
+    api.adminApproveSignup(signup.id, {
+      role,
+      // A department admin's approvals land in their own department, which
+      // the server fills in.
+      ...(system ? { department } : {}),
+    }),
+  );
+  const errors = approve.error instanceof ApiError ? approve.error.fieldErrors() : {};
+  const close = () => {
+    if (!approve.pending) onClose();
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={close}
+      title={`Approve ${displayName(signup)}`}
+      description="Creates their account. They sign in with the password they chose."
+      footer={
+        <>
+          <Button variant="ghost" onClick={close} disabled={approve.pending}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="check"
+            loading={approve.pending}
+            onClick={async () => {
+              const result = await approve.run();
+              if (result.ok) onApproved(result.value);
+            }}
+          >
+            Approve and create account
+          </Button>
+        </>
+      }
+    >
+      <div className="stack">
+        <DescriptionList
+          items={[
+            ["Username", signup.username],
+            ["Email", signup.email],
+            ...(signup.note ? ([["Their note", signup.note]] as [string, string][]) : []),
+          ]}
+        />
+        <div className="form-row">
+          <Field label="Role" error={errors.role} hint={`They asked to be: ${ROLE_LABEL[signup.role]}.`}>
+            {(props) => (
+              <select
+                {...props}
+                className="input"
+                value={role}
+                onChange={(event) => setRole(event.target.value as Role)}
+              >
+                {(roles.data ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+                {!roles.data?.some((option) => option.value === role) ? (
+                  <option value={role}>{ROLE_LABEL[role]}</option>
+                ) : null}
+              </select>
+            )}
+          </Field>
+          <Field
+            label="Department"
+            error={errors.department}
+            hint={system ? "Decides which documents they can read." : undefined}
+          >
+            {(props) =>
+              system ? (
+                <select
+                  {...props}
+                  className="input"
+                  value={department}
+                  onChange={(event) => setDepartment(event.target.value)}
+                >
+                  <option value="">No department</option>
+                  {(departments.data ?? []).map((option) => (
+                    <option key={option.id} value={option.name}>
+                      {option.name}
+                    </option>
+                  ))}
+                  {/* Asked for before it was retired: shown as what it is,
+                      and refused by the server if kept. */}
+                  {signup.department &&
+                  departments.data &&
+                  !departments.data.some((option) => option.name === signup.department) ? (
+                    <option value={signup.department}>{signup.department} (inactive)</option>
+                  ) : null}
+                </select>
+              ) : (
+                <input {...props} className="input" value={me.department} disabled />
+              )
+            }
+          </Field>
+        </div>
+        {approve.error && !errors.role && !errors.department ? (
+          <Alert tone="danger">{errorMessage(approve.error)}</Alert>
+        ) : null}
+      </div>
+    </Dialog>
+  );
+}
+
+function DeclineDialog({
+  signup,
+  onClose,
+  onDeclined,
+}: {
+  signup: SignupRequest;
+  onClose: () => void;
+  onDeclined: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const decline = useAction(() => api.adminRejectSignup(signup.id, note.trim()));
+  return (
+    <ConfirmDialog
+      open
+      title={`Decline ${displayName(signup)}?`}
+      confirmLabel="Decline request"
+      pending={decline.pending}
+      error={decline.error}
+      onClose={onClose}
+      onConfirm={async () => {
+        const result = await decline.run();
+        if (result.ok) onDeclined();
+      }}
+    >
+      <p>No account is created. They can send a new request later.</p>
+      <Field label="Reason" hint="Optional. Shown to them when they next try to sign in.">
+        {(props) => (
+          <textarea
+            {...props}
+            className="input"
+            rows={2}
+            maxLength={500}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
+        )}
+      </Field>
+    </ConfirmDialog>
+  );
+}
+
+function SignupRequests({ onDecided }: { onDecided: () => void }) {
+  const toast = useToast();
+  const [status, setStatus] = useState<SignupStatus>("PENDING");
+  const [page, setPage] = useState(1);
+  const [approving, setApproving] = useState<SignupRequest | null>(null);
+  const [declining, setDeclining] = useState<SignupRequest | null>(null);
+
+  const requests = useResource(
+    () => api.adminSignupRequests({ status, page }),
+    [status, page],
+  );
+  const decided = () => {
+    requests.reload();
+    onDecided();
+  };
+
+  return (
+    <>
+      <div className="toolbar">
+        <select
+          className="input"
+          aria-label="Status"
+          value={status}
+          onChange={(event) => {
+            setStatus(event.target.value as SignupStatus);
+            setPage(1);
+          }}
+        >
+          {(Object.keys(SIGNUP_STATUS_LABEL) as SignupStatus[]).map((value) => (
+            <option key={value} value={value}>
+              {SIGNUP_STATUS_LABEL[value]}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {requests.error && !requests.data ? (
+        <ErrorState error={requests.error} onRetry={requests.reload} />
+      ) : requests.loading && !requests.data ? (
+        <div className="card card-body">
+          <Skeleton lines={4} />
+        </div>
+      ) : !requests.data?.results.length ? (
+        <div className="card">
+          <EmptyState
+            title={status === "PENDING" ? "Nobody is waiting" : "No requests here"}
+            icon="inbox"
+          >
+            {status === "PENDING"
+              ? "New sign-up requests for you to review will appear here."
+              : null}
+          </EmptyState>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="table table-stack">
+            <thead>
+              <tr>
+                <th scope="col">Applicant</th>
+                <th scope="col">Asked for</th>
+                <th scope="col">Note</th>
+                <th scope="col">{status === "PENDING" ? "Sent" : "Decided"}</th>
+                <th scope="col">
+                  <span className="visually-hidden">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {requests.data.results.map((signup) => (
+                <tr key={signup.id}>
+                  <td>
+                    <div className="cell-title">
+                      <Avatar name={displayName(signup)} />
+                      <div className="cell-title-text">
+                        <span className="table-title">{displayName(signup)}</span>
+                        <span
+                          className="table-sub table-sub-truncate"
+                          title={`${signup.username} · ${signup.email}`}
+                        >
+                          {signup.username} · {signup.email}
+                        </span>
+                      </div>
+                    </div>
+                  </td>
+                  <td data-label="Asked for">
+                    {ROLE_LABEL[signup.role] ?? signup.role}
+                    <span className="table-sub">
+                      {signup.department || "Department not listed"}
+                    </span>
+                  </td>
+                  <td data-label="Note" className="signup-note">
+                    {signup.status === "REJECTED" && signup.decision_note ? (
+                      <>
+                        <span className="muted small">Reason given: </span>
+                        {signup.decision_note}
+                      </>
+                    ) : (
+                      signup.note || <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td className="nowrap muted" data-label={status === "PENDING" ? "Sent" : "Decided"}>
+                    {formatRelative(signup.status === "PENDING" ? signup.created_at : signup.reviewed_at)}
+                    {signup.reviewed_by ? (
+                      <span className="table-sub">by {signup.reviewed_by}</span>
+                    ) : null}
+                  </td>
+                  <td className="cell-actions">
+                    {signup.status === "PENDING" ? (
+                      <div className="button-row">
+                        <Button size="sm" variant="primary" icon="check" onClick={() => setApproving(signup)}>
+                          Approve
+                        </Button>
+                        <Button size="sm" variant="ghost" icon="x" onClick={() => setDeclining(signup)}>
+                          Decline
+                        </Button>
+                      </div>
+                    ) : (
+                      <Badge tone={signup.status === "APPROVED" ? "success" : "muted"} dot>
+                        {SIGNUP_STATUS_LABEL[signup.status]}
+                      </Badge>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {requests.data ? (
+        <Pagination page={page} count={requests.data.count} onPage={setPage} />
+      ) : null}
+
+      {approving ? (
+        <ApproveDialog
+          key={approving.id}
+          signup={approving}
+          onClose={() => setApproving(null)}
+          onApproved={(signup) => {
+            setApproving(null);
+            decided();
+            toast(`Approved. ${signup.username} can sign in now.`);
+          }}
+        />
+      ) : null}
+      {declining ? (
+        <DeclineDialog
+          key={declining.id}
+          signup={declining}
+          onClose={() => setDeclining(null)}
+          onDeclined={() => {
+            setDeclining(null);
+            decided();
+            toast(`Request from ${declining.username} declined.`);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+export default function UsersPage() {
+  useDocumentTitle("Users");
+  const { can } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "requests" ? "requests" : "accounts";
+  const [editing, setEditing] = useState<Editing>(null);
+  // For the tab's count. Its own call, so the number is right whichever
+  // tab is open and whatever the requests tab is filtered to.
+  const waiting = useResource(() => api.adminSignupRequests({ status: "PENDING" }), []);
+
+  return (
+    <div className="page">
+      <PageHeader
+        title="Users"
+        description={
+          can("administer_departments")
+            ? "Every account on the platform, and requests for new ones."
+            : "Accounts in your department. You can manage faculty, staff and students, and approve their sign-up requests."
+        }
+        actions={
+          tab === "accounts" ? (
+            <Button variant="primary" icon="plus" onClick={() => setEditing("new")}>
+              New account
+            </Button>
+          ) : undefined
+        }
+      />
+      <Tabs
+        label="Users"
+        selected={tab}
+        onSelect={(id) => setParams(id === "requests" ? { tab: "requests" } : {}, { replace: true })}
+        tabs={[
+          { id: "accounts", label: "Accounts", icon: "users" },
+          {
+            id: "requests",
+            label: "Sign-up requests",
+            icon: "inbox",
+            count: waiting.data?.count ? waiting.data.count : null,
+          },
+        ]}
+      />
+      <TabPanel id={tab}>
+        {tab === "accounts" ? (
+          <Accounts editing={editing} setEditing={setEditing} />
+        ) : (
+          <SignupRequests onDecided={waiting.reload} />
+        )}
+      </TabPanel>
     </div>
   );
 }

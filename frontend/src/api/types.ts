@@ -433,6 +433,8 @@ export interface Dashboard {
     updated_at: string;
     message_count: number;
   }[];
+  /** Sign-up requests waiting for this administrator; null for anyone else. */
+  pending_signup_requests?: number | null;
 }
 
 export interface Department {
@@ -469,6 +471,45 @@ export interface AdminUser {
 export interface RoleOption {
   value: Role;
   label: string;
+}
+
+/** GET /api/v1/auth/signup/ - what the sign-up form may offer, if anything. */
+export interface SignupOptions {
+  enabled: boolean;
+  departments: Department[];
+  roles: RoleOption[];
+}
+
+export interface SignupInput {
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  password: string;
+  department: string;
+  role: Role;
+  note: string;
+}
+
+export type SignupStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+export interface SignupRequest {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  /** What the applicant asked for; approval decides what they get. */
+  department: string;
+  role: Role;
+  note: string;
+  status: SignupStatus;
+  created_at: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  decision_note: string;
+  /** The account approval created. */
+  user: number | null;
 }
 
 export interface AuditEntry {

@@ -8,6 +8,7 @@ import { useMe } from "../auth/AuthContext";
 import { FileTypeIcon, Icon, type IconName } from "../components/icons";
 import UploadDialog from "../components/UploadDialog";
 import {
+  Alert,
   Button,
   Card,
   EmptyState,
@@ -122,6 +123,22 @@ export default function DashboardPage() {
           </Button>
         }
       />
+
+      {/* Someone waiting to be let in has no other way to ask. */}
+      {data?.pending_signup_requests ? (
+        <Alert
+          tone="info"
+          title={`${pluralize(data.pending_signup_requests, "sign-up request")} waiting for you`}
+          action={
+            <Link to="/admin/users?tab=requests" className="btn btn-secondary btn-sm">
+              Review
+            </Link>
+          }
+        >
+          {data.pending_signup_requests === 1 ? "Someone has" : "People have"} asked for an
+          account and can sign in once you approve.
+        </Alert>
+      ) : null}
 
       <form className="ask-hero" onSubmit={ask} role="search" aria-label="Ask a question">
         <label htmlFor="dashboard-question" className="ask-hero-label">

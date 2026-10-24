@@ -38,8 +38,13 @@ import type {
   OperationsJob,
   Paginated,
   ProcessingJob,
+  Role,
   RoleOption,
   SearchResponse,
+  SignupInput,
+  SignupOptions,
+  SignupRequest,
+  SignupStatus,
   SourcePassage,
   SystemStatus,
 } from "./types";
@@ -427,6 +432,14 @@ export const api = {
       quiet: true,
     }),
   logout: () => request<void>("/api/v1/auth/logout/", { method: "POST", quiet: true }),
+  signupOptions: () => request<SignupOptions>("/api/v1/auth/signup/", { quiet: true }),
+  /** Files a request; an administrator's approval creates the account. */
+  signup: (body: SignupInput) =>
+    request<{ status: SignupStatus }>("/api/v1/auth/signup/", {
+      method: "POST",
+      body,
+      quiet: true,
+    }),
   changePassword: (current_password: string, new_password: string) =>
     request<void>("/api/v1/auth/password/", {
       method: "POST",
@@ -565,6 +578,19 @@ export const api = {
       body: { password },
     }),
   adminRoles: () => request<RoleOption[]>("/api/v1/admin/users/roles/"),
+  adminSignupRequests: (params: Record<string, string | number | undefined> = {}) =>
+    request<Paginated<SignupRequest>>(`/api/v1/admin/signup-requests/${query(params)}`),
+  /** Without a role or department, the account gets what was asked for. */
+  adminApproveSignup: (id: number, body: { role?: Role; department?: string } = {}) =>
+    request<SignupRequest>(`/api/v1/admin/signup-requests/${id}/approve/`, {
+      method: "POST",
+      body,
+    }),
+  adminRejectSignup: (id: number, note = "") =>
+    request<SignupRequest>(`/api/v1/admin/signup-requests/${id}/reject/`, {
+      method: "POST",
+      body: { note },
+    }),
   adminDepartments: (page = 1) =>
     request<Paginated<AdminDepartment>>(`/api/v1/admin/departments/${query({ page })}`),
   adminCreateDepartment: (body: Partial<AdminDepartment>) =>
