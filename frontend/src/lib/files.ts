@@ -12,6 +12,9 @@ export const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".txt", ".png", ".jpg", ".j
 
 export const ACCEPT_ATTRIBUTE = ACCEPTED_EXTENSIONS.join(",");
 
+/** The upload dialog also takes a .zip, which it opens in the browser (lib/zip.ts). */
+export const BATCH_ACCEPT_ATTRIBUTE = [...ACCEPTED_EXTENSIONS, ".zip"].join(",");
+
 // MAX_DOCUMENT_SIZE_BYTES in backend/config/settings.py.
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
@@ -22,15 +25,34 @@ export function extensionOf(name: string): string {
 
 export function validateFile(file: File | null | undefined): string | null {
   if (!file) return "Choose a file to upload.";
-  if (file.size === 0) return "This file is empty.";
-  if (file.size > MAX_UPLOAD_BYTES) {
-    return `This file is ${(file.size / 1024 / 1024).toFixed(1)} MB; the limit is 50 MB.`;
+  return fileProblem(file.name, file.size);
+}
+
+/** What is wrong with a file of this name and size, or null - for a file not yet read. */
+export function fileProblem(name: string, size: number): string | null {
+  if (size === 0) return "This file is empty.";
+  if (size > MAX_UPLOAD_BYTES) {
+    return `This file is ${(size / 1024 / 1024).toFixed(1)} MB; the limit is 50 MB.`;
   }
-  if (!ACCEPTED_EXTENSIONS.includes(extensionOf(file.name))) {
+  if (!ACCEPTED_EXTENSIONS.includes(extensionOf(name))) {
     return `Unsupported file type. Upload one of: ${ACCEPTED_EXTENSIONS.join(", ")}.`;
   }
   return null;
 }
+
+/**
+ * The type a browser gives a picked file, for a file taken out of a zip,
+ * which has none. The server stores it as the version's mime_type; what
+ * the file really is, it decides by sniffing the content.
+ */
+export const MIME_BY_EXTENSION: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".txt": "text/plain",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+};
 
 /** A title from a filename: "exam_regulations-2024.pdf" -> "Exam regulations 2024". */
 export function titleFromFilename(name: string): string {

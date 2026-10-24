@@ -4,20 +4,67 @@ import { ApiError, api } from "../api/client";
 import { useResource } from "../api/hooks";
 import { DOCUMENT_TYPES, type DocumentDetail, type DocumentType } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { MAX_BATCH_FILES, planFiles, type PickedFolder, type PlannedFile } from "../lib/batch";
+import { BATCH_ACCEPT_ATTRIBUTE } from "../lib/files";
 import { formatBytes } from "../lib/format";
-import { ACCEPT_ATTRIBUTE, titleFromFilename, validateFile } from "../lib/files";
 import { TYPE_LABEL } from "../lib/labels";
+import { ZipError } from "../lib/zip";
 import { FileTypeIcon, Icon } from "./icons";
-import { Alert, Button, Dialog, Field, errorMessage } from "./ui";
+import { Alert, Badge, Button, Dialog, Field, IconButton, errorMessage, plural } from "./ui";
+
+/**
+ * Files uploading at once in a batch. Two keeps the connection busy while
+ * one response is on its way back, without taking more than a share of the
+ * server's request threads from everyone else.
+ */
+const CONCURRENCY = 2;
+
+type Status =
+  | { state: "waiting" }
+  | { state: "uploading"; progress: number }
+  | { state: "done"; document: DocumentDetail }
+  | { state: "failed"; reason: string; retry: boolean };
+
+type Phase = "choosing" | "uploading" | "finished";
+
+function limitMessage(seconds: number | null): string {
+  const wait =
+    seconds === null
+      ? "a little while"
+      : seconds < 90
+        ? "a minute"
+        : `about ${Math.ceil(seconds / 60)} minutes`;
+  return `You have reached the upload limit for now. Upload the rest in ${wait}.`;
+}
+
+/**
+ * What was dropped. A dropped folder reaches `files` as an empty file with
+ * no type, so it is told apart here - synchronously, as the items are only
+ * readable during the drop event.
+ */
+function droppedItems(event: DragEvent): (File | PickedFolder)[] {
+  const items = Array.from(event.dataTransfer.items ?? []).filter((item) => item.kind === "file");
+  if (!items.length) return Array.from(event.dataTransfer.files ?? []);
+  return items.flatMap((item): (File | PickedFolder)[] => {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry?.isDirectory) return [{ folder: entry.name }];
+    const file = item.getAsFile();
+    return file ? [file] : [];
+  });
+}
 
 export default function UploadDialog({
   open,
   onClose,
   onUploaded,
+  onBatchUploaded,
 }: {
   open: boolean;
   onClose: () => void;
+  /** One file was chosen, and is now this document. */
   onUploaded: (document: DocumentDetail) => void;
+  /** Several were: every document created, once the dialog is closed. */
+  onBatchUploaded: (documents: DocumentDetail[]) => void;
 }) {
   const { can, me } = useAuth();
   const anyDepartment = can("upload_to_any_department");
@@ -25,60 +72,185 @@ export default function UploadDialog({
     enabled: open && anyDepartment,
   });
 
-  const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState("");
-  const [titleTouched, setTitleTouched] = useState(false);
+  const [files, setFiles] = useState<PlannedFile[]>([]);
+  const [statuses, setStatuses] = useState<Record<string, Status>>({});
+  const [phase, setPhase] = useState<Phase>("choosing");
+  const [opening, setOpening] = useState(false);
   const [documentType, setDocumentType] = useState<DocumentType>("GENERAL");
   const [department, setDepartment] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
+  const [halted, setHalted] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  // Read by the upload workers between files, so a Stop, or a refusal that
+  // every file would get, takes effect before the next one starts.
+  const stopRef = useRef(false);
+  // A zip is opened asynchronously; what it held is dropped if the dialog
+  // was closed or reopened meanwhile.
+  const generation = useRef(0);
 
   useEffect(() => {
     if (!open) return;
-    setFile(null);
-    setTitle("");
-    setTitleTouched(false);
+    generation.current += 1;
+    stopRef.current = false;
+    setFiles([]);
+    setStatuses({});
+    setPhase("choosing");
+    setOpening(false);
     setDocumentType("GENERAL");
     setDepartment("");
     setProgress(null);
     setErrors({});
     setFailure(null);
+    setHalted(null);
+    setStopping(false);
   }, [open]);
 
-  const choose = (chosen: File | null) => {
-    setFile(chosen);
-    const problem = validateFile(chosen);
-    setErrors((current) => ({ ...current, file: problem ?? "" }));
-    if (chosen && !titleTouched) setTitle(titleFromFilename(chosen.name));
+  // One file chosen on its own keeps the form it always had: a title to
+  // edit, and the document opens once it is uploaded.
+  const single = files.length === 1 && !files[0].from;
+  const uploadable = files.filter((file) => !file.skip);
+  const skipped = files.length - uploadable.length;
+  const tracked = uploadable.filter((file) => statuses[file.id]);
+  const countOf = (state: Status["state"]) =>
+    tracked.filter((file) => statuses[file.id].state === state).length;
+  const done = countOf("done");
+  const failed = countOf("failed");
+  const remaining = uploadable.filter((file) => {
+    const status = statuses[file.id];
+    return !status || status.state === "waiting" || (status.state === "failed" && status.retry);
+  });
+  const created = uploadable.flatMap((file) => {
+    const status = statuses[file.id];
+    return status?.state === "done" ? [status.document] : [];
+  });
+  const uploadingSingle = progress !== null;
+  const busy = phase === "uploading" || uploadingSingle;
+
+  const close = () => {
+    if (busy) return;
+    if (created.length) onBatchUploaded(created);
+    else onClose();
   };
 
-  const onDrop = (event: DragEvent) => {
-    event.preventDefault();
-    setDragging(false);
-    choose(event.dataTransfer.files?.[0] ?? null);
+  const add = async (picked: (File | PickedFolder)[]) => {
+    if (!picked.length || phase !== "choosing" || opening || uploadingSingle) return;
+    const run = generation.current;
+    setOpening(true);
+    setErrors({});
+    setFailure(null);
+    try {
+      const next = await planFiles(picked, files);
+      if (run === generation.current) setFiles(next);
+    } finally {
+      if (run === generation.current) setOpening(false);
+    }
   };
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const remove = (id: string) => {
+    setFiles((current) => current.filter((file) => file.id !== id));
+    setErrors({});
+  };
+
+  const setStatus = (id: string, status: Status) =>
+    setStatuses((current) => ({ ...current, [id]: status }));
+
+  const uploadOne = async (file: PlannedFile) => {
+    setStatus(file.id, { state: "uploading", progress: 0 });
+    let content: File;
+    try {
+      content = await file.load();
+    } catch (caught) {
+      const reason = caught instanceof ZipError ? caught.message : "It could not be read.";
+      setStatus(file.id, { state: "failed", reason, retry: false });
+      return;
+    }
+    try {
+      const document = await api.upload(
+        {
+          title: file.title.trim() || file.name,
+          document_type: documentType,
+          department: anyDepartment ? department : undefined,
+          file: content,
+        },
+        (fraction) => setStatus(file.id, { state: "uploading", progress: fraction }),
+        { idempotencyKey: file.key },
+      );
+      setStatus(file.id, { state: "done", document });
+    } catch (caught) {
+      if (!(caught instanceof ApiError)) {
+        setStatus(file.id, { state: "failed", reason: errorMessage(caught), retry: true });
+        return;
+      }
+      if (caught.status === 429 || caught.status === 401) {
+        // Every later file would be refused the same way. A 401 has
+        // already sent the app back to sign-in.
+        stopRef.current = true;
+        setStatus(file.id, { state: "waiting" });
+        if (caught.status === 429) setHalted(limitMessage(caught.retryAfter));
+        return;
+      }
+      if (caught.status === 403) {
+        stopRef.current = true;
+        setHalted(caught.message);
+      }
+      const fields = caught.fieldErrors();
+      const reason =
+        caught.status === 409
+          ? "An earlier try is still in progress. Try again in a moment."
+          : (fields.file ??
+            fields.title ??
+            fields.department ??
+            fields.non_field_errors ??
+            caught.message);
+      // Refused for what it is (400, 413) or who is asking (403): sending
+      // it again changes nothing. A lost connection or a 5xx might.
+      const retry = caught.status === 0 || caught.status === 409 || caught.status >= 500;
+      setStatus(file.id, { state: "failed", reason, retry });
+    }
+  };
+
+  const runBatch = async (queue: PlannedFile[]) => {
+    const run = generation.current;
+    stopRef.current = false;
+    setStopping(false);
+    setHalted(null);
+    setFailure(null);
+    setErrors({});
+    for (const file of queue) setStatus(file.id, { state: "waiting" });
+    setPhase("uploading");
+    let next = 0;
+    const worker = async () => {
+      while (!stopRef.current && next < queue.length) await uploadOne(queue[next++]);
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    if (run === generation.current) setPhase("finished");
+  };
+
+  const stop = () => {
+    stopRef.current = true;
+    setStopping(true);
+  };
+
+  const submitSingle = async (file: PlannedFile) => {
     const problems: Record<string, string> = {};
-    const fileProblem = validateFile(file);
-    if (fileProblem) problems.file = fileProblem;
-    if (!title.trim()) problems.title = "Give the document a title.";
+    if (file.skip) problems.file = file.skip;
+    if (!file.title.trim()) problems.title = "Give the document a title.";
     setErrors(problems);
     setFailure(null);
-    if (Object.keys(problems).length || !file) return;
+    if (Object.keys(problems).length) return;
 
     setProgress(0);
     try {
       const created = await api.upload(
         {
-          title: title.trim(),
+          title: file.title.trim(),
           document_type: documentType,
           department: anyDepartment ? department : undefined,
-          file,
+          file: await file.load(),
         },
         setProgress,
       );
@@ -101,95 +273,230 @@ export default function UploadDialog({
     }
   };
 
-  const uploading = progress !== null;
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (phase !== "choosing" || opening || uploadingSingle) return;
+    if (!files.length) {
+      setErrors({ file: "Choose a file to upload." });
+      return;
+    }
+    if (single) {
+      void submitSingle(files[0]);
+      return;
+    }
+    if (!uploadable.length) {
+      setErrors({ file: "None of these files can be uploaded." });
+      return;
+    }
+    void runBatch(uploadable);
+  };
+
+  const onDrop = (event: DragEvent) => {
+    event.preventDefault();
+    setDragging(false);
+    void add(droppedItems(event));
+  };
+
+  const setTitle = (title: string) =>
+    setFiles(([first, ...rest]) => [{ ...first, title }, ...rest]);
+
+  const tracking = phase !== "choosing";
+  const fileError = errors.file || (single ? files[0].skip : undefined);
+  const overall = tracked.length
+    ? tracked.reduce((sum, file) => {
+        const status = statuses[file.id];
+        if (status.state === "done" || status.state === "failed") return sum + 1;
+        return status.state === "uploading" ? sum + status.progress : sum;
+      }, 0) / tracked.length
+    : 0;
+  const shownProgress = uploadingSingle ? (progress ?? 0) : overall;
+
+  // Before and during the upload; once it ends, the outcome is the alert's.
+  let summary = "";
+  if (!single && files.length && phase !== "finished") {
+    summary =
+      phase === "uploading"
+        ? `${done} of ${tracked.length} uploaded` + (failed ? ` · ${failed} failed` : "")
+        : `${uploadable.length} ${plural(uploadable.length, "file")} to upload`;
+    if (skipped) summary += ` · ${skipped} skipped`;
+  }
+
+  let footer;
+  if (phase === "uploading") {
+    footer = (
+      <>
+        <Button variant="ghost" onClick={stop} disabled={stopping}>
+          {stopping ? "Stopping…" : "Stop"}
+        </Button>
+        <Button variant="primary" loading>
+          Uploading…
+        </Button>
+      </>
+    );
+  } else if (phase === "finished") {
+    footer = (
+      <>
+        {remaining.length ? (
+          <Button icon="refresh" onClick={() => void runBatch(remaining)}>
+            Upload {remaining.length} remaining
+          </Button>
+        ) : null}
+        <Button variant="primary" onClick={close}>
+          Done
+        </Button>
+      </>
+    );
+  } else {
+    footer = (
+      <>
+        <Button variant="ghost" onClick={close} disabled={uploadingSingle}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          type="submit"
+          form="upload-form"
+          loading={uploadingSingle || opening}
+        >
+          {uploadingSingle
+            ? `Uploading ${Math.round((progress ?? 0) * 100)}%`
+            : single || !uploadable.length
+              ? "Upload"
+              : `Upload ${uploadable.length} ${plural(uploadable.length, "document")}`}
+        </Button>
+      </>
+    );
+  }
 
   return (
     <Dialog
       open={open}
-      onClose={uploading ? () => undefined : onClose}
-      title="Upload a document"
-      description="It is scanned, read and indexed in the background, then becomes searchable."
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={uploading}>
-            Cancel
-          </Button>
-          <Button variant="primary" type="submit" form="upload-form" loading={uploading}>
-            {uploading ? `Uploading ${Math.round((progress ?? 0) * 100)}%` : "Upload"}
-          </Button>
-        </>
-      }
+      onClose={close}
+      title="Upload documents"
+      description="One file, several, or a .zip of them. Each is scanned, read and indexed in the background, then becomes searchable."
+      footer={footer}
     >
       <form id="upload-form" className="stack" onSubmit={submit} noValidate>
-        <div
-          className={`dropzone${dragging ? " dragging" : ""}${errors.file ? " invalid" : ""}`}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-        >
-          <input
-            ref={input}
-            id="upload-file"
-            type="file"
-            className="visually-hidden"
-            accept={ACCEPT_ATTRIBUTE}
-            onChange={(event) => choose(event.target.files?.[0] ?? null)}
-            aria-describedby="upload-file-hint"
-          />
-          {file ? (
-            <div className="dropzone-file">
-              <FileTypeIcon fileName={file.name} size="lg" />
-              <span className="dropzone-file-text">
-                <strong>{file.name}</strong>
-                <span className="muted small">{formatBytes(file.size)}</span>
-              </span>
-              <Button size="sm" variant="secondary" onClick={() => input.current?.click()}>
-                Choose another
-              </Button>
-            </div>
-          ) : (
-            <>
-              <span className="dropzone-icon" aria-hidden="true">
-                <Icon name="upload-cloud" size={20} />
-              </span>
-              <p className="dropzone-title">Drop a file here</p>
-              <Button size="sm" icon="file" onClick={() => input.current?.click()}>
-                Choose a file
-              </Button>
-            </>
-          )}
-          <p className="field-hint" id="upload-file-hint">
-            PDF, Word (.docx), plain text, or a PNG/JPEG scan. Up to 50 MB. Every upload is
-            scanned before it is read.
-          </p>
-        </div>
-        {errors.file ? <p className="field-error">{errors.file}</p> : null}
-
-        <Field label="Title" error={errors.title} required>
-          {(props) => (
+        {!tracking ? (
+          <div
+            className={`dropzone${files.length ? " dropzone-compact" : ""}${dragging ? " dragging" : ""}${fileError ? " invalid" : ""}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+          >
             <input
-              {...props}
-              className="input"
-              value={title}
-              maxLength={255}
+              ref={input}
+              id="upload-file"
+              type="file"
+              multiple
+              className="visually-hidden"
+              accept={BATCH_ACCEPT_ATTRIBUTE}
               onChange={(event) => {
-                setTitle(event.target.value);
-                setTitleTouched(true);
+                const picked = Array.from(event.target.files ?? []);
+                // Cleared, so choosing the same file again is a change.
+                event.target.value = "";
+                void add(picked);
               }}
+              aria-describedby="upload-file-hint"
             />
-          )}
-        </Field>
+            {files.length ? (
+              <>
+                <p className="dropzone-title">Drop more here, or</p>
+                <Button
+                  size="sm"
+                  icon="plus"
+                  onClick={() => input.current?.click()}
+                  disabled={opening || uploadingSingle}
+                >
+                  Add files
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="dropzone-icon" aria-hidden="true">
+                  <Icon name="upload-cloud" size={20} />
+                </span>
+                <p className="dropzone-title">Drop files or a .zip here</p>
+                <Button
+                  size="sm"
+                  icon="file"
+                  onClick={() => input.current?.click()}
+                  disabled={opening}
+                >
+                  Choose files
+                </Button>
+              </>
+            )}
+            <p className="field-hint" id="upload-file-hint">
+              PDF, Word (.docx), plain text, or a PNG/JPEG scan, up to 50 MB each, or a .zip of
+              them. Up to {MAX_BATCH_FILES} files at a time. Every upload is scanned before it is
+              read.
+            </p>
+          </div>
+        ) : null}
+        {opening ? (
+          <p className="muted small" role="status">
+            Opening…
+          </p>
+        ) : null}
+
+        {files.length ? (
+          <div className="upload-files">
+            {summary ? (
+              <p className="upload-summary" role={tracking ? "status" : undefined}>
+                {summary}
+              </p>
+            ) : null}
+            <ul className="upload-list" aria-label="Chosen files">
+              {files.map((file) => (
+                <UploadRow
+                  key={file.id}
+                  file={file}
+                  status={statuses[file.id]}
+                  phase={phase}
+                  inline={!single}
+                  onRemove={
+                    phase === "choosing" && !uploadingSingle && !opening
+                      ? () => remove(file.id)
+                      : undefined
+                  }
+                />
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {fileError ? <p className="field-error">{fileError}</p> : null}
+
+        {single ? (
+          <Field label="Title" error={errors.title} required>
+            {(props) => (
+              <input
+                {...props}
+                className="input"
+                value={files[0].title}
+                maxLength={255}
+                disabled={uploadingSingle}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            )}
+          </Field>
+        ) : null}
 
         <div className="form-row">
-          <Field label="Type" error={errors.document_type}>
+          <Field
+            label="Type"
+            error={errors.document_type}
+            hint={files.length > 1 ? "For every file." : undefined}
+          >
             {(props) => (
               <select
                 {...props}
                 className="input"
                 value={documentType}
+                disabled={busy || tracking}
                 onChange={(event) => setDocumentType(event.target.value as DocumentType)}
               >
                 {DOCUMENT_TYPES.map((value) => (
@@ -208,6 +515,7 @@ export default function UploadDialog({
                   {...props}
                   className="input"
                   value={department}
+                  disabled={busy || tracking}
                   onChange={(event) => setDepartment(event.target.value)}
                 >
                   <option value="">No department (only you)</option>
@@ -229,21 +537,95 @@ export default function UploadDialog({
           )}
         </div>
 
-        {uploading ? (
+        {busy ? (
           <div
             className="progress"
             role="progressbar"
             aria-label="Upload progress"
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={Math.round((progress ?? 0) * 100)}
+            aria-valuenow={Math.round(shownProgress * 100)}
           >
-            <span className="progress-fill" style={{ width: `${(progress ?? 0) * 100}%` }} />
+            <span className="progress-fill" style={{ width: `${shownProgress * 100}%` }} />
           </div>
+        ) : null}
+
+        {phase === "finished" ? (
+          <Alert
+            tone={done === tracked.length ? "success" : done ? "warning" : "danger"}
+            title={
+              done === tracked.length
+                ? `${done} ${plural(done, "document")} uploaded`
+                : `${done} of ${tracked.length} uploaded`
+            }
+          >
+            {[
+              halted,
+              done
+                ? "Each is read and indexed in the background, and becomes searchable when it is ready."
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          </Alert>
         ) : null}
 
         {failure ? <Alert tone="danger">{failure}</Alert> : null}
       </form>
     </Dialog>
+  );
+}
+
+function UploadRow({
+  file,
+  status,
+  phase,
+  inline,
+  onRemove,
+}: {
+  file: PlannedFile;
+  status: Status | undefined;
+  phase: Phase;
+  /** Why a file is skipped, on its row. One file alone says it under the list. */
+  inline: boolean;
+  onRemove?: () => void;
+}) {
+  let badge = null;
+  let note: string | undefined;
+  if (file.skip) {
+    badge = <Badge>Skipped</Badge>;
+    if (inline) note = file.skip;
+  } else if (status?.state === "uploading") {
+    badge = <Badge tone="info">{Math.round(status.progress * 100)}%</Badge>;
+  } else if (status?.state === "done") {
+    badge = (
+      <Badge tone="success" icon="check">
+        Uploaded
+      </Badge>
+    );
+  } else if (status?.state === "failed") {
+    badge = <Badge tone="danger">Failed</Badge>;
+    note = status.reason;
+  } else if (status?.state === "waiting") {
+    badge = <Badge>{phase === "finished" ? "Not uploaded" : "Waiting"}</Badge>;
+  }
+
+  return (
+    <li className={`upload-row${file.skip ? " upload-row-skipped" : ""}`}>
+      <FileTypeIcon fileName={file.name} size="sm" />
+      <span className="upload-row-text">
+        <span className="upload-row-name">{file.name}</span>
+        <span className="muted small">
+          {file.size > 0 ? formatBytes(file.size) : null}
+          {file.size > 0 && file.from ? " · " : null}
+          {file.from ? `in ${file.from}` : null}
+        </span>
+        {note ? <span className="upload-row-note">{note}</span> : null}
+      </span>
+      {badge}
+      {onRemove ? (
+        <IconButton icon="x" size="sm" label={`Remove ${file.name}`} onClick={onRemove} />
+      ) : null}
+    </li>
   );
 }

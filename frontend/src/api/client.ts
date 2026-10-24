@@ -52,12 +52,15 @@ export const API_BASE_URL = (
 export class ApiError extends Error {
   readonly status: number;
   readonly payload: unknown;
+  /** Seconds until a throttled (429) call may be repeated, from Retry-After. */
+  readonly retryAfter: number | null;
 
-  constructor(status: number, message: string, payload: unknown) {
+  constructor(status: number, message: string, payload: unknown, retryAfter: number | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.payload = payload;
+    this.retryAfter = retryAfter;
   }
 
   /** DRF field errors, e.g. {"title": ["This field is required."]}. */
@@ -81,6 +84,12 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
 }
 
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/** Retry-After in seconds; the HTTP-date form is not one DRF sends. */
+function retryAfterSeconds(header: string | null): number | null {
+  const seconds = header ? Number(header) : NaN;
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
 
 export function readCookie(name: string): string {
   const match = document.cookie
@@ -201,7 +210,12 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   if (!response.ok) {
     if (response.status === 401 && !quiet) onUnauthorized?.();
-    throw new ApiError(response.status, describe(response.status, parsed), parsed);
+    throw new ApiError(
+      response.status,
+      describe(response.status, parsed),
+      parsed,
+      retryAfterSeconds(response.headers.get("Retry-After")),
+    );
   }
 
   return parsed as T;
@@ -349,6 +363,7 @@ export function uploadWithProgress<T>(
   path: string,
   form: FormData,
   onProgress: (fraction: number) => void,
+  options: { idempotencyKey?: string } = {},
 ): Promise<T> {
   return ensureCsrf().then(
     () =>
@@ -357,6 +372,7 @@ export function uploadWithProgress<T>(
         xhr.open("POST", `${API_BASE_URL}${path}`);
         xhr.setRequestHeader("Accept", "application/json");
         xhr.setRequestHeader("X-CSRFToken", readCookie("csrftoken"));
+        if (options.idempotencyKey) xhr.setRequestHeader("Idempotency-Key", options.idempotencyKey);
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) onProgress(event.loaded / event.total);
         };
@@ -372,7 +388,14 @@ export function uploadWithProgress<T>(
             resolve(parsed as T);
           } else {
             if (xhr.status === 401) onUnauthorized?.();
-            reject(new ApiError(xhr.status, describe(xhr.status, parsed), parsed));
+            reject(
+              new ApiError(
+                xhr.status,
+                describe(xhr.status, parsed),
+                parsed,
+                retryAfterSeconds(xhr.getResponseHeader("Retry-After")),
+              ),
+            );
           }
         };
         xhr.send(form);
@@ -439,13 +462,18 @@ export const api = {
   documents: (params: DocumentQuery = {}) =>
     request<Paginated<DocumentSummary>>(`/api/v1/documents/${query({ ...params })}`),
   document: (id: number) => request<DocumentDetail>(doc(id)),
-  upload: (input: UploadInput, onProgress: (fraction: number) => void) => {
+  /** With an idempotency key, a retry of a lost response returns the first upload. */
+  upload: (
+    input: UploadInput,
+    onProgress: (fraction: number) => void,
+    options: { idempotencyKey?: string } = {},
+  ) => {
     const form = new FormData();
     form.append("title", input.title);
     form.append("document_type", input.document_type);
     if (input.department) form.append("department", input.department);
     form.append("file", input.file);
-    return uploadWithProgress<DocumentDetail>("/api/v1/documents/", form, onProgress);
+    return uploadWithProgress<DocumentDetail>("/api/v1/documents/", form, onProgress, options);
   },
   uploadVersion: (id: number, file: File, onProgress: (fraction: number) => void) => {
     const form = new FormData();

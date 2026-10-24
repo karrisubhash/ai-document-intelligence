@@ -1874,20 +1874,79 @@ select.input-sm {
   color: var(--text);
 }
 
-.dropzone-file {
+/* Once files are chosen, the drop zone steps back to one line above the list. */
+.dropzone-compact {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 14px 16px;
+}
+
+.dropzone-compact .field-hint {
+  flex-basis: 100%;
+}
+
+.upload-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-summary {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.upload-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(40vh, 340px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.upload-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  width: 100%;
-  text-align: left;
+  padding: 10px 12px;
 }
 
-.dropzone-file-text {
+.upload-row + .upload-row {
+  border-top: 1px solid var(--border);
+}
+
+.upload-row-text {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 2px;
   overflow-wrap: anywhere;
+}
+
+.upload-row-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.upload-row-note {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.upload-row-skipped .upload-row-name,
+.upload-row-skipped .upload-row-note {
+  color: var(--text-2);
+}
+
+.upload-row > .badge {
+  flex-shrink: 0;
 }
 
 /* --- Toolbars, tables, pagination ---------------------------------------------------- */

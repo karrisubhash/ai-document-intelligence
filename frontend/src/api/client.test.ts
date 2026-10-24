@@ -179,3 +179,55 @@ describe("fetchBlob", () => {
     expect(error.name).toBe("AbortError");
   });
 });
+
+describe("upload", () => {
+  /** Just enough XMLHttpRequest to answer one upload. */
+  function stubXhr(status: number, body: unknown, headers: Record<string, string> = {}) {
+    const sent: { headers: Record<string, string> } = { headers: {} };
+    class FakeXhr {
+      status = status;
+      responseText = JSON.stringify(body);
+      upload = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      open() {}
+      setRequestHeader(name: string, value: string) {
+        sent.headers[name] = value;
+      }
+      getResponseHeader(name: string) {
+        return headers[name] ?? null;
+      }
+      send() {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    return sent;
+  }
+
+  const input = {
+    title: "Fee schedule",
+    document_type: "POLICY" as const,
+    file: new File(["x"], "fees.pdf"),
+  };
+
+  it("sends an Idempotency-Key only when given one", async () => {
+    document.cookie = "csrftoken=abc123; path=/";
+    let sent = stubXhr(202, { id: 1 });
+    await api.upload(input, () => undefined, { idempotencyKey: "k-1" });
+    expect(sent.headers["Idempotency-Key"]).toBe("k-1");
+
+    sent = stubXhr(202, { id: 2 });
+    await api.upload(input, () => undefined);
+    expect(sent.headers).not.toHaveProperty("Idempotency-Key");
+  });
+
+  it("says how long a throttled upload must wait", async () => {
+    document.cookie = "csrftoken=abc123; path=/";
+    stubXhr(429, { detail: "Request was throttled." }, { "Retry-After": "1150" });
+    const error = await api.upload(input, () => undefined).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(429);
+    expect((error as ApiError).retryAfter).toBe(1150);
+  });
+});
