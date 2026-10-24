@@ -474,6 +474,9 @@ class SignupApprovalSerializer(serializers.Serializer):
         signup = self.context["signup"]
 
         role = attrs.get("role", signup.role)
+        # This is also every reviewer's own limit: exactly what a department
+        # admin may assign (accounts.permissions), and less than a system
+        # admin may.
         if role not in permissions.DEPARTMENT_ASSIGNABLE_ROLES:
             raise serializers.ValidationError(
                 {
@@ -482,10 +485,6 @@ class SignupApprovalSerializer(serializers.Serializer):
                         "account from Users afterwards if it needs more."
                     ]
                 }
-            )
-        if role not in permissions.assignable_roles(actor):
-            raise serializers.ValidationError(
-                {"role": [f"You may not assign the {role} role."]}
             )
 
         try:
