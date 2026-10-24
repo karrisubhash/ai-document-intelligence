@@ -57,7 +57,7 @@ E2E_PASSWORD=... npx playwright test
 |---|---|
 | **Sign in** | Session login with CSRF; explains an expired session, a throttled attempt or an unreachable server differently. |
 | **Dashboard** | Counts over the documents the user may open, recent documents, failures they can act on, recent conversations, and a question box. |
-| **Documents** | Search titles, filter by status/type/department/owner, archived toggle, sort, paginate; state lives in the URL. Polls only while something is processing. |
+| **Documents** | Search titles, filter by status/type/department/owner, archived toggle, sort, paginate; state lives in the URL. Polls only while something is processing. **Upload** takes one file, several, or a `.zip` of them: one file keeps a title to edit and opens when done; several become one document each, two uploading at a time, with Stop and a retry for what failed. |
 | **Document** | Overview and classification; Preview (PDF and images, never for quarantined files); Text by page with OCR flagged; Fields with their source spans; Tables; Figures; Versions with per-version download; Processing timeline. Ask and Download up front; edit, reprocess, archive/restore and delete under **More actions** for those who may manage it, and new versions on the Versions tab. |
 | **Search** | Hybrid search with the query kept out of the URL (the API takes it by POST for the same reason). Results highlight matched terms and open the document at the exact passage. |
 | **Ask** | Conversations with history, rename and delete; answers with numbered citations that open the exact evidence — the cited passage tinted, the quoted words marked, and a warning when the document has changed since. Abstentions are explained in plain language; follow-ups show how they were read; injection warnings and multi-part plans are surfaced. Feedback per answer. |
@@ -109,6 +109,9 @@ Two choices that are easy to misread:
 - **Answers are rendered by a tiny Markdown renderer that never produces HTML from a
   string.** Answer text derives from uploaded documents, which are untrusted; React
   escapes every character, and there is no link or image rendering to abuse.
+- **A `.zip` is opened in the browser, not on the server** (`src/lib/zip.ts`, no library:
+  the CSP refuses the `blob:` workers zip libraries start). Each file inside is sent as an
+  ordinary upload, so the server checks, scans and audits it exactly as one chosen alone.
 - **The UI hides what a user cannot do, but never decides it.** Every button maps to an
   endpoint that re-checks permission; a hand-typed admin URL gets an explanation, and a
   hand-crafted request gets a 403 or 404 from the API.

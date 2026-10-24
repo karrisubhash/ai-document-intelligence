@@ -41,6 +41,13 @@ rest of the page, "all matching" through the API with its counted snapshot (a mi
 filter is refused), all of his conversations, and several collections whose documents
 stay. It creates what it deletes and leaves nothing behind.
 
+`frontend/e2e/upload.spec.ts` runs last, as the same user: a text file, a PDF and a zip
+chosen together in the upload dialog (the zip holding two documents, a spreadsheet the
+dialog lists as skipped, and Finder metadata it leaves out). All four documents must
+process on their own; the file from inside the zip opens with its text; then it deletes
+them. Against a stack that sends the Content-Security-Policy, it also fails on any
+violation, since the zip is opened in the page.
+
 It needs a disposable database and the accounts `seed_e2e` creates:
 
 ```bash
