@@ -1966,6 +1966,28 @@ select.input-sm {
   flex-shrink: 0;
 }
 
+/* On a phone the badge goes under the name, which otherwise wrapped a few
+   letters to a line beside it. */
+@media (max-width: 480px) {
+  .upload-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 6px 12px;
+  }
+
+  .upload-row > .badge {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .upload-row > .icon-button {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
 /* --- Toolbars, tables, pagination ---------------------------------------------------- */
 
 .toolbar {
