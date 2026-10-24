@@ -10,7 +10,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsAdministrator, IsSystemAdministrator
+from accounts.models import SignupRequest
+from accounts.permissions import (
+    IsAdministrator,
+    IsSystemAdministrator,
+    is_administrator,
+    reviewable_signups,
+)
 from documents import authorization, services
 from documents.api import discovery
 from documents.audit import record_event
@@ -22,10 +28,16 @@ from .serializers import AuditLogSerializer, OperationsJobSerializer
 
 User = get_user_model()
 
-COLLECTION_ACTIONS = (
+# Rows whose subject is not a document but belongs to a department, recorded
+# with that department in document_department (record_event's
+# subject_department): collections, and sign-up requests.
+SUBJECT_DEPARTMENT_ACTIONS = (
     AuditLog.Action.COLLECTION_CREATE,
     AuditLog.Action.COLLECTION_UPDATE,
     AuditLog.Action.COLLECTION_DELETE,
+    AuditLog.Action.SIGNUP_REQUEST,
+    AuditLog.Action.SIGNUP_APPROVE,
+    AuditLog.Action.SIGNUP_REJECT,
 )
 
 
@@ -69,16 +81,18 @@ class AuditLogView(ListAPIView):
             document_ref__isnull=False,
             document_department=department,
         )
-        # Collection rows carry the collection's department in the same
-        # column (record_event's subject_department).
-        of_department_collection = Q(
-            action__in=COLLECTION_ACTIONS, document_department=department
+        # Collection and sign-up rows carry their department in the same
+        # column (record_event's subject_department). A sign-up request has
+        # no user at all, so without this its department's administrator
+        # would never see it.
+        of_department_subject = Q(
+            action__in=SUBJECT_DEPARTMENT_ACTIONS, document_department=department
         ) & ~Q(document_department="")
         if department is not None:
             queryset = queryset.filter(
                 Q(user__profile__department=department)
                 | in_department
-                | of_department_collection
+                | of_department_subject
             )
 
         params = self.request.query_params
@@ -330,6 +344,17 @@ class DashboardView(APIView):
                 "file_name": version.file_name if version else "",
             }
 
+        # People waiting for this administrator to let them in; null for
+        # anyone who reviews no requests, so the screen can tell "none
+        # waiting" from "not yours to see".
+        pending_signups = (
+            reviewable_signups(
+                user, SignupRequest.objects.filter(status=SignupRequest.Status.PENDING)
+            ).count()
+            if is_administrator(user)
+            else None
+        )
+
         return Response(
             {
                 "documents": {
@@ -338,6 +363,7 @@ class DashboardView(APIView):
                 },
                 "recent_documents": [summary(document) for document in recent],
                 "needs_attention": [summary(document) for document in attention],
+                "pending_signup_requests": pending_signups,
                 "recent_conversations": [
                     {
                         "id": conversation.id,

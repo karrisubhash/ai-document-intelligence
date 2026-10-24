@@ -76,6 +76,19 @@ class AccountLoginRateThrottle(SimpleRateThrottle):
         return self.cache_format % {"scope": self.scope, "ident": account}
 
 
+class SignupRateThrottle(SimpleRateThrottle):
+    """Sign-up requests per address. Nobody is signed in, so the address is
+    the only identifier there is."""
+
+    scope = "signup"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": self.get_ident(request),
+        }
+
+
 class BurstUserThrottle(ScopedRateThrottle):
     """Scoped throttle that always identifies an authenticated user by pk.
 

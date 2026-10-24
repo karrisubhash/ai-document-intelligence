@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
 
-from .models import UserProfile
+from .models import SignupRequest, UserProfile
 
 User = get_user_model()
 
@@ -35,3 +35,21 @@ class ProfileAwareUserAdmin(UserAdmin):
 
 admin.site.unregister(User)
 admin.site.register(User, ProfileAwareUserAdmin)
+
+
+@admin.register(SignupRequest)
+class SignupRequestAdmin(admin.ModelAdmin):
+    """Read-only. Approval creates the account and audits the decision
+    (accounts.services.approve_signup); flipping the status here would do
+    neither, and would leave an "approved" applicant with no account."""
+
+    list_display = ("username", "email", "department", "role", "status", "created_at")
+    list_filter = ("status",)
+    search_fields = ("username", "email", "first_name", "last_name")
+    exclude = ("password",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

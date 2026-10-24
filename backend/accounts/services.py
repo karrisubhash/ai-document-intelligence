@@ -11,10 +11,12 @@ import hmac
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.contrib.auth.hashers import check_password
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
-from .models import Department, UserProfile
+from .models import Department, SignupRequest, UserProfile
 
 
 class UnknownDepartment(ValueError):
@@ -22,6 +24,14 @@ class UnknownDepartment(ValueError):
 
 
 class DepartmentNameInUse(ValueError):
+    pass
+
+
+class SignupAlreadyReviewed(ValueError):
+    pass
+
+
+class UsernameTaken(ValueError):
     pass
 
 
@@ -86,6 +96,7 @@ def rename_department(department: Department, new_name: str) -> Department:
                 Collection,
                 Conversation,
                 EvaluationDataset,
+                SignupRequest,
             )
         )
         or AuditLog.objects.filter(document_department=new_name).exists()
@@ -108,6 +119,9 @@ def rename_department(department: Department, new_name: str) -> Department:
     Collection.objects.filter(department=old_name).update(department=new_name)
     Conversation.objects.filter(department=old_name).update(department=new_name)
     EvaluationDataset.objects.filter(department=old_name).update(department=new_name)
+    # Or a waiting applicant would drop out of the department admin's queue,
+    # and approving them as asked would name a department that is gone.
+    SignupRequest.objects.filter(department=old_name).update(department=new_name)
     # Or a deleted document's trail would fall out of its department's view.
     AuditLog.objects.filter(document_department=old_name).update(
         document_department=new_name
@@ -126,6 +140,118 @@ def revoke_api_tokens(user) -> int:
     """
     deleted, _ = Token.objects.filter(user=user).delete()
     return deleted
+
+
+def username_unavailable(username: str) -> bool:
+    """Whether a sign-up may not ask for `username`.
+
+    Case-insensitive, though Django's usernames are not: an applicant who
+    became "Alice" beside an existing "alice" would be one typo away from
+    someone else's sign-in, and an administrator could not tell them apart
+    in a listing. A waiting request holds its name too, so two applicants
+    cannot both be promised it.
+    """
+    return (
+        get_user_model().objects.filter(username__iexact=username).exists()
+        or SignupRequest.objects.filter(
+            username__iexact=username, status=SignupRequest.Status.PENDING
+        ).exists()
+    )
+
+
+def _lock_pending(signup: SignupRequest) -> SignupRequest:
+    # Locked, so two administrators deciding at once cannot both win - one
+    # approving while the other rejects, or two accounts from one request.
+    signup = SignupRequest.objects.select_for_update().get(pk=signup.pk)
+    if signup.status != SignupRequest.Status.PENDING:
+        raise SignupAlreadyReviewed(
+            f"This request was already {signup.get_status_display().lower()}."
+        )
+    return signup
+
+
+@transaction.atomic
+def approve_signup(
+    signup: SignupRequest, *, reviewer, role: str, department: str
+) -> SignupRequest:
+    """Turn a request into an account with the role and department given.
+
+    Whether `reviewer` may grant that role and department is the caller's
+    question (AdminUserSerializer's rules, applied by the review
+    serializer); this does what approval means once it is allowed.
+    """
+    signup = _lock_pending(signup)
+    User = get_user_model()
+    if User.objects.filter(username__iexact=signup.username).exists():
+        raise UsernameTaken(
+            f"An account named {signup.username!r} was created after this "
+            f"request was made. Decline the request and ask them to choose "
+            f"another username."
+        )
+
+    user = User(
+        username=signup.username,
+        email=signup.email,
+        first_name=signup.first_name,
+        last_name=signup.last_name,
+    )
+    # The hash itself, so they sign in with the password they chose and
+    # nobody - the administrator included - ever handles it.
+    user.password = signup.password
+    try:
+        with transaction.atomic():
+            user.save()
+    except IntegrityError as exc:
+        # The same name created between the check above and this insert.
+        raise UsernameTaken(
+            f"An account named {signup.username!r} already exists."
+        ) from exc
+
+    # The post_save signal created the profile with defaults.
+    profile = user.profile
+    profile.role = role
+    profile.department = department
+    profile.save()
+
+    signup.status = SignupRequest.Status.APPROVED
+    signup.user = user
+    signup.reviewed_by = reviewer
+    signup.reviewed_at = timezone.now()
+    signup.password = ""
+    signup.save()
+    return signup
+
+
+@transaction.atomic
+def reject_signup(signup: SignupRequest, *, reviewer, note: str = "") -> SignupRequest:
+    signup = _lock_pending(signup)
+    signup.status = SignupRequest.Status.REJECTED
+    signup.decision_note = note
+    signup.reviewed_by = reviewer
+    signup.reviewed_at = timezone.now()
+    signup.save()
+    return signup
+
+
+def unapproved_signup(username: str, password: str) -> SignupRequest | None:
+    """The applicant's own waiting or declined request, if these are its
+    credentials - for a sign-in that failed because there is no account yet.
+
+    Only with the right password, so the sign-in form cannot be used to
+    learn who has applied. Never when an account holds the name: that
+    person's failed sign-in is theirs, whatever an earlier applicant for
+    the same name typed.
+    """
+    if get_user_model().objects.filter(username__iexact=username).exists():
+        return None
+    signup = (
+        SignupRequest.objects.filter(username__iexact=username)
+        .exclude(status=SignupRequest.Status.APPROVED)
+        .first()
+    )
+    if signup is None or not signup.password:
+        return None
+    return signup if check_password(password, signup.password) else None
 
 
 def failed_login_fingerprint(username: str) -> str:

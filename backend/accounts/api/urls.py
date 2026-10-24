@@ -6,6 +6,7 @@ from .views import (
     LogoutView,
     MeView,
     PasswordChangeView,
+    SignupView,
     TokenView,
 )
 
@@ -16,4 +17,5 @@ urlpatterns = [
     path("logout/", LogoutView.as_view(), name="auth-logout"),
     path("password/", PasswordChangeView.as_view(), name="auth-password"),
     path("token/", TokenView.as_view(), name="api-token-auth"),
+    path("signup/", SignupView.as_view(), name="auth-signup"),
 ]

@@ -54,6 +54,20 @@ def administrable_users(actor, queryset):
     return queryset.none()
 
 
+def reviewable_signups(actor, queryset):
+    """The sign-up requests `actor` may see and decide.
+
+    A department admin reviews the requests that ask for their department.
+    One that names no department - "mine is not listed" - is for a system
+    administrator, who can also place it anywhere.
+    """
+    if is_system_admin(actor):
+        return queryset
+    if is_department_admin(actor):
+        return queryset.filter(department=get_profile(actor).department)
+    return queryset.none()
+
+
 def assignable_roles(actor) -> frozenset:
     if is_system_admin(actor):
         return frozenset(Role.values)

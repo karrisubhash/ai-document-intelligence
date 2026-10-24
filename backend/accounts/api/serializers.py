@@ -1,10 +1,16 @@
 from django.contrib.auth import get_user_model, password_validation
+from django.contrib.auth.hashers import make_password
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from accounts import permissions
-from accounts.models import Department, UserProfile
-from accounts.services import UnknownDepartment, resolve_department
+from accounts.models import Department, SignupRequest, UserProfile
+from accounts.services import (
+    UnknownDepartment,
+    resolve_department,
+    username_unavailable,
+)
 from documents.authorization import (
     can_create_collection,
     get_profile,
@@ -295,3 +301,133 @@ class SetPasswordSerializer(serializers.Serializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages)) from exc
         return value
+
+
+# --- Self-service sign-up -----------------------------------------------------
+
+USERNAME_UNAVAILABLE = "This username is taken. Choose another."
+
+# What an applicant may ask to be. Administrative roles are granted, never
+# requested: offering them would only put a "make me an administrator"
+# button in front of every stranger, for an administrator to click by
+# mistake.
+SIGNUP_ROLE_CHOICES = [
+    (value, label)
+    for value, label in UserProfile.Role.choices
+    if value in permissions.DEPARTMENT_ASSIGNABLE_ROLES
+]
+
+
+class SignupSerializer(serializers.Serializer):
+    username = serializers.CharField(
+        max_length=150, validators=[UnicodeUsernameValidator()]
+    )
+    email = serializers.EmailField(max_length=254)
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(
+        max_length=150, required=False, allow_blank=True, default=""
+    )
+    password = serializers.CharField(
+        max_length=128, trim_whitespace=False, write_only=True
+    )
+    department = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    role = serializers.ChoiceField(
+        choices=SIGNUP_ROLE_CHOICES, default=UserProfile.Role.STUDENT
+    )
+    note = serializers.CharField(
+        max_length=500, required=False, allow_blank=True, default=""
+    )
+
+    def validate_username(self, value):
+        # The same answer whether an account or a waiting request holds the
+        # name: which of the two it is is nobody else's business.
+        if username_unavailable(value):
+            raise serializers.ValidationError(USERNAME_UNAVAILABLE)
+        return value
+
+    def validate_department(self, value):
+        try:
+            return resolve_department(value)
+        except UnknownDepartment as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+    def validate(self, attrs):
+        candidate = User(
+            username=attrs["username"],
+            email=attrs["email"],
+            first_name=attrs["first_name"],
+            last_name=attrs["last_name"],
+        )
+        _validate_password(attrs["password"], candidate, field="password")
+        return attrs
+
+    def create(self, validated_data):
+        password = validated_data.pop("password")
+        return SignupRequest.objects.create(
+            password=make_password(password), **validated_data
+        )
+
+
+class SignupRequestSerializer(serializers.ModelSerializer):
+    """A request as its reviewers see it. Never the password hash."""
+
+    reviewed_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+
+    class Meta:
+        model = SignupRequest
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "department",
+            "role",
+            "note",
+            "status",
+            "created_at",
+            "reviewed_by",
+            "reviewed_at",
+            "decision_note",
+            "user",
+        ]
+        read_only_fields = fields
+
+
+class SignupApprovalSerializer(serializers.Serializer):
+    """The role and department the new account gets - what was asked for,
+    unless the reviewer says otherwise - held to the rules that bind the
+    reviewer when they create an account by hand (AdminUserSerializer)."""
+
+    role = serializers.ChoiceField(choices=UserProfile.Role.choices, required=False)
+    department = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        actor = self.context["request"].user
+        signup = self.context["signup"]
+
+        role = attrs.get("role", signup.role)
+        if role not in permissions.assignable_roles(actor):
+            raise serializers.ValidationError(
+                {"role": [f"You may not assign the {role} role."]}
+            )
+
+        try:
+            department = resolve_department(attrs.get("department", signup.department))
+        except UnknownDepartment as exc:
+            raise serializers.ValidationError({"department": [str(exc)]}) from exc
+        if not is_system_admin(actor) and department != get_profile(actor).department:
+            raise serializers.ValidationError(
+                {"department": ["You may only assign your own department."]}
+            )
+
+        return {"role": role, "department": department}
+
+
+class SignupRejectionSerializer(serializers.Serializer):
+    # Shown to the applicant the next time they try to sign in.
+    note = serializers.CharField(
+        max_length=500, required=False, allow_blank=True, default=""
+    )

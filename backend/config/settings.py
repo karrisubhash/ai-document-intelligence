@@ -141,6 +141,11 @@ REST_FRAMEWORK = {
         # bound on a guessing run spread across a botnet. NIST SP 800-63B
         # caps failed attempts per account at 100.
         "login_account": os.getenv("THROTTLE_LOGIN_ACCOUNT", "100/hour"),
+        # Sign-up requests per address. Generous enough for a class signing
+        # up together behind one campus NAT; the queue itself is capped by
+        # SIGNUP_MAX_PENDING. It also bounds how fast the endpoint can be
+        # asked which usernames are taken.
+        "signup": os.getenv("THROTTLE_SIGNUP", "20/hour"),
         # Writes bytes and queues worker time.
         "upload": os.getenv("THROTTLE_UPLOAD", "60/hour"),
         # Runs two retrievers, a fusion pass and - with a cross-encoder
@@ -235,6 +240,22 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
+
+
+# Self-service sign-up (accounts.api.views.SignupView).
+#
+# Anyone who can reach the site may ASK for an account; nobody gets one
+# until an administrator approves the request, picking its role and
+# department (a department admin approves requests for their own
+# department). Turn it off where accounts are only ever issued by
+# administrators - the sign-in page then stops offering it and the endpoint
+# refuses.
+SIGNUP_ENABLED = os.getenv("SIGNUP_ENABLED", "True").lower() == "true"
+# A ceiling on requests waiting at once. The per-address throttle does not
+# bound a run spread across many addresses, and an unbounded queue of junk
+# would bury the genuine applicants an administrator has to find in it.
+# Reaching it stops new requests, not sign-ins.
+SIGNUP_MAX_PENDING = int(os.getenv("SIGNUP_MAX_PENDING", "500"))
 
 # True only under `manage.py test`. Named rather than repeated so every
 # place the suite needs different behaviour is greppable, and so that none

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import (
     authenticate,
     get_user_model,
@@ -5,7 +6,7 @@ from django.contrib.auth import (
     logout,
     update_session_auth_hash,
 )
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
@@ -19,18 +20,29 @@ from rest_framework.views import APIView
 
 from accounts import permissions
 from accounts.authentication import issue_token
-from accounts.models import Department, UserProfile
+from accounts.models import Department, SignupRequest, UserProfile
 from accounts.services import (
     DepartmentNameInUse,
+    SignupAlreadyReviewed,
+    UsernameTaken,
+    approve_signup,
     record_failed_login,
+    reject_signup,
     rename_department,
     revoke_api_tokens,
+    unapproved_signup,
 )
 from documents.audit import record_event
 from documents.models import AuditLog
-from documents.throttling import AccountLoginRateThrottle, LoginRateThrottle
+from documents.throttling import (
+    AccountLoginRateThrottle,
+    LoginRateThrottle,
+    SignupRateThrottle,
+)
 
 from .serializers import (
+    SIGNUP_ROLE_CHOICES,
+    USERNAME_UNAVAILABLE,
     AdminUserSerializer,
     DepartmentSerializer,
     LoginSerializer,
@@ -38,6 +50,10 @@ from .serializers import (
     PasswordChangeSerializer,
     PublicDepartmentSerializer,
     SetPasswordSerializer,
+    SignupApprovalSerializer,
+    SignupRejectionSerializer,
+    SignupRequestSerializer,
+    SignupSerializer,
 )
 
 User = get_user_model()
@@ -68,10 +84,33 @@ def _audit_login(user, *, method):
     )
 
 
+def _signup_not_approved(signup):
+    """A 403 with a machine-readable code, so the sign-in screen can show
+    an applicant where their request stands instead of "wrong password"."""
+    if signup.status == SignupRequest.Status.PENDING:
+        detail = (
+            "Your account request is waiting for an administrator's approval. "
+            "You can sign in once it has been approved."
+        )
+        code = "signup_pending"
+    else:
+        detail = "Your account request was declined."
+        if signup.decision_note:
+            detail += f" The administrator said: {signup.decision_note}"
+        code = "signup_rejected"
+    return exceptions.PermissionDenied({"detail": detail, "code": code})
+
+
 def _authenticate(request, data, *, method):
     user = authenticate(request, username=data["username"], password=data["password"])
     if user is None:
         record_failed_login(data["username"], method=method)
+        # Someone who applied and is signing in with the password they
+        # chose deserves to know why it does not work yet - it is their own
+        # request, and they proved it.
+        signup = unapproved_signup(data["username"], data["password"])
+        if signup is not None:
+            raise _signup_not_approved(signup)
         # One message for "no such user" and "wrong password", so the
         # endpoint cannot be used to discover which usernames exist. A 400,
         # as DRF's own token view returns, so existing clients see no change.
@@ -200,6 +239,91 @@ class TokenView(APIView):
         token = issue_token(user)
         _audit_login(user, method="token")
         return Response({"token": token.key})
+
+
+class SignupView(APIView):
+    """Ask for an account. GET describes the form; POST files a request.
+
+    Nothing here creates an account or signs anyone in: a request waits
+    until an administrator approves it (SignupRequestAdminViewSet), and the
+    applicant then signs in with the password they chose here.
+
+    With sign-up on, the names of the active departments are public - the
+    form cannot offer a choice without them. Turning it off
+    (SIGNUP_ENABLED) withdraws them along with the form.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get_throttles(self):
+        # GET is read by every visit to the sign-in page, to decide whether
+        # to offer sign-up at all - throttled, a campus behind one NAT would
+        # stop seeing the offer after thirty page loads an hour (as for
+        # CsrfView). It is one small query and grants nothing.
+        if self.request.method == "POST":
+            return [SignupRateThrottle()]
+        return []
+
+    def get(self, request):
+        if not settings.SIGNUP_ENABLED:
+            return Response({"enabled": False, "departments": [], "roles": []})
+        departments = Department.objects.filter(is_active=True)
+        return Response(
+            {
+                "enabled": True,
+                "departments": PublicDepartmentSerializer(departments, many=True).data,
+                "roles": [
+                    {"value": value, "label": label}
+                    for value, label in SIGNUP_ROLE_CHOICES
+                ],
+            }
+        )
+
+    def post(self, request):
+        # Without it, any page could file requests through its visitors'
+        # browsers - from their addresses, so past the per-address throttle.
+        # Mild next to a forged login, but the check costs nothing and every
+        # other unsafe request has it.
+        _enforce_csrf(request)
+        if not settings.SIGNUP_ENABLED:
+            raise exceptions.PermissionDenied(
+                "Sign-up is turned off here. Ask your department administrator "
+                "for an account."
+            )
+        waiting = SignupRequest.objects.filter(status=SignupRequest.Status.PENDING)
+        if waiting.count() >= settings.SIGNUP_MAX_PENDING:
+            return Response(
+                {
+                    "detail": "Too many account requests are waiting for review "
+                    "right now. Try again later, or ask your department "
+                    "administrator for an account."
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        serializer = SignupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            with transaction.atomic():
+                signup = serializer.save()
+        except IntegrityError as exc:
+            # The same name requested by someone else since validation
+            # (unique_pending_signup_username).
+            raise exceptions.ValidationError(
+                {"username": [USERNAME_UNAVAILABLE]}
+            ) from exc
+
+        record_event(
+            user=None,
+            action=AuditLog.Action.SIGNUP_REQUEST,
+            result=AuditLog.Result.ALLOWED,
+            subject_department=signup.department,
+            signup_request_id=signup.id,
+            username=signup.username,
+            role=signup.role,
+        )
+        return Response({"status": signup.status}, status=status.HTTP_201_CREATED)
 
 
 class DepartmentListView(APIView):
@@ -426,3 +550,83 @@ class DepartmentAdminViewSet(
             department=department.name,
             **({"renamed_from": old_name} if new_name != old_name else {}),
         )
+
+
+class SignupRequestAdminViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Sign-up requests, scoped by accounts.permissions.reviewable_signups:
+    a department admin sees and decides the requests for their department,
+    a system admin every request. Read-only apart from the two decisions;
+    a decision is final, and a declined applicant may apply again."""
+
+    serializer_class = SignupRequestSerializer
+    permission_classes = [permissions.IsAdministrator]
+
+    def get_queryset(self):
+        queryset = SignupRequest.objects.select_related("reviewed_by")
+        queryset = permissions.reviewable_signups(self.request.user, queryset)
+
+        params = self.request.query_params
+        if params.get("status") in SignupRequest.Status.values:
+            queryset = queryset.filter(status=params["status"])
+        search = params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(username__icontains=search)
+                | Q(email__icontains=search)
+                | Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+            )
+        return queryset
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        signup = self.get_object()
+        serializer = SignupApprovalSerializer(
+            data=request.data, context={"request": request, "signup": signup}
+        )
+        serializer.is_valid(raise_exception=True)
+        try:
+            signup = approve_signup(
+                signup, reviewer=request.user, **serializer.validated_data
+            )
+        except (SignupAlreadyReviewed, UsernameTaken) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        profile = signup.user.profile
+        record_event(
+            user=request.user,
+            action=AuditLog.Action.SIGNUP_APPROVE,
+            result=AuditLog.Result.ALLOWED,
+            # Where the account landed, which may not be where it asked to.
+            subject_department=profile.department,
+            signup_request_id=signup.id,
+            target_user_id=signup.user_id,
+            role=profile.role,
+            department=profile.department,
+        )
+        return Response(SignupRequestSerializer(signup).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        signup = self.get_object()
+        serializer = SignupRejectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            signup = reject_signup(
+                signup, reviewer=request.user, note=serializer.validated_data["note"]
+            )
+        except SignupAlreadyReviewed as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        record_event(
+            user=request.user,
+            action=AuditLog.Action.SIGNUP_REJECT,
+            result=AuditLog.Result.ALLOWED,
+            subject_department=signup.department,
+            signup_request_id=signup.id,
+        )
+        return Response(SignupRequestSerializer(signup).data)

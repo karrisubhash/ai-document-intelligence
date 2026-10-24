@@ -29,6 +29,13 @@ class AuditLog(models.Model):
         # something an auditor needs to be able to see.
         USER_CREATE = "USER_CREATE", "User create"
         USER_UPDATE = "USER_UPDATE", "User update"
+        # Self-service sign-up. The request row has no user - nobody is
+        # signed in - and carries the requested department as its subject,
+        # so that department's administrator sees it; approval is the
+        # creation of the account.
+        SIGNUP_REQUEST = "SIGNUP_REQUEST", "Sign-up request"
+        SIGNUP_APPROVE = "SIGNUP_APPROVE", "Sign-up approve"
+        SIGNUP_REJECT = "SIGNUP_REJECT", "Sign-up reject"
         DEPARTMENT_CREATE = "DEPARTMENT_CREATE", "Department create"
         DEPARTMENT_UPDATE = "DEPARTMENT_UPDATE", "Department update"
         JOB_RETRY = "JOB_RETRY", "Processing job retry"
