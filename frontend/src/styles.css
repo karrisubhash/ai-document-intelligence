@@ -1899,6 +1899,8 @@ select.input-sm {
   color: var(--text-2);
 }
 
+/* A shadow at an edge says more rows are scrolled out of sight that way: the
+   covers scroll with the rows and hide each shadow at its end of the list. */
 .upload-list {
   margin: 0;
   padding: 0;
@@ -1907,7 +1909,22 @@ select.input-sm {
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background:
+    linear-gradient(var(--surface) 30%, transparent) top / 100% 28px no-repeat local,
+    linear-gradient(transparent, var(--surface) 70%) bottom / 100% 28px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(16, 24, 40, 0.16), transparent) top / 100% 10px
+      no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(16, 24, 40, 0.16), transparent) bottom / 100%
+      10px no-repeat scroll,
+    var(--surface);
+}
+
+/* On a phone the dialog itself scrolls; a second scroller inside it is one
+   a thumb keeps getting stuck in. */
+@media (max-width: 560px) {
+  .upload-list {
+    max-height: none;
+  }
 }
 
 .upload-row {

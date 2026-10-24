@@ -443,6 +443,29 @@ export default function UploadDialog({
           </p>
         ) : null}
 
+        {/* First, so the outcome is what a phone shows without scrolling. */}
+        {phase === "finished" ? (
+          <Alert
+            tone={done === tracked.length ? "success" : done ? "warning" : "danger"}
+            title={
+              done === tracked.length
+                ? `${done} ${plural(done, "document")} uploaded`
+                : `${done} of ${tracked.length} uploaded`
+            }
+          >
+            {[
+              done === 1
+                ? "It is read and indexed in the background, and becomes searchable when it is ready."
+                : done
+                  ? "They are read and indexed in the background; each becomes searchable when it is ready."
+                  : null,
+              halted,
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          </Alert>
+        ) : null}
+
         {files.length ? (
           <div className="upload-files">
             {summary ? (
@@ -485,57 +508,60 @@ export default function UploadDialog({
           </Field>
         ) : null}
 
-        <div className="form-row">
-          <Field
-            label="Type"
-            error={errors.document_type}
-            hint={files.length > 1 ? "For every file." : undefined}
-          >
-            {(props) => (
-              <select
-                {...props}
-                className="input"
-                value={documentType}
-                disabled={busy || tracking}
-                onChange={(event) => setDocumentType(event.target.value as DocumentType)}
-              >
-                {DOCUMENT_TYPES.map((value) => (
-                  <option key={value} value={value}>
-                    {TYPE_LABEL[value]}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-
-          {anyDepartment ? (
-            <Field label="Department" error={errors.department} hint="Who may read it.">
+        {/* Settings for the whole batch; once it is under way they cannot change. */}
+        {!tracking ? (
+          <div className="form-row">
+            <Field
+              label="Type"
+              error={errors.document_type}
+              hint={files.length > 1 ? "For every file." : undefined}
+            >
               {(props) => (
                 <select
                   {...props}
                   className="input"
-                  value={department}
-                  disabled={busy || tracking}
-                  onChange={(event) => setDepartment(event.target.value)}
+                  value={documentType}
+                  disabled={busy}
+                  onChange={(event) => setDocumentType(event.target.value as DocumentType)}
                 >
-                  <option value="">No department (only you)</option>
-                  {(departments.data ?? []).map((item) => (
-                    <option key={item.id} value={item.name}>
-                      {item.name}
+                  {DOCUMENT_TYPES.map((value) => (
+                    <option key={value} value={value}>
+                      {TYPE_LABEL[value]}
                     </option>
                   ))}
                 </select>
               )}
             </Field>
-          ) : (
-            <div className="field">
-              <span className="field-label">Department</span>
-              <p className="static-value">
-                {me?.department || "None — only you will be able to see it"}
-              </p>
-            </div>
-          )}
-        </div>
+
+            {anyDepartment ? (
+              <Field label="Department" error={errors.department} hint="Who may read it.">
+                {(props) => (
+                  <select
+                    {...props}
+                    className="input"
+                    value={department}
+                    disabled={busy}
+                    onChange={(event) => setDepartment(event.target.value)}
+                  >
+                    <option value="">No department (only you)</option>
+                    {(departments.data ?? []).map((item) => (
+                      <option key={item.id} value={item.name}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            ) : (
+              <div className="field">
+                <span className="field-label">Department</span>
+                <p className="static-value">
+                  {me?.department || "None — only you will be able to see it"}
+                </p>
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {busy ? (
           <div
@@ -548,26 +574,6 @@ export default function UploadDialog({
           >
             <span className="progress-fill" style={{ width: `${shownProgress * 100}%` }} />
           </div>
-        ) : null}
-
-        {phase === "finished" ? (
-          <Alert
-            tone={done === tracked.length ? "success" : done ? "warning" : "danger"}
-            title={
-              done === tracked.length
-                ? `${done} ${plural(done, "document")} uploaded`
-                : `${done} of ${tracked.length} uploaded`
-            }
-          >
-            {[
-              halted,
-              done
-                ? "Each is read and indexed in the background, and becomes searchable when it is ready."
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          </Alert>
         ) : null}
 
         {failure ? <Alert tone="danger">{failure}</Alert> : null}
