@@ -423,6 +423,23 @@ git checkout "$(cat .release-previous)"
   Anything written between the upgrade and the rollback is lost. That includes new
   documents, chat messages and audit rows. Record the window in the staging log.
 
+- **If the new release added tables,** first - before the re-tagging lines above, while
+  the new images are still `latest` - reverse its migrations. `restore` runs
+  `pg_restore --clean`, which drops only what the dump contains, so a table the dump
+  never had that points at one it has (as `accounts_signuprequest` points at
+  `auth_user`) makes the restore stop part-way, and the next `migrate` then fails on the
+  table it finds already there. For the sign-up release (accounts `0004_signuprequest`,
+  documents `0021_auditlog_signup_actions`):
+
+  ```bash
+  $DC run --rm --no-deps backend python manage.py migrate accounts 0003_seed_departments
+  $DC run --rm --no-deps backend python manage.py migrate documents 0020_merge_release_pilot_and_bugfix
+  ```
+
+  Both of its migrations are additive - a new table the old code never reads, and an
+  audit-choices change that alters no column - so starting the old images on the new
+  schema, without restoring, also works.
+
 If the tagged images are gone, rebuild the previous tag. `backend/constraints.txt` pins
 every Python package, so the rebuild installs the same versions. The base image
 (`python:3.12-slim`) and the Debian packages are not pinned and may differ.

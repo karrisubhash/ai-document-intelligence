@@ -300,6 +300,9 @@ Pipeline limits, in `backend/config/settings.py`:
 | `THROTTLE_LOGIN` / `_UPLOAD` / `_SEARCH` / `_CHAT` | 10/min, 60/h, 120/h, 60/h | Per-endpoint rate limits |
 | `THROTTLE_SEARCH_BURST` | 20/min | How fast the hourly search budget may be spent: a search that reranks costs seconds of CPU |
 | `THROTTLE_CHAT_BURST` | 10/min | How fast the hourly chat budget may be spent: a question reranks too, and a streamed answer holds a server thread until it ends |
+| `SIGNUP_ENABLED` | True | Anyone may *request* an account from the sign-in page; an administrator approves each (institutional decision I7) |
+| `SIGNUP_MAX_PENDING` / `THROTTLE_SIGNUP` | 500 / 100/h | Waiting requests accepted at once; sign-up attempts per address |
+| `SIGNUP_EMAIL_DOMAINS` | `""` | Email domains a request must use (subdomains count); empty accepts any |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1000 / 150 | Chunking; changing either requires re-indexing |
 | `SEARCH_CANDIDATES` | 50 | Candidates each retrieval half returns before fusion |
 | `SEARCH_RERANK_DEPTH` | 20 | With a cross-encoder `RAG_RERANKER`, how many fused candidates the Search endpoint reranks (at least the requested `limit`); the per-search CPU cost. `15` is cheaper; `0` returns the fused order, as does the bundled lexical reranker — see [search relevance](docs/evaluation/search-relevance.md) |
@@ -954,6 +957,7 @@ chat request runs retrieval, reranking and an answerer.
 | `upload` | 60/hour | Writes bytes, queues worker time |
 | `search` | 120/hour | Two retrievers plus fusion |
 | `chat` | 60/hour | The most expensive path in the system |
+| `signup` | 100/hour | Per address, anonymous: bounds probing for taken usernames while letting a class behind one campus NAT sign up |
 
 Login is keyed on **IP *and* username**: keying on IP alone lets a botnet spread a guessing
 run across addresses; keying on username alone lets anyone lock a known account out by

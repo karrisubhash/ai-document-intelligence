@@ -34,15 +34,38 @@
   path - Django's admin, a shell, an "Active" checkbox - can let one in early. Approval is
   the only way a request becomes an account, and it is held to the same rules as creating
   one by hand: a department admin approves only requests for their own department, into
-  it, as FACULTY, STAFF or STUDENT; an applicant can ask for no administrative role. The
-  chosen password is validated and kept only as a hash, handed to the account on approval
-  and cleared from the request. The endpoint enforces CSRF, is throttled per address
-  (20/hour, and at nginx with sign-in), and stops accepting requests at
-  `SIGNUP_MAX_PENDING` waiting. It does say whether a username is taken - unavoidable for
-  a form that lets people choose one - with the same answer for an account and a waiting
-  request; the throttle bounds how fast that can be asked. Sign-in tells an applicant their
-  request is waiting or declined only when they give its password. With sign-up on, the
-  active departments' names are public, because the form offers them.
+  it. No approval grants an administrative role, even a system administrator's; an
+  account that needs one is promoted afterwards, as a separate, audited edit.
+  - *Identity is not verified.* The name, email and note are whatever the applicant
+    typed; the app sends no mail, so nothing proves an address belongs to them. A
+    reviewer must confirm who the person is some other way (a staff or student number
+    checked against the institution's records, say) before approving: approval gives
+    read access to the whole department's documents. The review screen labels the
+    details as unchecked and names any account the reviewer administers that already
+    uses the same email. `SIGNUP_EMAIL_DOMAINS` restricts requests to the institution's
+    domains - it narrows who can ask; it does not prove who is asking.
+  - *Usernames* are NFKC-normalised and must be ASCII, so a stranger cannot choose a
+    look-alike of an existing name (a fullwidth or Cyrillic copy of an administrator's
+    username); a name equal to an account's or a waiting request's under either of
+    PostgreSQL's case rules is taken. The form says whether a name is taken - inherent in
+    letting people choose one - with the same answer for an account and a waiting request.
+  - *Passwords* are validated and kept only as a hash. Approval hands the hash to the
+    account and clears it from the request. A declined request keeps its hash so that
+    sign-in can tell that applicant why they cannot get in - until an account takes the
+    name, however it is made, which clears every request's hash for that name. Declined
+    requests, with their details, are otherwise kept indefinitely (a retention decision,
+    like D3).
+  - *Sign-in* tells an applicant their request is waiting or declined only for the exact
+    username and the right password, and a failed sign-in costs the same one extra hash
+    whoever holds the name, so neither the answer nor its timing says who has applied.
+  - *Abuse:* CSRF is enforced; requests are throttled per address (100/hour by default,
+    counted only once CSRF, the on/off switch and the queue check have passed, so a
+    hostile page cannot spend a campus's allowance) and at nginx (POSTs only); and at
+    `SIGNUP_MAX_PENDING` waiting requests no more are accepted - for anyone, the price of
+    the bound - until administrators clear the queue, which the audited bulk decline does
+    in a few calls. The Django admin cannot delete requests.
+  - With sign-up on, the active departments' names, codes and ids are public, because the
+    form offers them.
 
 **Not implemented:** SSO/SAML/OIDC, MFA, account lockout beyond throttling, password
 expiry. These are institutional decisions with integration work attached.
@@ -143,8 +166,10 @@ upload; search and chat (never the query or question text); login, failed login 
 the API or Django's admin (against the targeted account; for a name that matches no account
 only a keyed fingerprint, because the username box is where people type their password by
 mistake), logout, password changes;
-account and department changes (with before/after of role, department and activity); job
-retries. Denials are recorded as well as approvals, including on reads that are not
+account and department changes (with before/after of role, department and activity);
+sign-up requests, approvals and declines (`SIGNUP_REQUEST`, `SIGNUP_APPROVE`,
+`SIGNUP_REJECT` - an account made by approval has a `SIGNUP_APPROVE` row, not
+`USER_CREATE`; refused sign-up attempts are not recorded); job retries. Denials are recorded as well as approvals, including on reads that are not
 audited when allowed (the processing timeline, which the screen polls). A department
 administrator sees their members' denied attempts on other departments' documents without
 the document's id or title - a denied row exists only for an id that exists, so the id
