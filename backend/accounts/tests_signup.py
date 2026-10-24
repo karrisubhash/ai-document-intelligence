@@ -14,7 +14,12 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import Department, SignupRequest, UserProfile
-from accounts.services import rename_department
+from accounts.services import (
+    SignupAlreadyReviewed,
+    approve_signup,
+    reject_signup,
+    rename_department,
+)
 from documents.models import AuditLog
 from documents.throttling import SignupRateThrottle
 
@@ -808,6 +813,38 @@ class ScopingTests(ReviewTestCase):
         )
         # Where the account landed, not where it asked to.
         self.assertEqual(seen(chemistry_admin), {("SIGNUP_APPROVE", "unplaced")})
+
+
+class DecisionRaceTests(ReviewTestCase):
+    """Two reviewers who both loaded a request while it was waiting: the
+    view's early 409 cannot see the other's decision, so the decision itself
+    re-reads the row it locks."""
+
+    def test_a_late_approval_finds_the_request_already_declined(self):
+        signup = pending()
+        seen_waiting = SignupRequest.objects.get(pk=signup.pk)
+        reject_signup(signup, reviewer=self.physics_admin)
+
+        with self.assertRaises(SignupAlreadyReviewed):
+            approve_signup(
+                seen_waiting,
+                reviewer=self.system_admin,
+                role=Role.STUDENT,
+                department="Physics",
+            )
+        self.assertFalse(User.objects.filter(username="newcomer").exists())
+
+    def test_a_late_decline_finds_the_request_already_approved(self):
+        signup = pending()
+        seen_waiting = SignupRequest.objects.get(pk=signup.pk)
+        approve_signup(
+            signup, reviewer=self.physics_admin, role=Role.STUDENT, department="Physics"
+        )
+
+        with self.assertRaises(SignupAlreadyReviewed):
+            reject_signup(seen_waiting, reviewer=self.system_admin)
+        signup.refresh_from_db()
+        self.assertEqual(signup.status, SignupRequest.Status.APPROVED)
 
 
 class ApprovalLimitTests(ReviewTestCase):
