@@ -41,7 +41,10 @@ admin.site.register(User, ProfileAwareUserAdmin)
 class SignupRequestAdmin(admin.ModelAdmin):
     """Read-only. Approval creates the account and audits the decision
     (accounts.services.approve_signup); flipping the status here would do
-    neither, and would leave an "approved" applicant with no account."""
+    neither, and would leave an "approved" applicant with no account.
+    Deleting is refused too: a deleted request leaves no SIGNUP_REJECT row,
+    frees its name and turns the applicant's "declined" into "wrong
+    password". A flood is cleared with the application's bulk decline."""
 
     list_display = ("username", "email", "department", "role", "status", "created_at")
     list_filter = ("status",)
@@ -52,4 +55,7 @@ class SignupRequestAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

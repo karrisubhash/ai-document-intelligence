@@ -22,6 +22,30 @@ def create_user_profile(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
+def forget_applicants_passwords(sender, instance, created, **kwargs):
+    """Once an account holds a name, the sign-up requests for it lose
+    their password hashes, however the account was made.
+
+    A declined request keeps its hash so that sign-in can tell the
+    applicant why they cannot get in - but that stops the moment an account
+    takes the name (accounts.services.unapproved_signup never looks past
+    it), and the hash, often of a password the person uses elsewhere, would
+    otherwise outlive every reason to keep it: the approval of a later
+    request, an administrator creating the account by hand, that person's
+    own password changes.
+    """
+    if not created:
+        return
+
+    from .models import SignupRequest
+    from .services import same_name
+
+    same_name(
+        SignupRequest.objects.exclude(password=""), instance.get_username()
+    ).update(password="")
+
+
+@receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def revoke_api_tokens_on_password_change(sender, instance, created, **kwargs):
     """A new password ends every API token, however it was set.
 

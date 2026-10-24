@@ -141,11 +141,13 @@ REST_FRAMEWORK = {
         # bound on a guessing run spread across a botnet. NIST SP 800-63B
         # caps failed attempts per account at 100.
         "login_account": os.getenv("THROTTLE_LOGIN_ACCOUNT", "100/hour"),
-        # Sign-up requests per address. Generous enough for a class signing
-        # up together behind one campus NAT; the queue itself is capped by
-        # SIGNUP_MAX_PENDING. It also bounds how fast the endpoint can be
-        # asked which usernames are taken.
-        "signup": os.getenv("THROTTLE_SIGNUP", "20/hour"),
+        # Sign-up attempts per address - every one that gets past CSRF, the
+        # on/off switch and the full-queue check, including those refused
+        # for a taken username or a weak password, because those are what
+        # probing for usernames looks like. Behind nginx a campus NAT is ONE
+        # address, so this has to cover a class signing up together, with
+        # their mistakes; the queue itself is capped by SIGNUP_MAX_PENDING.
+        "signup": os.getenv("THROTTLE_SIGNUP", "100/hour"),
         # Writes bytes and queues worker time.
         "upload": os.getenv("THROTTLE_UPLOAD", "60/hour"),
         # Runs two retrievers, a fusion pass and - with a cross-encoder
@@ -251,11 +253,22 @@ AUTH_PASSWORD_VALIDATORS = [
 # administrators - the sign-in page then stops offering it and the endpoint
 # refuses.
 SIGNUP_ENABLED = os.getenv("SIGNUP_ENABLED", "True").lower() == "true"
-# A ceiling on requests waiting at once. The per-address throttle does not
-# bound a run spread across many addresses, and an unbounded queue of junk
-# would bury the genuine applicants an administrator has to find in it.
-# Reaching it stops new requests, not sign-ins.
+# A ceiling on requests waiting at once, across every department. The
+# per-address throttle does not bound a run spread across many addresses,
+# and an unbounded queue of junk would bury the genuine applicants an
+# administrator has to find in it. Reaching it stops new requests - for
+# everyone, which is the price of the bound - not sign-ins; administrators
+# clear a flood with the bulk decline (SignupRequestAdminViewSet.bulk_reject).
 SIGNUP_MAX_PENDING = int(os.getenv("SIGNUP_MAX_PENDING", "500"))
+# Comma-separated email domains a request must use, e.g. "example.edu";
+# subdomains count ("physics.example.edu"). Empty accepts any address.
+# Nothing verifies that the applicant controls the address - the app sends
+# no mail - so this narrows who can ask; it does not prove who is asking.
+SIGNUP_EMAIL_DOMAINS = [
+    domain.strip().lower().lstrip("@")
+    for domain in os.getenv("SIGNUP_EMAIL_DOMAINS", "").split(",")
+    if domain.strip()
+]
 
 # True only under `manage.py test`. Named rather than repeated so every
 # place the suite needs different behaviour is greppable, and so that none

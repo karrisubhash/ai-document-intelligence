@@ -1,13 +1,15 @@
 """Self-service sign-up: anyone may ask, only an administrator lets them in."""
 
+from datetime import timedelta
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import MD5PasswordHasher, check_password
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -48,9 +50,9 @@ def application(**overrides):
 def pending(username="newcomer", department="Physics", **fields):
     from django.contrib.auth.hashers import make_password
 
+    fields.setdefault("email", f"{username}@example.edu")
     return SignupRequest.objects.create(
         username=username,
-        email=f"{username}@example.edu",
         first_name=username.title(),
         password=make_password(STRONG),
         department=department,
@@ -72,11 +74,14 @@ class SignupTestCase(TestCase):
         return self.client.get(reverse("auth-csrf")).data["csrf_token"]
 
     def apply(self, **overrides):
+        # Upper-case keys are request environ (REMOTE_ADDR), not form fields.
+        environ = {key: overrides.pop(key) for key in list(overrides) if key.isupper()}
         return self.client.post(
             reverse("auth-signup"),
             application(**overrides),
             format="json",
             HTTP_X_CSRFTOKEN=self.csrf(),
+            **environ,
         )
 
     def login(self, username="newcomer", password=STRONG):
@@ -109,9 +114,11 @@ class SignupFormTests(SignupTestCase):
         filed = self.apply()
 
         self.assertEqual(
-            described.data, {"enabled": False, "departments": [], "roles": []}
+            described.data,
+            {"enabled": False, "departments": [], "roles": [], "email_domains": []},
         )
         self.assertEqual(filed.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("turned off", str(filed.data["detail"]))
         self.assertFalse(SignupRequest.objects.exists())
 
     def test_reading_the_form_is_not_rate_limited(self):
@@ -251,15 +258,39 @@ class SignupSubmissionTests(SignupTestCase):
 
     def test_requests_are_rate_limited_per_address(self):
         with mock.patch.object(
-            SignupRateThrottle, "THROTTLE_RATES", {"signup": "2/hour"}
+            SignupRateThrottle, "THROTTLE_RATES", {"signup": "1/hour"}
         ):
             first = self.apply(username="one")
-            second = self.apply(username="two")
-            third = self.apply(username="three")
+            elsewhere = self.apply(username="two", REMOTE_ADDR="10.0.0.2")
+            again = self.apply(username="three")
 
         self.assertEqual(first.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(third.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        # Another address has a budget of its own.
+        self.assertEqual(elsewhere.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(again.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_a_refused_request_spends_none_of_the_budget(self):
+        """CSRF failures, sign-up turned off and a full queue are refused
+        before the throttle counts anything: otherwise a hostile page could
+        spend a campus's allowance through its visitors' browsers."""
+        with mock.patch.object(
+            SignupRateThrottle, "THROTTLE_RATES", {"signup": "1/hour"}
+        ):
+            for _ in range(3):
+                forged = self.client.post(
+                    reverse("auth-signup"), application(), format="json"
+                )
+                self.assertEqual(forged.status_code, status.HTTP_403_FORBIDDEN)
+            with override_settings(SIGNUP_ENABLED=False):
+                self.assertEqual(self.apply().status_code, status.HTTP_403_FORBIDDEN)
+            with override_settings(SIGNUP_MAX_PENDING=0):
+                self.assertEqual(
+                    self.apply().status_code, status.HTTP_429_TOO_MANY_REQUESTS
+                )
+
+            genuine = self.apply()
+
+        self.assertEqual(genuine.status_code, status.HTTP_201_CREATED, genuine.data)
 
     @override_settings(SIGNUP_MAX_PENDING=1)
     def test_the_waiting_queue_is_bounded(self):
@@ -267,7 +298,18 @@ class SignupSubmissionTests(SignupTestCase):
         response = self.apply(username="two")
 
         self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn("waiting", str(response.data["detail"]))
         self.assertEqual(SignupRequest.objects.count(), 1)
+
+    @override_settings(SIGNUP_MAX_PENDING=1)
+    def test_decided_requests_do_not_count_against_the_queue(self):
+        """Or sign-up would close for good once enough had ever been filed."""
+        pending("declined", status=SignupRequest.Status.REJECTED)
+        pending("approved", status=SignupRequest.Status.APPROVED)
+
+        response = self.apply()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
 
 
 class SigningInBeforeApprovalTests(SignupTestCase):
@@ -426,6 +468,12 @@ class ReviewVisibilityTests(ReviewTestCase):
         self.assertEqual(count(self.physics_admin), 1)
         self.assertIsNone(count(self.physics_student))
 
+        # Decided requests are no longer waiting for anyone.
+        self.approve(self.system_admin, self.physics)
+        self.reject(self.system_admin, self.chemistry)
+        self.assertEqual(count(self.system_admin), 1)
+        self.assertEqual(count(self.physics_admin), 0)
+
 
 class ApprovalTests(ReviewTestCase):
     def test_approval_creates_the_account_they_asked_for(self):
@@ -556,11 +604,15 @@ class RejectionTests(ReviewTestCase):
 
     def test_a_rejected_applicant_still_cannot_sign_in(self):
         signup = pending()
-        self.reject(self.physics_admin, signup)
+        # As the screen sends it when no reason is typed.
+        declined = self.reject(self.physics_admin, signup, note="")
 
         response = self.login()
 
+        self.assertEqual(declined.status_code, status.HTTP_200_OK, declined.data)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["code"], "signup_rejected")
+        self.assertNotIn("The administrator said", str(response.data["detail"]))
         self.assertNotIn("sessionid", response.cookies)
 
 
@@ -577,3 +629,310 @@ class DepartmentRenameTests(ReviewTestCase):
         admin = User.objects.get(pk=self.physics_admin.pk)
         listed = self.as_user(admin).get(reverse("admin-signup-request-list"))
         self.assertEqual([row["id"] for row in listed.data["results"]], [signup.id])
+
+
+class SignInTimingTests(SignupTestCase):
+    """A failed sign-in must cost the same whoever the name belongs to.
+
+    The status and body are already identical; the time was not - a name
+    held by a waiting or declined request cost a second password hash, so
+    one request per name told anyone who had applied, password or not.
+    """
+
+    def setUp(self):
+        super().setUp()
+        make_user("member")
+        pending("waiting")
+        pending("declined", status=SignupRequest.Status.REJECTED)
+
+    def failed_sign_in(self, endpoint, username):
+        """(password hashes spent, status, body) for a wrong password."""
+        token = self.csrf()
+        calls = []
+        original = MD5PasswordHasher.encode
+
+        def counting(hasher, password, salt):
+            calls.append(password)
+            return original(hasher, password, salt)
+
+        with mock.patch.object(MD5PasswordHasher, "encode", counting):
+            response = self.client.post(
+                reverse(endpoint),
+                {"username": username, "password": "not-the-password-1"},
+                format="json",
+                HTTP_X_CSRFTOKEN=token,
+            )
+        return len(calls), response.status_code, response.data
+
+    def test_every_failed_sign_in_costs_the_same(self):
+        for endpoint in ("auth-login", "api-token-auth"):
+            with self.subTest(endpoint=endpoint):
+                cache.clear()
+                spent = {
+                    name: self.failed_sign_in(endpoint, name)
+                    for name in ("nobody", "member", "waiting", "declined")
+                }
+
+                first = spent["nobody"]
+                self.assertTrue(all(each == first for each in spent.values()), spent)
+
+
+class UsernameLookAlikeTests(SignupTestCase):
+    def test_a_compatibility_form_is_the_name_it_normalises_to(self):
+        make_user("newcomer")
+
+        response = self.apply(username="ｎｅｗｃｏｍｅｒ")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+
+    def test_what_is_checked_is_what_is_stored(self):
+        response = self.apply(username="ｎｉａ")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(SignupRequest.objects.get().username, "nia")
+
+    def test_letters_that_only_look_latin_are_refused(self):
+        # A Cyrillic "а": survives NFKC and every case rule, and displays
+        # exactly like the department administrator's name.
+        response = self.apply(username="phy_аdmin")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+        self.assertFalse(SignupRequest.objects.exists())
+
+    def test_a_name_equal_under_either_case_rule_is_taken(self):
+        # An account an administrator made with the Kelvin sign. iexact
+        # (UPPER) does not fold it into "K"; LOWER does.
+        User.objects.create(username="Kate")
+
+        response = self.apply(username="kate")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+
+    def test_signing_in_matches_the_name_exactly_as_it_will_after_approval(self):
+        pending("nia")
+
+        response = self.login(username="Nia")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class EmailTests(SignupTestCase):
+    def test_the_domain_is_normalised(self):
+        self.apply(email="Nia.Okafor@EXAMPLE.EDU")
+
+        self.assertEqual(SignupRequest.objects.get().email, "Nia.Okafor@example.edu")
+
+    @override_settings(SIGNUP_EMAIL_DOMAINS=["example.edu"])
+    def test_an_allowlist_admits_its_domains_and_their_subdomains(self):
+        outside = self.apply(email="nia@example.com")
+        subdomain = self.apply(email="nia@physics.example.edu")
+        lookalike = self.apply(email="nia@badexample.edu", username="other")
+        described = self.client.get(reverse("auth-signup"))
+
+        self.assertEqual(outside.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("@example.edu", str(outside.data["email"]))
+        self.assertEqual(subdomain.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(lookalike.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(described.data["email_domains"], ["example.edu"])
+
+
+class PasswordRetentionTests(ReviewTestCase):
+    def test_an_account_taking_the_name_clears_declined_requests_hashes(self):
+        declined = pending("alice", status=SignupRequest.Status.REJECTED)
+
+        make_user("Alice")
+
+        declined.refresh_from_db()
+        self.assertEqual(declined.password, "")
+
+    def test_approving_a_later_request_clears_the_earlier_ones(self):
+        declined = pending(status=SignupRequest.Status.REJECTED)
+        again = pending()
+
+        self.approve(self.physics_admin, again)
+
+        declined.refresh_from_db()
+        self.assertEqual(declined.password, "")
+
+    def test_a_declined_applicant_who_applied_again_is_told_they_are_waiting(self):
+        pending(status=SignupRequest.Status.REJECTED, decision_note="Wrong department.")
+        pending()
+
+        response = self.login()
+
+        self.assertEqual(response.data["code"], "signup_pending")
+
+
+class ScopingTests(ReviewTestCase):
+    def setUp(self):
+        super().setUp()
+        self.chemistry = pending("che_applicant", "Chemistry")
+
+    def test_another_departments_request_cannot_be_read_or_declined(self):
+        client = self.as_user(self.physics_admin)
+
+        read = client.get(
+            reverse("admin-signup-request-detail", args=[self.chemistry.id])
+        )
+        declined = self.reject(self.physics_admin, self.chemistry)
+
+        self.assertEqual(read.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(declined.status_code, status.HTTP_404_NOT_FOUND)
+        self.chemistry.refresh_from_db()
+        self.assertEqual(self.chemistry.status, SignupRequest.Status.PENDING)
+
+    def test_a_system_admins_decisions_reach_the_departments_audit_log(self):
+        chemistry_admin = make_user("che_admin", Role.DEPARTMENT_ADMIN, "Chemistry")
+        approved = pending("phy_one", "Physics")
+        declined = pending("phy_two", "Physics")
+        unplaced = pending("unplaced", "")
+
+        self.approve(self.system_admin, approved)
+        self.reject(self.system_admin, declined)
+        self.approve(self.system_admin, unplaced, department="Chemistry")
+
+        def seen(admin):
+            rows = self.as_user(admin).get(reverse("admin-audit")).data["results"]
+            return {
+                (row["action"], row["metadata"].get("username"))
+                for row in rows
+                if row["action"] in ("SIGNUP_APPROVE", "SIGNUP_REJECT")
+            }
+
+        self.assertEqual(
+            seen(self.physics_admin),
+            {("SIGNUP_APPROVE", "phy_one"), ("SIGNUP_REJECT", "phy_two")},
+        )
+        # Where the account landed, not where it asked to.
+        self.assertEqual(seen(chemistry_admin), {("SIGNUP_APPROVE", "unplaced")})
+
+
+class ApprovalLimitTests(ReviewTestCase):
+    def test_no_one_approves_a_stranger_into_an_administrative_role(self):
+        for role in (Role.SYSTEM_ADMIN, Role.DEPARTMENT_ADMIN):
+            with self.subTest(role=role):
+                response = self.approve(self.system_admin, pending(), role=role)
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("role", response.data)
+                SignupRequest.objects.all().delete()
+        self.assertFalse(User.objects.filter(username="newcomer").exists())
+
+    def test_nor_by_default_from_a_request_that_somehow_asked_for_one(self):
+        response = self.approve(self.system_admin, pending(role=Role.SYSTEM_ADMIN))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_decided_request_is_a_conflict_before_anything_else(self):
+        """Even when what it asked for would no longer validate."""
+        signup = pending(department="Physics")
+        self.reject(self.physics_admin, signup)
+        Department.objects.filter(name="Physics").update(is_active=False)
+
+        response = self.approve(self.system_admin, signup)
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+
+    def test_an_approval_that_cannot_be_audited_does_not_happen(self):
+        signup = pending()
+
+        with mock.patch(
+            "accounts.api.views.record_event", side_effect=RuntimeError("audit down")
+        ):
+            with self.assertRaises(RuntimeError):
+                self.approve(self.physics_admin, signup)
+
+        signup.refresh_from_db()
+        self.assertEqual(signup.status, SignupRequest.Status.PENDING)
+        self.assertFalse(User.objects.filter(username="newcomer").exists())
+
+
+class EmailInUseTests(ReviewTestCase):
+    def test_a_reviewer_is_warned_of_an_address_an_account_already_has(self):
+        member = make_user("profx")
+        member.email = "Prof.X@example.edu"
+        member.save()
+        outsider = make_user("che_member", Role.STUDENT, "Chemistry")
+        outsider.email = "che@example.edu"
+        outsider.save()
+        pending("profx2", email="prof.x@example.edu")
+        pending("che2", email="che@example.edu")
+
+        def flagged(admin):
+            rows = self.as_user(admin).get(reverse("admin-signup-request-list")).data
+            return {row["username"]: row["email_in_use"] for row in rows["results"]}
+
+        self.assertEqual(flagged(self.physics_admin)["profx2"], ["profx"])
+        # Not who in another department uses an address.
+        self.assertEqual(flagged(self.physics_admin)["che2"], [])
+        self.assertEqual(flagged(self.system_admin)["che2"], ["che_member"])
+
+
+class BulkRejectTests(ReviewTestCase):
+    def setUp(self):
+        super().setUp()
+        self.mine = [pending(f"phy_{n}", "Physics") for n in range(3)]
+        self.theirs = pending("che_applicant", "Chemistry")
+        self.done = pending("phy_done", "Physics", status=SignupRequest.Status.APPROVED)
+
+    def bulk(self, actor, **body):
+        return self.as_user(actor).post(
+            reverse("admin-signup-request-bulk-reject"), body, format="json"
+        )
+
+    def test_selected_requests_are_declined_and_audited_one_by_one(self):
+        ids = [self.mine[0].id, self.theirs.id, self.done.id]
+
+        response = self.bulk(self.physics_admin, ids=ids, note="Spam.")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["rejected"], [self.mine[0].id])
+        # Another department's request and a decided one look alike.
+        self.assertEqual(sorted(response.data["not_found"]), sorted(ids[1:]))
+        self.mine[0].refresh_from_db()
+        self.assertEqual(self.mine[0].decision_note, "Spam.")
+        row = AuditLog.objects.get(action=AuditLog.Action.SIGNUP_REJECT)
+        self.assertEqual(row.metadata["bulk"], True)
+        self.assertEqual(row.metadata["username"], "phy_0")
+        self.theirs.refresh_from_db()
+        self.assertEqual(self.theirs.status, SignupRequest.Status.PENDING)
+
+    def test_all_matching_a_search_previews_then_declines_within_the_snapshot(self):
+        preview = self.bulk(self.physics_admin, all=True, search="phy_", preview=True)
+        self.assertEqual(preview.data["remaining"], 3)
+        late = pending("phy_late", "Physics")
+        SignupRequest.objects.filter(pk=late.pk).update(
+            created_at=timezone.now() + timedelta(minutes=1)
+        )
+
+        response = self.bulk(
+            self.physics_admin, all=True, search="phy_", as_of=preview.data["as_of"]
+        )
+
+        self.assertEqual(
+            sorted(response.data["rejected"]), sorted(s.id for s in self.mine)
+        )
+        self.assertEqual(response.data["remaining"], 0)
+        late.refresh_from_db()
+        # Filed after the confirmation was shown: not swept up.
+        self.assertEqual(late.status, SignupRequest.Status.PENDING)
+        self.theirs.refresh_from_db()
+        self.assertEqual(self.theirs.status, SignupRequest.Status.PENDING)
+
+    def test_the_selection_must_be_one_or_the_other(self):
+        for body in (
+            {},
+            {"ids": [1], "all": True},
+            {"ids": [1], "search": "x"},
+            {"all": True, "colour": "red"},
+        ):
+            with self.subTest(body=body):
+                response = self.bulk(self.physics_admin, **body)
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_an_ordinary_user_cannot(self):
+        response = self.bulk(self.physics_student, all=True)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

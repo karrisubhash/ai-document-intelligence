@@ -11,8 +11,10 @@ import hmac
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import IntegrityError, transaction
+from django.db.models import Q, Value
+from django.db.models.functions import Lower
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
@@ -142,6 +144,21 @@ def revoke_api_tokens(user) -> int:
     return deleted
 
 
+def same_name(queryset, username: str):
+    """The rows of `queryset` whose username differs from `username` by
+    case alone.
+
+    Under both of PostgreSQL's case rules, because outside ASCII they
+    disagree: iexact compares UPPER(), which folds the long s into "s" but
+    leaves the Kelvin sign apart from "K"; LOWER(), which the waiting-request
+    constraint uses, does the reverse. A name equal under either is the same
+    name to a person reading a listing.
+    """
+    return queryset.alias(folded_username=Lower("username")).filter(
+        Q(username__iexact=username) | Q(folded_username=Lower(Value(username)))
+    )
+
+
 def username_unavailable(username: str) -> bool:
     """Whether a sign-up may not ask for `username`.
 
@@ -152,9 +169,10 @@ def username_unavailable(username: str) -> bool:
     cannot both be promised it.
     """
     return (
-        get_user_model().objects.filter(username__iexact=username).exists()
-        or SignupRequest.objects.filter(
-            username__iexact=username, status=SignupRequest.Status.PENDING
+        same_name(get_user_model().objects.all(), username).exists()
+        or same_name(
+            SignupRequest.objects.filter(status=SignupRequest.Status.PENDING),
+            username,
         ).exists()
     )
 
@@ -182,7 +200,7 @@ def approve_signup(
     """
     signup = _lock_pending(signup)
     User = get_user_model()
-    if User.objects.filter(username__iexact=signup.username).exists():
+    if same_name(User.objects.all(), signup.username).exists():
         raise UsernameTaken(
             f"An account named {signup.username!r} was created after this "
             f"request was made. Decline the request and ask them to choose "
@@ -240,16 +258,28 @@ def unapproved_signup(username: str, password: str) -> SignupRequest | None:
     Only with the right password, so the sign-in form cannot be used to
     learn who has applied. Never when an account holds the name: that
     person's failed sign-in is theirs, whatever an earlier applicant for
-    the same name typed.
+    the same name typed. The name must match exactly, as it will have to
+    once the account exists: "Nia" told "waiting" for a request filed as
+    "nia" would be told "wrong password" the day it was approved.
+
+    Every path costs exactly one password hash. The failed authenticate()
+    before this has spent one already, whoever the name belongs to; a
+    second only when a request holds the name would let the TIME a failed
+    sign-in takes say who has applied, password or not.
     """
-    if get_user_model().objects.filter(username__iexact=username).exists():
-        return None
-    signup = (
-        SignupRequest.objects.filter(username__iexact=username)
-        .exclude(status=SignupRequest.Status.APPROVED)
-        .first()
-    )
-    if signup is None or not signup.password:
+    signup = None
+    if not same_name(get_user_model().objects.all(), username).exists():
+        signup = (
+            SignupRequest.objects.filter(username=username)
+            .exclude(status=SignupRequest.Status.APPROVED)
+            .exclude(password="")
+            # The newest: a declined applicant who applied again is waiting.
+            .order_by("-created_at", "-id")
+            .first()
+        )
+    if signup is None:
+        # The same work as the check below, done for nothing.
+        make_password(password)
         return None
     return signup if check_password(password, signup.password) else None
 

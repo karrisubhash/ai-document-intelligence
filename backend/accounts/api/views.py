@@ -9,6 +9,7 @@ from django.contrib.auth import (
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.middleware.csrf import get_token
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import exceptions, mixins, status, viewsets
@@ -32,10 +33,12 @@ from accounts.services import (
     revoke_api_tokens,
     unapproved_signup,
 )
+from documents.api.serializers import BULK_DELETE_LIMIT
 from documents.audit import record_event
 from documents.models import AuditLog
 from documents.throttling import (
     AccountLoginRateThrottle,
+    BurstUserThrottle,
     LoginRateThrottle,
     SignupRateThrottle,
 )
@@ -51,6 +54,7 @@ from .serializers import (
     PublicDepartmentSerializer,
     SetPasswordSerializer,
     SignupApprovalSerializer,
+    SignupBulkRejectSerializer,
     SignupRejectionSerializer,
     SignupRequestSerializer,
     SignupSerializer,
@@ -82,6 +86,18 @@ def _audit_login(user, *, method):
         result=AuditLog.Result.ALLOWED,
         metadata={"method": method},
     )
+
+
+class SignupQueueFull(exceptions.APIException):
+    """SIGNUP_MAX_PENDING requests are already waiting. A 429, like the
+    throttles, though it is no single caller's doing."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_detail = (
+        "Too many account requests are waiting for review right now. Try again "
+        "later, or ask your department administrator for an account."
+    )
+    default_code = "signup_queue_full"
 
 
 def _signup_not_approved(signup):
@@ -265,9 +281,36 @@ class SignupView(APIView):
             return [SignupRateThrottle()]
         return []
 
+    def check_throttles(self, request):
+        # These checks run here, ahead of the throttle (DRF runs it before
+        # the handler): a request refused for any of them must not spend the
+        # address's budget. Otherwise a hostile page could exhaust a whole
+        # campus's allowance with invisible cross-site POSTs that never get
+        # past CSRF, and an applicant retrying a full queue would lock
+        # themselves out for the hour after it cleared. Not in initial()
+        # before super(): an exception raised there, before content
+        # negotiation, could not be rendered.
+        if request.method == "POST":
+            # Without it, any page could file requests through its visitors'
+            # browsers - from their addresses. Mild next to a forged login,
+            # but the check costs nothing and every other unsafe request has
+            # it.
+            _enforce_csrf(request)
+            if not settings.SIGNUP_ENABLED:
+                raise exceptions.PermissionDenied(
+                    "Sign-up is turned off here. Ask your department "
+                    "administrator for an account."
+                )
+            waiting = SignupRequest.objects.filter(status=SignupRequest.Status.PENDING)
+            if waiting.count() >= settings.SIGNUP_MAX_PENDING:
+                raise SignupQueueFull()
+        super().check_throttles(request)
+
     def get(self, request):
         if not settings.SIGNUP_ENABLED:
-            return Response({"enabled": False, "departments": [], "roles": []})
+            return Response(
+                {"enabled": False, "departments": [], "roles": [], "email_domains": []}
+            )
         departments = Department.objects.filter(is_active=True)
         return Response(
             {
@@ -277,52 +320,32 @@ class SignupView(APIView):
                     {"value": value, "label": label}
                     for value, label in SIGNUP_ROLE_CHOICES
                 ],
+                "email_domains": settings.SIGNUP_EMAIL_DOMAINS,
             }
         )
 
     def post(self, request):
-        # Without it, any page could file requests through its visitors'
-        # browsers - from their addresses, so past the per-address throttle.
-        # Mild next to a forged login, but the check costs nothing and every
-        # other unsafe request has it.
-        _enforce_csrf(request)
-        if not settings.SIGNUP_ENABLED:
-            raise exceptions.PermissionDenied(
-                "Sign-up is turned off here. Ask your department administrator "
-                "for an account."
-            )
-        waiting = SignupRequest.objects.filter(status=SignupRequest.Status.PENDING)
-        if waiting.count() >= settings.SIGNUP_MAX_PENDING:
-            return Response(
-                {
-                    "detail": "Too many account requests are waiting for review "
-                    "right now. Try again later, or ask your department "
-                    "administrator for an account."
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
-
         serializer = SignupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
+            # The request and its audit row together, or neither.
             with transaction.atomic():
                 signup = serializer.save()
+                record_event(
+                    user=None,
+                    action=AuditLog.Action.SIGNUP_REQUEST,
+                    result=AuditLog.Result.ALLOWED,
+                    subject_department=signup.department,
+                    signup_request_id=signup.id,
+                    username=signup.username,
+                    role=signup.role,
+                )
         except IntegrityError as exc:
             # The same name requested by someone else since validation
             # (unique_pending_signup_username).
             raise exceptions.ValidationError(
                 {"username": [USERNAME_UNAVAILABLE]}
             ) from exc
-
-        record_event(
-            user=None,
-            action=AuditLog.Action.SIGNUP_REQUEST,
-            result=AuditLog.Result.ALLOWED,
-            subject_department=signup.department,
-            signup_request_id=signup.id,
-            username=signup.username,
-            role=signup.role,
-        )
         return Response({"status": signup.status}, status=status.HTTP_201_CREATED)
 
 
@@ -559,11 +582,20 @@ class SignupRequestAdminViewSet(
 ):
     """Sign-up requests, scoped by accounts.permissions.reviewable_signups:
     a department admin sees and decides the requests for their department,
-    a system admin every request. Read-only apart from the two decisions;
-    a decision is final, and a declined applicant may apply again."""
+    a system admin every request. Read-only apart from the decisions; a
+    decision is final, and a declined applicant may apply again."""
 
     serializer_class = SignupRequestSerializer
     permission_classes = [permissions.IsAdministrator]
+
+    def get_throttles(self):
+        throttles = super().get_throttles()
+        if self.action == "bulk_reject":
+            # Up to BULK_DELETE_LIMIT decisions and audit rows a request,
+            # like the bulk deletes, so the same budget.
+            self.throttle_scope = "bulk_delete"
+            throttles.append(BurstUserThrottle())
+        return throttles
 
     def get_queryset(self):
         queryset = SignupRequest.objects.select_related("reviewed_by")
@@ -572,61 +604,156 @@ class SignupRequestAdminViewSet(
         params = self.request.query_params
         if params.get("status") in SignupRequest.Status.values:
             queryset = queryset.filter(status=params["status"])
-        search = params.get("search", "").strip()
-        if search:
-            queryset = queryset.filter(
-                Q(username__icontains=search)
-                | Q(email__icontains=search)
-                | Q(first_name__icontains=search)
-                | Q(last_name__icontains=search)
+        return _search_signups(queryset, params.get("search", ""))
+
+    def _refuse_if_decided(self, signup):
+        # Before the decision's own validation, so a request someone else
+        # has already decided answers 409 as documented - not a 400 because
+        # the department it asked for was retired since.
+        if signup.status != SignupRequest.Status.PENDING:
+            return Response(
+                {
+                    "detail": f"This request was already {signup.get_status_display().lower()}."
+                },
+                status=status.HTTP_409_CONFLICT,
             )
-        return queryset
+        return None
+
+    def _audit_rejection(self, signup, **extra):
+        record_event(
+            user=self.request.user,
+            action=AuditLog.Action.SIGNUP_REJECT,
+            result=AuditLog.Result.ALLOWED,
+            subject_department=signup.department,
+            signup_request_id=signup.id,
+            username=signup.username,
+            **extra,
+        )
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         signup = self.get_object()
+        refused = self._refuse_if_decided(signup)
+        if refused:
+            return refused
         serializer = SignupApprovalSerializer(
             data=request.data, context={"request": request, "signup": signup}
         )
         serializer.is_valid(raise_exception=True)
         try:
-            signup = approve_signup(
-                signup, reviewer=request.user, **serializer.validated_data
-            )
+            # The account and its audit row together, or neither.
+            with transaction.atomic():
+                signup = approve_signup(
+                    signup, reviewer=request.user, **serializer.validated_data
+                )
+                profile = signup.user.profile
+                record_event(
+                    user=request.user,
+                    action=AuditLog.Action.SIGNUP_APPROVE,
+                    result=AuditLog.Result.ALLOWED,
+                    # Where the account landed, which may not be where it
+                    # asked to.
+                    subject_department=profile.department,
+                    signup_request_id=signup.id,
+                    username=signup.username,
+                    target_user_id=signup.user_id,
+                    role=profile.role,
+                    department=profile.department,
+                )
         except (SignupAlreadyReviewed, UsernameTaken) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-
-        profile = signup.user.profile
-        record_event(
-            user=request.user,
-            action=AuditLog.Action.SIGNUP_APPROVE,
-            result=AuditLog.Result.ALLOWED,
-            # Where the account landed, which may not be where it asked to.
-            subject_department=profile.department,
-            signup_request_id=signup.id,
-            target_user_id=signup.user_id,
-            role=profile.role,
-            department=profile.department,
-        )
-        return Response(SignupRequestSerializer(signup).data)
+        return Response(self.get_serializer(signup).data)
 
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         signup = self.get_object()
+        refused = self._refuse_if_decided(signup)
+        if refused:
+            return refused
         serializer = SignupRejectionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            signup = reject_signup(
-                signup, reviewer=request.user, note=serializer.validated_data["note"]
-            )
+            with transaction.atomic():
+                signup = reject_signup(
+                    signup,
+                    reviewer=request.user,
+                    note=serializer.validated_data["note"],
+                )
+                self._audit_rejection(signup)
         except SignupAlreadyReviewed as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(self.get_serializer(signup).data)
 
-        record_event(
-            user=request.user,
-            action=AuditLog.Action.SIGNUP_REJECT,
-            result=AuditLog.Result.ALLOWED,
-            subject_department=signup.department,
-            signup_request_id=signup.id,
+    @action(detail=False, methods=["post"], url_path="bulk-reject")
+    def bulk_reject(self, request):
+        """Decline several waiting requests, or all that match a search.
+
+        Each is declined - and audited - as a single decline would be. A
+        request the reviewer may not decide, or one decided meanwhile, is
+        `not_found`: alike, so the answer says nothing about other
+        departments. `all` works like the bulk deletes (see
+        BulkSelectionSerializer): at most BULK_DELETE_LIMIT per request,
+        `remaining`, and the `as_of` snapshot to repeat with.
+        """
+        serializer = SignupBulkRejectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        waiting = permissions.reviewable_signups(
+            request.user,
+            SignupRequest.objects.filter(status=SignupRequest.Status.PENDING),
         )
-        return Response(SignupRequestSerializer(signup).data)
+        if data["all"]:
+            as_of = data.get("as_of") or timezone.now()
+            targets = _search_signups(waiting, data["search"]).filter(
+                created_at__lte=as_of
+            )
+            if data["preview"]:
+                return Response(
+                    {
+                        "rejected": [],
+                        "not_found": [],
+                        "remaining": targets.count(),
+                        "as_of": as_of,
+                    }
+                )
+            requested = list(
+                targets.order_by("pk").values_list("pk", flat=True)[:BULK_DELETE_LIMIT]
+            )
+        else:
+            requested = sorted(set(data["ids"]))
+
+        outcome = {"rejected": [], "not_found": []}
+        for pk in requested:
+            signup = waiting.filter(pk=pk).first()
+            try:
+                if signup is None:
+                    raise SignupAlreadyReviewed
+                with transaction.atomic():
+                    # reject_signup locks and re-reads the row: one decided
+                    # since the listing above is not declined twice.
+                    signup = reject_signup(
+                        signup, reviewer=request.user, note=data["note"]
+                    )
+                    self._audit_rejection(signup, bulk=True)
+            except SignupAlreadyReviewed:
+                outcome["not_found"].append(pk)
+                continue
+            outcome["rejected"].append(pk)
+
+        if data["all"]:
+            outcome["remaining"] = targets.count()
+            outcome["as_of"] = as_of
+        return Response(outcome)
+
+
+def _search_signups(queryset, search: str):
+    search = search.strip()
+    if not search:
+        return queryset
+    return queryset.filter(
+        Q(username__icontains=search)
+        | Q(email__icontains=search)
+        | Q(first_name__icontains=search)
+        | Q(last_name__icontains=search)
+    )

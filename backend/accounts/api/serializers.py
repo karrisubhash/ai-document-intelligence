@@ -1,6 +1,7 @@
+from django.conf import settings
 from django.contrib.auth import get_user_model, password_validation
 from django.contrib.auth.hashers import make_password
-from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.contrib.auth.validators import ASCIIUsernameValidator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
@@ -11,6 +12,7 @@ from accounts.services import (
     resolve_department,
     username_unavailable,
 )
+from documents.api.serializers import BulkSelectionSerializer
 from documents.authorization import (
     can_create_collection,
     get_profile,
@@ -318,10 +320,21 @@ SIGNUP_ROLE_CHOICES = [
 ]
 
 
-class SignupSerializer(serializers.Serializer):
-    username = serializers.CharField(
-        max_length=150, validators=[UnicodeUsernameValidator()]
+def email_domain_allowed(email: str) -> bool:
+    """Whether SIGNUP_EMAIL_DOMAINS admits `email` - its domain or any
+    subdomain of it, so "example.edu" admits "physics.example.edu". An
+    empty setting admits every address."""
+    domains = settings.SIGNUP_EMAIL_DOMAINS
+    if not domains:
+        return True
+    domain = email.rsplit("@", 1)[-1].lower()
+    return any(
+        domain == allowed or domain.endswith(f".{allowed}") for allowed in domains
     )
+
+
+class SignupSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
     email = serializers.EmailField(max_length=254)
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(
@@ -341,10 +354,33 @@ class SignupSerializer(serializers.Serializer):
     )
 
     def validate_username(self, value):
+        # NFKC first, as Django's own create_user and UsernameField do, and
+        # what is checked is what is stored: "ｒｏｏｔ" is "root". Then ASCII
+        # only. A stranger choosing a name is choosing what administrators
+        # and audit rows will display, and a Cyrillic "а" in "phy_аdmin"
+        # survives NFKC and every case rule while looking exactly like the
+        # department administrator. Accounts an administrator creates may
+        # still use any letters.
+        value = User.normalize_username(value)
+        try:
+            ASCIIUsernameValidator()(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages)) from exc
         # The same answer whether an account or a waiting request holds the
         # name: which of the two it is is nobody else's business.
         if username_unavailable(value):
             raise serializers.ValidationError(USERNAME_UNAVAILABLE)
+        return value
+
+    def validate_email(self, value):
+        value = User.objects.normalize_email(value)
+        if not email_domain_allowed(value):
+            allowed = ", ".join(
+                f"@{domain}" for domain in settings.SIGNUP_EMAIL_DOMAINS
+            )
+            raise serializers.ValidationError(
+                f"Use your institution's email address ({allowed})."
+            )
         return value
 
     def validate_department(self, value):
@@ -371,9 +407,17 @@ class SignupSerializer(serializers.Serializer):
 
 
 class SignupRequestSerializer(serializers.ModelSerializer):
-    """A request as its reviewers see it. Never the password hash."""
+    """A request as its reviewers see it. Never the password hash.
+
+    Everything an applicant typed is unverified - nothing confirms that an
+    email address belongs to the person who typed it - so `email_in_use`
+    names the accounts, among those the reviewer administers, that already
+    have the same address: the likeliest sign of someone posing as a member,
+    or of a member who forgot they have an account.
+    """
 
     reviewed_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+    email_in_use = serializers.SerializerMethodField()
 
     class Meta:
         model = SignupRequest
@@ -392,14 +436,35 @@ class SignupRequestSerializer(serializers.ModelSerializer):
             "reviewed_at",
             "decision_note",
             "user",
+            "email_in_use",
         ]
         read_only_fields = fields
+
+    def get_email_in_use(self, signup) -> list[str]:
+        request = self.context.get("request")
+        if request is None or signup.status != SignupRequest.Status.PENDING:
+            return []
+        # Scoped to what the reviewer administers: a department admin does
+        # not learn which address another department's member uses.
+        accounts = permissions.administrable_users(
+            request.user, User.objects.filter(email__iexact=signup.email)
+        )
+        return list(
+            accounts.order_by("username").values_list("username", flat=True)[:5]
+        )
 
 
 class SignupApprovalSerializer(serializers.Serializer):
     """The role and department the new account gets - what was asked for,
     unless the reviewer says otherwise - held to the rules that bind the
-    reviewer when they create an account by hand (AdminUserSerializer)."""
+    reviewer when they create an account by hand (AdminUserSerializer), and
+    never an administrative role, even from a system administrator.
+
+    An approval makes an account for someone nobody has verified, from a
+    dialog whose role list a slip of the hand can move; making a stranger an
+    administrator should be the separate, deliberate edit it is for anyone
+    else, audited as a change to an existing account.
+    """
 
     role = serializers.ChoiceField(choices=UserProfile.Role.choices, required=False)
     department = serializers.CharField(max_length=255, required=False, allow_blank=True)
@@ -409,6 +474,15 @@ class SignupApprovalSerializer(serializers.Serializer):
         signup = self.context["signup"]
 
         role = attrs.get("role", signup.role)
+        if role not in permissions.DEPARTMENT_ASSIGNABLE_ROLES:
+            raise serializers.ValidationError(
+                {
+                    "role": [
+                        "An approval grants FACULTY, STAFF or STUDENT. Promote the "
+                        "account from Users afterwards if it needs more."
+                    ]
+                }
+            )
         if role not in permissions.assignable_roles(actor):
             raise serializers.ValidationError(
                 {"role": [f"You may not assign the {role} role."]}
@@ -431,3 +505,32 @@ class SignupRejectionSerializer(serializers.Serializer):
     note = serializers.CharField(
         max_length=500, required=False, allow_blank=True, default=""
     )
+
+
+class SignupBulkRejectSerializer(BulkSelectionSerializer):
+    """Body of POST /api/v1/admin/signup-requests/bulk-reject/.
+
+    The bulk deletes' selection (BulkSelectionSerializer): `ids`, or `all`
+    waiting requests the reviewer decides, optionally narrowed by `search`
+    exactly as the listing narrows them, within the `as_of` snapshot.
+    `preview: true` declines nothing and answers the count and `as_of`, for
+    the confirmation. `note` goes on every request declined.
+
+    This is how a queue flooded with junk is cleared: one at a time, the
+    500 requests SIGNUP_MAX_PENDING allows are 500 dialogs.
+    """
+
+    search = serializers.CharField(required=False, allow_blank=True, default="")
+    preview = serializers.BooleanField(required=False, default=False)
+    note = serializers.CharField(
+        max_length=500, required=False, allow_blank=True, default=""
+    )
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        for name in ("search", "preview"):
+            if attrs.get(name) and not attrs["all"]:
+                raise serializers.ValidationError(
+                    {name: ["Only applies with all: true."]}
+                )
+        return attrs
