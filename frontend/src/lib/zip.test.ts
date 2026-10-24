@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BSDTAR_ZIP,
+  EXPLORER_ZIP,
   POWERSHELL_ZIP,
   PYTHON_STREAMED_ZIP,
   PYTHON_ZIP,
@@ -69,6 +70,15 @@ describe("zips made by real tools", () => {
     ]);
     expect(await text(await readZipEntry(zip, entries[0], LIMIT))).toBe(
       "Minutes of the board meeting.\n".repeat(10),
+    );
+  });
+
+  it("reads Windows Explorer's compressed folder, whose names are code page 437", async () => {
+    const zip = fromBase64(EXPLORER_ZIP);
+    const entries = await listZip(zip);
+    expect(entries.map((entry) => entry.path)).toEqual(["Café menu.txt", "Minutes/board.txt"]);
+    expect(await text(await readZipEntry(zip, entries[0], LIMIT))).toBe(
+      "Lunch is served from noon.\n".repeat(8),
     );
   });
 
