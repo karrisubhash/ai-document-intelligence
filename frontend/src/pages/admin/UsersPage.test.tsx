@@ -246,14 +246,17 @@ describe("sign-up requests", () => {
     );
     await userEvent.click(await screen.findByRole("button", { name: "Decline Nia Okafor" }));
     const dialog = await screen.findByRole("dialog", { name: /Decline Nia Okafor/ });
+    const before = vi.mocked(api.adminSignupRequests).mock.calls.length;
     await userEvent.click(within(dialog).getByRole("button", { name: "Decline request" }));
 
+    // Only what was asked after the decline: the list's first page, and
+    // never again the page the decline emptied (the server would 404).
+    const after = () =>
+      vi.mocked(api.adminSignupRequests).mock.calls.slice(before).map(([params]) => params ?? {});
     await waitFor(() =>
-      expect(api.adminSignupRequests).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "PENDING", page: 1, search: "" }),
-      ),
+      expect(after()).toContainEqual(expect.objectContaining({ status: "PENDING", page: 1 })),
     );
-    expect(api.adminSignupRequests).not.toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
+    expect(after().some((params) => params.page === 2)).toBe(false);
   });
 
   it("gives focus back to the button that opened a dialog closed without a decision", async () => {
