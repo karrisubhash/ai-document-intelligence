@@ -865,27 +865,37 @@ export default function UsersPage() {
           ) : undefined
         }
       />
-      <Tabs
-        label="Users"
-        selected={tab}
-        onSelect={(id) => setParams(id === "requests" ? { tab: "requests" } : {}, { replace: true })}
-        tabs={[
-          { id: "accounts", label: "Accounts", icon: "users" },
-          {
-            id: "requests",
-            label: "Sign-up requests",
-            icon: "inbox",
-            count: waiting.data?.count ? waiting.data.count : null,
-          },
-        ]}
-      />
-      <TabPanel id={tab}>
-        {tab === "accounts" ? (
-          <Accounts editing={editing} setEditing={setEditing} />
-        ) : (
-          <SignupRequests onDecided={waiting.reload} />
-        )}
-      </TabPanel>
+      {/* One block, as on a document's page: the panel's own padding
+          separates it from the tabs, not the page's gap as well. Inside it,
+          the toolbar, list and pagination need a gap of their own - the
+          page's applies only to its direct children. */}
+      <div>
+        <Tabs
+          label="Users"
+          selected={tab}
+          onSelect={(id) =>
+            setParams(id === "requests" ? { tab: "requests" } : {}, { replace: true })
+          }
+          tabs={[
+            { id: "accounts", label: "Accounts", icon: "users" },
+            {
+              id: "requests",
+              label: "Sign-up requests",
+              icon: "inbox",
+              count: waiting.data?.count ? waiting.data.count : null,
+            },
+          ]}
+        />
+        <TabPanel id={tab}>
+          <div className="stack-lg">
+            {tab === "accounts" ? (
+              <Accounts editing={editing} setEditing={setEditing} />
+            ) : (
+              <SignupRequests onDecided={waiting.reload} />
+            )}
+          </div>
+        </TabPanel>
+      </div>
     </div>
   );
 }
