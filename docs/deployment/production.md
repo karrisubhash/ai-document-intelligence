@@ -96,6 +96,61 @@ the first start. That once left the backend crash-looping after a reboot.
 `check_deployment_config.py` rejects an application-service tmpfs that declares neither a
 `uid=` nor a `mode=` (either one is enough to keep it writable).
 
+## The landing page, the public demo and sample content
+
+Signed-out visitors at `/` see the landing page, with the sign-in form in it; `/login`,
+`/signup` and any other address show the focused sign-in. Nothing to configure, except
+the site's address for link previews: build the edge image with
+`--build-arg VITE_PUBLIC_URL=https://docs.example.edu` so `og:image` and `og:url` are
+absolute (empty, the default, leaves them relative, which Facebook, LinkedIn and X ignore).
+The share image, icons and `robots.txt` are in `frontend/public/`; `frontend/scripts/brand_assets.py`
+renders the PNGs again if the mark changes.
+
+**Sample content.** `manage.py seed_demo` loads the sample library - sixteen synthetic
+institutional documents, three of them PDFs with tables and one a scan that only OCR reads -
+into `DEMO_DEPARTMENT` (created if missing), through the real upload path, so the worker
+must be running for them to become Ready. `--department NAME` fills another department
+(created if missing). Safe to run again: what a department already holds, by checksum, is
+skipped. A system administrator can do the same from the API for any department
+(`POST /api/v1/admin/samples/`), which is how an empty installation gets something to
+show. The samples are owned by an inactive `sample-library` account.
+
+**Turning the demo on** (off by default):
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-deps backend \
+    python manage.py seed_demo
+# wait until the samples are Ready (Documents, or `docker compose logs -f worker`), then in .env:
+DEMO_ENABLED=True
+# and recreate backend so it reads the setting
+```
+
+The landing page offers "Try the live demo" only while the demo department holds at least
+one Ready document. Each visitor gets an ephemeral, read-only guest account
+([security model](../security/model.md#identity)). Schedule the sweep - the TTL is only as
+good as it:
+
+```sh
+# hourly, e.g. from the host's crontab
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-deps backend \
+    python manage.py purge_demo_guests
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `DEMO_ENABLED` | `False` | Offer the one-click demo |
+| `DEMO_DEPARTMENT` | `Demo` | Where guests live and `seed_demo` puts the samples |
+| `DEMO_GUEST_TTL_HOURS` | `24` | Guests older than this are deleted; sessions end no later |
+| `DEMO_MAX_GUESTS` | `200` | Guest accounts existing at once; past it, "the demo is full" |
+| `THROTTLE_DEMO` / `THROTTLE_DEMO_GLOBAL` | `10/hour` / `60/hour` | Demo starts per address / from all addresses |
+| `THROTTLE_GUEST_CHAT` / `_BURST` / `_GLOBAL` | `20/hour` / `5/minute` / `120/hour` | Questions per guest / per guest per minute / all guests |
+| `THROTTLE_GUEST_SEARCH` / `_GLOBAL` | `60/hour` / `600/hour` | Searches per guest / all guests |
+| `THROTTLE_SAMPLES` | `10/hour` | Sample-library loads per administrator |
+
+On a server whose answerer is a hosted model with a daily quota, guests' questions draw on
+the same quota as members'; `THROTTLE_GUEST_CHAT_GLOBAL` is what bounds their share. Lower
+it, or leave the demo off, if the quota is tight.
+
 ## Scaling
 
 `docker compose … up -d --scale backend=3` — nginx balances by least connections across
