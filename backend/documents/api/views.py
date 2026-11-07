@@ -267,6 +267,14 @@ class DocumentViewSet(viewsets.ModelViewSet):
             document = Document.objects.create(
                 title=data["title"],
                 document_type=data["document_type"],
+                # GENERAL is what the upload form starts on, so it says
+                # nothing about the uploader's intent and the type detector
+                # may replace it. Any other type was chosen, and stays.
+                document_type_source=(
+                    Document.TypeSource.DEFAULT
+                    if data["document_type"] == Document.DocumentType.GENERAL
+                    else Document.TypeSource.USER
+                ),
                 department=department,
                 owner=request.user,
             )

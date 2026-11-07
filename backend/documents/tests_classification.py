@@ -114,13 +114,35 @@ class ClassificationServiceTests(IngestionTestCase):
         self.addCleanup(reset_classifier_cache)
 
     def upload_and_get_content(self):
-        """Upload with no classifier configured, so the pipeline's own
+        """Upload with no classifier configured - and the type detector,
+        which runs by default, switched off - so the pipeline's own
         CLASSIFICATION stage skips and these tests exercise the service
         directly rather than through the stage."""
-        response = self.upload(
-            "doc.pdf", make_pdf_bytes(["Some document body"]), "application/pdf"
-        )
+        with override_settings(DOCUMENT_TYPE_DETECTOR=""):
+            response = self.upload(
+                "doc.pdf", make_pdf_bytes(["Some document body"]), "application/pdf"
+            )
         return self.content_for(response.data["id"])
+
+    def test_a_layout_verdict_is_recorded_as_a_layout_class(self):
+        """Never as the document's type - see ClassificationResult.taxonomy."""
+        content = self.upload_and_get_content()
+
+        with override_settings(DOCUMENT_CLASSIFIER=STUB):
+            result = classify(content.id)
+
+        self.assertEqual(result.taxonomy, ClassificationResult.Taxonomy.LAYOUT_CLASS)
+        self.assertFalse(result.abstained)
+        content.document_version.document.refresh_from_db()
+        self.assertEqual(content.document_version.document.document_type, "GENERAL")
+
+    def test_an_unknown_verdict_is_stored_as_an_abstention(self):
+        content = self.upload_and_get_content()
+
+        with override_settings(DOCUMENT_CLASSIFIER=UNKNOWN):
+            result = classify(content.id)
+
+        self.assertTrue(result.abstained)
 
     def test_persists_result_against_version_content_and_job(self):
         content = self.upload_and_get_content()
@@ -190,6 +212,7 @@ class ClassificationStageTests(IngestionTestCase):
             stage=ProcessingJob.Stage.CLASSIFICATION
         )
 
+    @override_settings(DOCUMENT_TYPE_DETECTOR="")
     def test_stage_is_skipped_when_no_classifier_is_configured(self):
         response = self.upload_pdf()
         event = self.classification_event(response.data["id"])
@@ -201,6 +224,17 @@ class ClassificationStageTests(IngestionTestCase):
             self.job_for(response.data["id"]).status, ProcessingJob.Status.COMPLETED
         )
 
+    def test_the_type_detector_runs_when_no_layout_classifier_is_configured(self):
+        response = self.upload_pdf()
+        event = self.classification_event(response.data["id"])
+
+        self.assertEqual(event.status, ProcessingEvent.Status.SUCCEEDED)
+        result = ClassificationResult.objects.get()
+        self.assertEqual(result.taxonomy, ClassificationResult.Taxonomy.DOCUMENT_TYPE)
+        self.assertEqual(
+            event.metadata["document_type"]["classification_result_id"], result.id
+        )
+
     @override_settings(DOCUMENT_CLASSIFIER=STUB)
     def test_stage_records_a_result_when_a_classifier_is_configured(self):
         response = self.upload_pdf()
@@ -210,14 +244,18 @@ class ClassificationStageTests(IngestionTestCase):
         self.assertEqual(event.metadata["predicted_label"], "letter")
         self.assertEqual(event.metadata["model_version"], "test-v0")
 
-        result = ClassificationResult.objects.get()
+        result = ClassificationResult.objects.get(
+            taxonomy=ClassificationResult.Taxonomy.LAYOUT_CLASS
+        )
         self.assertEqual(result.id, event.metadata["classification_result_id"])
 
     @override_settings(DOCUMENT_CLASSIFIER=STUB)
     def test_classification_consumes_persisted_content_not_the_raw_file(self):
         response = self.upload_pdf()
         content = self.content_for(response.data["id"])
-        result = ClassificationResult.objects.get()
+        result = ClassificationResult.objects.get(
+            taxonomy=ClassificationResult.Taxonomy.LAYOUT_CLASS
+        )
 
         # The stage was handed the DocumentContent id, proving it read the
         # normalized representation rather than reopening the PDF.

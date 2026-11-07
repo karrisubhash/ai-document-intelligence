@@ -407,8 +407,11 @@ MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 500
 OCR_DPI = 200
 
-# Dotted path to a DocumentClassifier implementation. Empty means the
-# CLASSIFICATION stage records SKIPPED - it never guesses a label.
+# Dotted path to a LAYOUT classifier (a DocumentClassifier). Empty means it
+# is not run - it never guesses a label. Its verdict is a page-layout class
+# (letter, memo, form... - the 16 RVL-CDIP classes for the bundled baseline)
+# and is recorded as exactly that; it never sets the document's type, which
+# is the institutional type detector's job (DOCUMENT_TYPE_DETECTOR below).
 #
 # To enable the trained text baseline:
 #   pip install -r backend/requirements-ml.txt
@@ -420,14 +423,78 @@ OCR_DPI = 200
 DOCUMENT_CLASSIFIER = os.getenv("DOCUMENT_CLASSIFIER", "")
 
 # Dotted path to a FieldExtractor implementation. Empty means the EXTRACTION
-# stage records SKIPPED - it never invents fields. The bundled rule extractor
-# is documents.processing.field_extraction.rule_extractor.RuleFieldExtractor.
-DOCUMENT_FIELD_EXTRACTOR = os.getenv("DOCUMENT_FIELD_EXTRACTOR", "")
+# stage records SKIPPED - it never invents fields.
+#
+# Defaults to the bundled rule extractor, like the table detector, because
+# it needs nothing: the schema pack is committed, matching is regex over
+# text already extracted, and every value it stores is span-verified. Off by
+# default, it did nothing for anyone who did not know to switch it on - and
+# with the type detector now typing GENERAL uploads, there is a schema to
+# run for most institutional documents. Types the pack does not cover
+# (GENERAL, OTHER) still record SKIPPED, never an invented field.
+DOCUMENT_FIELD_EXTRACTOR = os.getenv(
+    "DOCUMENT_FIELD_EXTRACTOR",
+    "documents.processing.field_extraction.rule_extractor.RuleFieldExtractor",
+)
 
 # Schema pack the rule extractor matches against. Empty uses the bundled
 # institutional pack; point it at another file to extract different fields
 # without touching code.
 DOCUMENT_FIELD_SCHEMA_PACK = os.getenv("DOCUMENT_FIELD_SCHEMA_PACK", "")
+
+# --- Document intelligence: type detection, briefs, related, thumbnails -----
+# Everything here runs on CPU with no LLM and no trained artifact, and none
+# of it can fail a document. See docs/ai/pipeline.md.
+#
+# The institutional type detector (CLASSIFICATION stage, before EXTRACTION):
+# predicts GENERAL/REGULATION/POLICY/SYLLABUS/CIRCULAR/FORM from pattern
+# votes - including the schema pack's own field patterns - plus, when the
+# embedding provider is semantic, similarity to short type descriptions. It
+# sets the type only when the uploader left the default GENERAL (or the
+# detector set it before) and its confidence reaches the minimum; a type a
+# person chose is never overwritten. Empty disables detection.
+DOCUMENT_TYPE_DETECTOR = os.getenv(
+    "DOCUMENT_TYPE_DETECTOR",
+    "documents.processing.classification.institutional.InstitutionalTypeDetector",
+)
+# Below this the detector abstains: the verdict (with its best guess and
+# every score) is recorded, and the type is left as it was.
+DOCUMENT_TYPE_MIN_CONFIDENCE = float(os.getenv("DOCUMENT_TYPE_MIN_CONFIDENCE", "0.6"))
+# False records confident verdicts as suggestions without changing the type.
+DOCUMENT_TYPE_AUTO_APPLY = (
+    os.getenv("DOCUMENT_TYPE_AUTO_APPLY", "True").lower() == "true"
+)
+
+# Post-publish enrichment (documents.tasks_insights, on the `index` queue):
+# the extractive brief, entities, the related-documents centroid and the
+# first-page thumbnail. False stops new enrichment; what exists is still
+# served.
+DOCUMENT_INSIGHTS_ENABLED = (
+    os.getenv("DOCUMENT_INSIGHTS_ENABLED", "True").lower() == "true"
+)
+# First-page thumbnails: rendered at this DPI (PDF) and scaled to this width.
+DOCUMENT_THUMBNAIL_WIDTH = int(os.getenv("DOCUMENT_THUMBNAIL_WIDTH", "320"))
+DOCUMENT_THUMBNAIL_DPI = int(os.getenv("DOCUMENT_THUMBNAIL_DPI", "60"))
+# Related documents at or above this similarity are flagged near-duplicates.
+DOCUMENT_NEAR_DUPLICATE_SIMILARITY = float(
+    os.getenv("DOCUMENT_NEAR_DUPLICATE_SIMILARITY", "0.97")
+)
+# Related documents below this similarity are not shown at all: a list of
+# five unrelated files is worse than a short list.
+DOCUMENT_RELATED_MIN_SIMILARITY = float(
+    os.getenv("DOCUMENT_RELATED_MIN_SIMILARITY", "0.5")
+)
+# Corpus-level suggested questions are cached per user for this long.
+DOCUMENT_SUGGESTIONS_CACHE_SECONDS = int(
+    os.getenv("DOCUMENT_SUGGESTIONS_CACHE_SECONDS", "600")
+)
+# The CPU-costing reads of this feature - related documents, corpus
+# suggestions, upcoming deadlines - share one per-user budget. Plain reads
+# (a document's brief, its thumbnail) are not throttled, as no other detail
+# read is.
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["insights"] = os.getenv(
+    "THROTTLE_INSIGHTS", "600/hour"
+)
 
 # Dotted path to an EmbeddingProvider. Empty means chunks are still written
 # and still lexically searchable - only the vector half of hybrid retrieval
@@ -912,6 +979,9 @@ CELERY_TASK_DEFAULT_QUEUE = "ingest"
 CELERY_TASK_ROUTES = {
     "documents.tasks.process_document_task": {"queue": "ingest"},
     "documents.tasks_reindex.reindex_content_task": {"queue": "index"},
+    # Post-publish enrichment: off the upload's critical path, beside the
+    # re-index work it resembles (reads stored content, uses the embedder).
+    "documents.tasks_insights.enrich_document_task": {"queue": "index"},
 }
 
 # One task at a time per worker process. The default prefetches several,

@@ -4,7 +4,15 @@ from .exceptions import (
     ClassifierNotConfigured,
     ClassifierUnavailable,
 )
-from .service import classify, get_classifier, reset_classifier_cache
+from .service import (
+    TypeOutcome,
+    apply_document_type,
+    classify,
+    detect_document_type,
+    get_classifier,
+    get_type_detector,
+    reset_classifier_cache,
+)
 
 __all__ = [
     "ClassificationPrediction",
@@ -13,7 +21,11 @@ __all__ = [
     "ClassificationError",
     "ClassifierNotConfigured",
     "ClassifierUnavailable",
+    "TypeOutcome",
+    "apply_document_type",
     "classify",
+    "detect_document_type",
     "get_classifier",
+    "get_type_detector",
     "reset_classifier_cache",
 ]
