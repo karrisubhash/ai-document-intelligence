@@ -6,6 +6,7 @@ from config.health import health_check, readiness_check
 from documents.evaluation_api.views import FeedbackView
 from documents.observability.views import metrics_view
 from documents.operations.views import DashboardView
+from notifications.views import AttentionView
 
 # Every JSON endpoint, without its prefix. Mounted twice below.
 api_patterns = [
@@ -29,6 +30,10 @@ api_patterns = [
     # operational read models - audit, jobs, system status (documents app).
     path("admin/", include("accounts.api.admin_urls")),
     path("admin/", include("documents.operations.urls")),
+    # The bell (a person's own notifications) and the administrators'
+    # attention counts behind the sidebar badges (notifications app).
+    path("notifications/", include("notifications.urls")),
+    path("admin/attention/", AttentionView.as_view(), name="admin-attention"),
 ]
 
 urlpatterns = [

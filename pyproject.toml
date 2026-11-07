@@ -70,4 +70,4 @@ ignore = [
 "backend/**/tests*.py" = ["B017"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["accounts", "documents", "config", "ai"]
+known-first-party = ["accounts", "documents", "notifications", "config", "ai"]

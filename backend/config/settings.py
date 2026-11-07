@@ -85,6 +85,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "accounts",
     "documents",
+    "notifications",
 ]
 
 REST_FRAMEWORK = {
@@ -170,6 +171,11 @@ REST_FRAMEWORK = {
         # Each request deletes (or is refused, and audits) up to 100
         # documents. Deleting 10,000 documents takes ~100 requests.
         "bulk_delete": os.getenv("THROTTLE_BULK_DELETE", "300/hour"),
+        # The bell and the sidebar badges (notifications app). Every visible
+        # tab polls two cheap endpoints once a minute, more on window focus;
+        # this is several windows' worth, and a client stuck polling in a
+        # loop hits it long before the site-wide "user" budget.
+        "notifications": os.getenv("THROTTLE_NOTIFICATIONS", "1200/hour"),
     },
 }
 
@@ -952,6 +958,30 @@ CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "960"))
 # lost. Above the hard limit plus Redis's one-hour visibility timeout, so
 # recovery never races a redelivery that is about to finish the job.
 STALLED_JOB_MINUTES = int(os.getenv("STALLED_JOB_MINUTES", "120"))
+
+
+# --- Notifications (notifications app) ------------------------------------
+# The bell: news about a person's uploads and, for administrators, sign-up
+# requests to decide. See docs/architecture/notifications.md.
+#
+# Results of a batch upload fold into one notification ("12 documents are
+# ready") while each arrives within this many minutes of the last and the
+# person has not read it. 0 gives every document its own notification.
+NOTIFICATIONS_COALESCE_MINUTES = int(os.getenv("NOTIFICATIONS_COALESCE_MINUTES", "10"))
+# `manage.py prune_notifications` (run it from cron, daily) deletes READ
+# notifications older than this many days, and UNREAD ones older than the
+# second, so the table cannot grow without bound for an account nobody
+# signs in to. 0 keeps that kind forever.
+NOTIFICATIONS_RETENTION_DAYS = int(os.getenv("NOTIFICATIONS_RETENTION_DAYS", "30"))
+NOTIFICATIONS_UNREAD_RETENTION_DAYS = int(
+    os.getenv("NOTIFICATIONS_UNREAD_RETENTION_DAYS", "180")
+)
+# The administrators' attention counts (sidebar badges) are cached per
+# person this long. Every open tab polls them; a sign-up decision or a
+# finished run invalidates them early (notifications.attention).
+NOTIFICATIONS_ATTENTION_CACHE_SECONDS = int(
+    os.getenv("NOTIFICATIONS_ATTENTION_CACHE_SECONDS", "30")
+)
 
 
 # --- Transport security (spec §21, §13) -----------------------------------
