@@ -40,6 +40,8 @@ app.autodiscover_tasks()
 # of line someone tidies away later, and this is where a reader already
 # looks to find out which modules the worker knows about.
 app.autodiscover_tasks(related_name="tasks_reindex")
+# The same lesson, for post-publish enrichment (documents/tasks_insights.py).
+app.autodiscover_tasks(related_name="tasks_insights")
 
 
 @setup_logging.connect
