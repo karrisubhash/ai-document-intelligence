@@ -115,6 +115,24 @@ department and holds only that department's documents.
 | POST | `/api/collections/bulk-delete/` | manage (each) | JSON `{"ids": [...]}` (≤100) or `{"all": true, "as_of"?}` (the collections the caller may manage, ≤100 per request, with `remaining` and `as_of` as for documents). Unknown keys are **400**. **200** `{deleted, forbidden, not_found}`; an invisible collection, or one deleted meanwhile, is `not_found`. `all` adds `skipped` (visible, not the caller's to manage). Documents are kept. Audited per collection with `bulk: true` |
 | POST · DELETE | `/api/collections/{id}/documents/` | manage | `{document_ids: [...]}` (≤500). Adding a document the caller cannot read, or from another department, is **404** naming the ids. Audited |
 
+## Notifications
+
+A person's own news: their uploads finishing processing, sign-up requests to decide (for
+administrators), a welcome once approved. Owner-scoped: every query starts from the
+caller, so someone else's notification is **404**, like one that does not exist. Text is
+plain (render it as text, never HTML); `url` is always an in-app path such as
+`/documents/12?tab=processing`, or `""`. Nothing here writes an audit row. These
+endpoints, and `/admin/attention/` below, share the throttle scope `notifications`
+(`THROTTLE_NOTIFICATIONS`, default `1200/hour`) on top of the site-wide `user` limit.
+Design and producers: [docs/architecture/notifications.md](../architecture/notifications.md).
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/notifications/` | signed in | `?unread=1` for unread only; `?page=N`, `?page_size=` (default 20, at most 50). Newest news first (`-updated_at`). **200** `{count, next, previous, results: [{id, kind, title, body, url, created_at, updated_at, read_at}]}`. `kind` is one of `document.ready`, `document.failed`, `document.quarantined`, `signup.requested`, `account.welcome` (new producers may add kinds - show unknown ones generically). `updated_at` is when the news in it last changed: one notification can keep updating ("12 documents are ready") |
+| GET | `/api/notifications/summary/` | signed in | **200** `{"unread": int, "latest_at": iso \| null}` - what every open tab polls. `latest_at` is the newest `updated_at`, read or not; a client that sees it move knows something arrived |
+| POST | `/api/notifications/{id}/read/` | owner | **204**; **404** for an id that is not the caller's. Reading one already read keeps its first `read_at` |
+| POST | `/api/notifications/read-all/` | signed in | Optional JSON `{"until": iso}`: only news no newer than that (send the newest time you have shown, so what arrived after the person looked stays unread); a malformed `until` is **400**. **200** `{"updated": int}` |
+
 ## Administration
 
 System admins see everything. Department admins see every account in their own department,
@@ -136,6 +154,7 @@ change their own role or deactivate themselves.
 | GET | `/api/admin/audit/` | admins, scoped | `action`, `result`, `user`, `document`, `since`, `until` (dates or full ISO datetimes). Department admins see rows by their members, on their documents, and about their department's collections and sign-up requests (whoever acted); for another department's document both the id and the title are withheld (`document_withheld: true`), and filtering by such an id returns nothing |
 | GET | `/api/admin/jobs/` | admins, scoped | `status`, `error_code`, `stalled=true` |
 | POST | `/api/admin/jobs/{id}/retry/` | admins, scoped | **409** if a run is active; **400** for a superseded version |
+| GET | `/api/admin/attention/` | admins, scoped | The sidebar badges. **200** `{"pending_signups": int, "failed_documents": int, "quarantined_documents": int, "stalled_jobs": int}`: sign-up requests the caller may decide; non-archived documents in scope whose processing failed, quarantined ones included (`quarantined_documents` says how many of those); runs that stopped reporting progress (as `jobs/?stalled=true`). Scoped like `jobs/` (a department admin: their department's documents). Cached per caller for `NOTIFICATIONS_ATTENTION_CACHE_SECONDS` (30), refreshed early after any sign-up request is saved or a run is created or finishes. Throttle scope `notifications` |
 | GET | `/api/admin/system/` | system admins | Dependency health, queue depths, counts, AI configuration — names only, never secrets |
 
 ## Operational

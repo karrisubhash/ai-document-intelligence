@@ -1,3 +1,4 @@
+import type { AttentionBadgeKey } from "../api/notifications";
 import type { Capabilities } from "../api/types";
 import type { IconName } from "./icons";
 
@@ -8,6 +9,8 @@ export interface NavItem {
   end?: boolean;
   /** Extra words the command palette matches, e.g. "upload" for Documents. */
   keywords?: string;
+  /** Which attention count (GET /admin/attention/) the sidebar shows on it. */
+  badge?: AttentionBadgeKey;
 }
 
 export const PRIMARY: NavItem[] = [
@@ -30,6 +33,7 @@ export function adminItems(can: (capability: keyof Capabilities) => boolean): Na
       label: "Users",
       icon: "users",
       keywords: "accounts people sign-up signup requests approve decline",
+      badge: "signups",
     });
   }
   if (can("administer_departments") || can("administer_users")) {
@@ -41,6 +45,7 @@ export function adminItems(can: (capability: keyof Capabilities) => boolean): Na
       label: "Processing",
       icon: "activity",
       keywords: "jobs pipeline failed retry",
+      badge: "processing",
     });
   }
   if (can("view_audit_log")) {

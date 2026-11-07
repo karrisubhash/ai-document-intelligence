@@ -77,6 +77,19 @@ rather than `FAILED`, so neither Reprocess nor Retry can start a second run besi
 job the broker could not accept at all (Redis down at upload) is recorded `FAILED` with
 `INFRASTRUCTURE_ERROR` and can be retried.
 
+A run marked stalled is announced to the document's owner in the bell ("processing was
+interrupted") unless Reprocess replaced it in the same step; a `--requeue` run that then
+succeeds turns that notification into "ready" if it is still unread and within
+`NOTIFICATIONS_COALESCE_MINUTES`. A job the broker refused is not announced (no signal
+fires for that update); it shows on the Processing screen and its badge.
+
+Notifications are kept until retention removes them. From cron, daily (`--dry-run` only
+counts):
+
+```bash
+python manage.py prune_notifications   # read > NOTIFICATIONS_RETENTION_DAYS (30), unread > NOTIFICATIONS_UNREAD_RETENTION_DAYS (180)
+```
+
 | Error code | Meaning | Action |
 |---|---|---|
 | `UNSUPPORTED_FILE_TYPE`, `CORRUPT_DOCUMENT`, `EMPTY_EXTRACTION`, `TOO_MANY_PAGES` | the file itself | ask the owner for a better copy; not retryable |

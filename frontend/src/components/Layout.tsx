@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
+import { attentionBadge, useAttention, type Attention } from "../api/notifications";
 import { useAuth, useMe } from "../auth/AuthContext";
 import { displayName } from "../lib/format";
 import { ROLE_LABEL } from "../lib/labels";
@@ -18,6 +19,7 @@ import { setTheme, useResolvedTheme, useTheme } from "../lib/theme";
 import CommandPalette from "./CommandPalette";
 import { BrandMark, Icon } from "./icons";
 import { PRIMARY, adminItems, sectionFor, type NavItem } from "./navigation";
+import NotificationBell from "./NotificationBell";
 import {
   Avatar,
   Kbd,
@@ -66,23 +68,50 @@ function readCollapsed(): boolean {
 const isMac =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
-function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate: () => void }) {
+function NavList({
+  items,
+  onNavigate,
+  attention,
+}: {
+  items: NavItem[];
+  onNavigate: () => void;
+  /** Counts for the items that carry a badge (administrators only). */
+  attention?: Attention | null;
+}) {
   return (
     <ul className="nav-list">
-      {items.map((item) => (
-        <li key={item.to}>
-          <NavLink
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
-            onClick={onNavigate}
-            title={item.label}
-          >
-            <Icon name={item.icon} size={18} className="nav-icon" />
-            <span className="nav-label">{item.label}</span>
-          </NavLink>
-        </li>
-      ))}
+      {items.map((item) => {
+        // The count is a description, not part of the name: the link stays
+        // "Users" to everyone (and to the e2e specs), and a screen reader
+        // hears "3 sign-up requests waiting" after it.
+        const badge = item.badge ? attentionBadge(item.badge, attention) : null;
+        const describedBy = badge ? `nav-badge-${item.badge}` : undefined;
+        return (
+          <li key={item.to}>
+            <NavLink
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
+              onClick={onNavigate}
+              title={item.label}
+              aria-describedby={describedBy}
+            >
+              <Icon name={item.icon} size={18} className="nav-icon" />
+              <span className="nav-label">{item.label}</span>
+              {badge ? (
+                <span className={`nav-badge nav-badge-${item.badge}`} aria-hidden="true">
+                  {badge.count > 99 ? "99+" : badge.count}
+                </span>
+              ) : null}
+            </NavLink>
+            {badge ? (
+              <span id={describedBy} hidden>
+                {badge.description}
+              </span>
+            ) : null}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -153,6 +182,8 @@ export default function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const admin = adminItems(can);
   const section = sectionFor(location.pathname, admin);
+  // Sidebar badges for administrators; checked again on each new screen.
+  const attention = useAttention(admin.some((item) => item.badge), location.pathname);
 
   // Moving to a new screen closes the mobile menu and puts focus where a
   // screen-reader user expects it: the start of the new content.
@@ -248,7 +279,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           {admin.length ? (
             <>
               <p className="nav-section">Administration</p>
-              <NavList items={admin} onNavigate={() => setNavOpen(false)} />
+              <NavList items={admin} onNavigate={() => setNavOpen(false)} attention={attention} />
             </>
           ) : null}
         </nav>
@@ -319,6 +350,7 @@ export default function Layout({ children }: { children: ReactNode }) {
               <Kbd>K</Kbd>
             </span>
           </button>
+          <NotificationBell />
           <button
             type="button"
             className="icon-button"

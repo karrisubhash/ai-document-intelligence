@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router-do
 
 import { api, type DocumentQuery } from "../api/client";
 import { useDebouncedValue, usePolling, useResource } from "../api/hooks";
+import { isProcessingNews, useNotificationArrivals } from "../api/notifications";
 import { DOCUMENT_STATUSES, DOCUMENT_TYPES } from "../api/types";
 import { FileTypeIcon, Icon } from "../components/icons";
 import UploadDialog from "../components/UploadDialog";
@@ -99,6 +100,10 @@ export default function DocumentsPage() {
   const rows = documents.data?.results ?? [];
   const anyInFlight = rows.some((row) => IN_FLIGHT.includes(row.status));
   usePolling(documents.reload, anyInFlight);
+  // News that an upload finished (the bell hears it) refreshes the list too.
+  useNotificationArrivals((arrived) => {
+    if (arrived.some(isProcessingNews)) documents.reload();
+  });
 
   const filtered = Boolean(search || status || documentType || department || mine);
   // The button that cleared them disappears with the filters; focus goes to
