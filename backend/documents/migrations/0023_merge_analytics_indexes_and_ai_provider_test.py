@@ -4,11 +4,9 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('documents', '0022_analytics_indexes'),
-        ('documents', '0022_auditlog_ai_provider_test'),
+        ("documents", "0022_analytics_indexes"),
+        ("documents", "0022_auditlog_ai_provider_test"),
     ]
 
-    operations = [
-    ]
+    operations = []
