@@ -149,9 +149,16 @@ class DocumentContentSerializer(serializers.ModelSerializer):
 
 
 class DocumentVersionSerializer(serializers.ModelSerializer):
-    # Storage key, not a fetchable URL - the bytes are only served by the
-    # authenticated /api/documents/{id}/download/ endpoint.
-    file = serializers.FileField(use_url=False)
+    """A version as document detail and the Versions tab show it.
+
+    No `file`: that is the storage key - a relative filesystem path, or the
+    S3 object key - an internal detail no client used (the bytes are only
+    served by the authenticated /download/ endpoint) and §16 asks not to
+    expose. It was already withheld from the listing; detail, create,
+    archive and /versions/ now match. `checksum` stays: it is what a caller
+    verifies a download against.
+    """
+
     # Who replaced the file, readably - the id alone told a reader nothing.
     uploaded_by_name = serializers.SerializerMethodField()
 
@@ -160,7 +167,6 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "version_number",
-            "file",
             "file_name",
             "file_size",
             "mime_type",
@@ -318,13 +324,9 @@ class DocumentSerializer(DocumentFactsMixin, serializers.ModelSerializer):
 class DocumentVersionSummarySerializer(serializers.ModelSerializer):
     """Just enough of a version to browse and size it in a results list.
 
-    Deliberately narrower than DocumentVersionSerializer: no `file` (the
-    storage key - relative filesystem path locally, or the S3 object key -
-    which a discovery listing has no use for and §16 asks not to expose),
-    and no `checksum` (integrity metadata for verifying a download, not for
-    browsing). Both remain on the version's own endpoint
-    (`/versions/`) and on document detail, where a caller with a specific
-    reason to check them still can.
+    Deliberately narrower than DocumentVersionSerializer: no `checksum`
+    (integrity metadata for verifying a download, not for browsing) and no
+    uploader name. The storage key (`file`) is exposed nowhere.
     """
 
     class Meta:
