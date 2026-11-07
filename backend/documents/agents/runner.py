@@ -75,6 +75,36 @@ class PlannedAnswer:
     # because each step is a full retrieval and the total is what the user
     # waited for.
     timings: dict = field(default_factory=dict)
+    # How the answer was actually produced (RagAnswer's fields of the same
+    # names): true when ANY step's reranker degraded or answerer fell back,
+    # because a composed answer with one quoted part is partly quoted.
+    reranker_degraded: bool = False
+    answerer_fell_back: bool = False
+    # The provider facts (documents.rag.engine.llm_metadata): the first
+    # step's that reached a model, with tokens summed over every step.
+    llm: dict = field(default_factory=dict)
+
+
+def _combined_llm(results) -> dict:
+    """One `llm` record for several steps' answers."""
+    records = [result.llm for result in results if result.llm]
+    if not records:
+        return {}
+    # The first record that names a model says what wrote the answer, as
+    # model_name does; a step that only quoted contributes its fallback.
+    combined = dict(
+        next((record for record in records if record.get("model")), records[0])
+    )
+    combined["prompt_tokens"] = sum(r.get("prompt_tokens") or 0 for r in records)
+    combined["completion_tokens"] = sum(
+        r.get("completion_tokens") or 0 for r in records
+    )
+    combined["may_train_on_input"] = any(r.get("may_train_on_input") for r in records)
+    fallback = next((r for r in records if r.get("fallback_reason")), None)
+    if fallback is not None:
+        for key in ("fallback_reason", "fallback_kind", "fallback_retry_at"):
+            combined[key] = fallback.get(key)
+    return combined
 
 
 def _renumber(text: str, offset: int) -> str:
@@ -118,6 +148,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
     )
 
     steps = []
+    results = []
     composed = []
     citations = []
     unanswered = []
@@ -140,6 +171,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             result = ask(user, query, **{**kwargs, "focus": part})
         else:
             result = ask(user, part, **kwargs)
+        results.append(result)
         if answerer is None and result.model_name:
             # Which answerer produced these answers, taken from the first
             # step that reached one. Reported rather than left blank so a
@@ -208,6 +240,9 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             reranker_name=totals["reranker"],
             grounding_failures=totals["grounding_failures"],
             timings=timings,
+            reranker_degraded=any(r.reranker_degraded for r in results),
+            answerer_fell_back=any(r.answerer_fell_back for r in results),
+            llm=_combined_llm(results),
         )
 
     if unanswered:
@@ -244,6 +279,9 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         reranker_name=totals["reranker"],
         grounding_failures=totals["grounding_failures"],
         timings=timings,
+        reranker_degraded=any(r.reranker_degraded for r in results),
+        answerer_fell_back=any(r.answerer_fell_back for r in results),
+        llm=_combined_llm(results),
     )
 
 
@@ -283,4 +321,7 @@ def _single(user, question: str, started: float, **kwargs) -> PlannedAnswer:
         reranker_name=result.reranker_name,
         grounding_failures=list(result.grounding_failures),
         timings=dict(result.timings),
+        reranker_degraded=result.reranker_degraded,
+        answerer_fell_back=result.answerer_fell_back,
+        llm=dict(result.llm),
     )

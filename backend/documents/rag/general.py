@@ -35,6 +35,7 @@ from documents.observability import telemetry
 
 from . import streaming
 from .engine import Abstention, get_answerer
+from .gateway import CHAT, Gateway
 from .llm import LLMResponse
 
 logger = logging.getLogger("adi.llm")
@@ -74,12 +75,19 @@ general context only when it is useful and clearly general.
 - If you do not know, say so."""
 
 
+def _gateway(answerer):
+    gateway = getattr(answerer, "gateway", None)
+    return gateway if isinstance(gateway, Gateway) else None
+
+
 def enabled() -> bool:
     if not getattr(settings, "CHAT_GENERAL_KNOWLEDGE", False):
         return False
-    # Needs a generative backend that can take a free-form conversation;
-    # the extractive baseline has no knowledge to answer from.
-    return hasattr(get_answerer(), "complete")
+    # Needs a generative backend behind the LLM gateway, which can take a
+    # free-form conversation; the extractive baseline has no knowledge to
+    # answer from. The Claude answerer has no gateway either (see
+    # docs/ai/llm-providers.md), so with it this stays off.
+    return _gateway(get_answerer()) is not None
 
 
 def should_answer(answer) -> bool:
@@ -106,28 +114,36 @@ def answer(question: str, history=()) -> LLMResponse | None:
     already has a perfectly good "not in your documents" answer.
     """
     answerer = get_answerer()
+    gateway = _gateway(answerer)
+    if gateway is None:
+        return None
     messages = [
         {"role": "system", "content": SYSTEM},
         *_history(history),
         {"role": "user", "content": question},
     ]
-    request = {
-        "model": answerer.model,
-        "messages": messages,
-        # Conversational, so a little variety reads better than greedy
-        # decoding; still low, because "general knowledge" should be stable.
-        "temperature": getattr(settings, "CHAT_GENERAL_TEMPERATURE", 0.3),
-        "max_tokens": getattr(settings, "CHAT_GENERAL_MAX_TOKENS", 4096),
-        # Same preset extras as grounded answers (e.g. thinking off on
-        # Gemini, whose hidden reasoning otherwise eats max_tokens).
-        **getattr(answerer, "request_extras", {}),
-    }
     started = time.monotonic()
     # Whatever the grounded attempt streamed (often the abstention
     # sentence) is withdrawn before the new answer starts.
     streaming.reset(source="general")
     try:
-        result = answerer.complete(request)
+        # Through the gateway like the grounded answer, as a CHAT call: it
+        # is someone's reply, and it may use what chat may use. Each link
+        # gets its own preset extras (e.g. thinking off on Gemini, whose
+        # hidden reasoning otherwise eats max_tokens).
+        response = gateway.complete(
+            messages,
+            purpose=CHAT,
+            max_tokens=getattr(settings, "CHAT_GENERAL_MAX_TOKENS", 4096),
+            # Conversational, so a little variety reads better than greedy
+            # decoding; still low, because "general knowledge" should be
+            # stable.
+            temperature=getattr(settings, "CHAT_GENERAL_TEMPERATURE", 0.3),
+            on_delta=streaming.emit if streaming.active() else None,
+            # A model that broke off part-way is withdrawn before the next
+            # one starts; what follows is still the general reply.
+            on_reset=lambda: streaming.reset(source="general"),
+        )
     except Exception as exc:
         logger.warning(
             "llm.general_failed",
@@ -139,31 +155,19 @@ def answer(question: str, history=()) -> LLMResponse | None:
         streaming.reset()
         return None
 
-    text = result.text.strip()
-    usage = result.usage
-    response = LLMResponse(
-        text=text,
-        model_name=answerer.name,
-        model_version=answerer.version_for(result),
-        generative=True,
-        prompt_characters=sum(len(m["content"]) for m in messages),
-        completion_characters=len(text),
-        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
-        metadata={
-            "provider": getattr(answerer, "provider", ""),
-            "served_by": result.served_by,
-            "finish_reason": result.finish_reason,
-            "source": "general",
-        },
-    )
+    text = response.text.strip()
+    response.text = text
+    response.completion_characters = len(text)
+    response.model_name = answerer.name
+    response.metadata = {**response.metadata, "source": "general"}
+    finish_reason = response.finish_reason
     # Counted like every other model call, so cost reporting includes it.
     telemetry.llm_called(response, time.monotonic() - started)
     telemetry.llm_usage(response)
-    if not text or result.finish_reason == "content_filter":
+    if not text or finish_reason == "content_filter":
         streaming.reset()
         return None
-    if result.finish_reason == "length":
+    if finish_reason == "length":
         # Unlike a grounded answer, nothing is verified here, so a long
         # reply cut at the limit is still worth showing - but never as if
         # it were complete.

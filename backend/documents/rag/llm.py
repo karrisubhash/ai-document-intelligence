@@ -70,6 +70,20 @@ class LLMResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     metadata: dict = field(default_factory=dict)
+    # What the provider told us, kept rather than thrown away (see
+    # documents.rag.gateway). `model_name` above is the ANSWERER ("openai-
+    # compatible", a bounded metrics label); these say which model at which
+    # provider actually wrote the text.
+    model: str = ""
+    provider: str = ""
+    finish_reason: str = ""
+    # The link this response stands in for ("provider/model"): the first in
+    # the chain when a later one answered, or when every one failed and the
+    # passages were quoted instead. Empty when the first choice answered.
+    fell_back_from: str = ""
+    # Whether what was sent may be used for training by whoever received it:
+    # the answering provider's free tier, or any provider tried on the way.
+    may_train_on_input: bool = False
 
 
 @runtime_checkable

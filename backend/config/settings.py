@@ -718,7 +718,31 @@ RAG_ANSWERER_FALLBACK_MODELS = os.getenv("RAG_ANSWERER_FALLBACK_MODELS", "")
 
 # Sent as `reasoning_effort` where the preset says the backend accepts it.
 # Empty uses the preset's value (gemini: "none"); "default" sends nothing.
+# In a RAG_ANSWERER_CHAIN it only changes links whose preset already sends it.
 RAG_ANSWERER_REASONING_EFFORT = os.getenv("RAG_ANSWERER_REASONING_EFFORT", "")
+
+# --- The LLM gateway: a chain across providers, and a shared budget ------
+# (documents/rag/gateway.py, docs/ai/llm-providers.md)
+#
+# Links tried in order, comma-separated: `provider:model`, or a bare
+# `provider` for its preset's model list, or `custom:model` for
+# RAG_ANSWERER_BASE_URL. Empty keeps the single provider above
+# (RAG_ANSWERER_PROVIDER and its fallback models), exactly as before. A link
+# whose key variable is unset is skipped. Example:
+#   RAG_ANSWERER_CHAIN=gemini,groq,cerebras,openrouter
+RAG_ANSWERER_CHAIN = os.getenv("RAG_ANSWERER_CHAIN", "")
+
+# Requests per model per day each link may make, as "key=n" pairs over the
+# presets' defaults (gemini 20, groq 60, cerebras 100, mistral 100, github
+# 50, openrouter 50; ollama, openai and custom endpoints unlimited). A key is
+# `provider:model`, `provider`, or `*` for all; 0 means no limit is enforced.
+#   LLM_DAILY_LIMITS=groq=200,gemini:gemini-3.5-flash=40
+LLM_DAILY_LIMITS = os.getenv("LLM_DAILY_LIMITS", "")
+
+# Calls a day held back for chat. Document briefs stop spending when fewer
+# than this many calls are left today, multi-document grids at twice it,
+# anything else at three times it - so chat keeps the last calls of the day.
+LLM_CHAT_RESERVE = int(os.getenv("LLM_CHAT_RESERVE", "20"))
 
 # Chat only: when the documents have nothing relevant - including greetings
 # and small talk - reply from the model's general knowledge instead of
@@ -884,6 +908,12 @@ if RUNNING_TESTS:
     # Leaving a real one configured would make the suite call an API.
     RAG_ANSWERER = ""
     CHAT_GENERAL_KNOWLEDGE = False
+    # The suite's stubbed model calls share one cache across every test in
+    # the process, so a preset's daily limit would be spent by unrelated
+    # tests and quietly turn a later one into a quoted answer. Counted, never
+    # enforced; the budget tests set their own limits with override_settings.
+    RAG_ANSWERER_CHAIN = ""
+    LLM_DAILY_LIMITS = "*=0"
 
 
 CELERY_BROKER_URL = os.getenv(
