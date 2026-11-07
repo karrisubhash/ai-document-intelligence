@@ -23,7 +23,7 @@ from documents.audit import record_event
 from documents.models import AuditLog, Conversation, Document, ProcessingJob
 from documents.processing.errors import ErrorCode
 
-from . import health
+from . import analytics, health
 from .serializers import AuditLogSerializer, OperationsJobSerializer
 
 User = get_user_model()
@@ -373,5 +373,11 @@ class DashboardView(APIView):
                     }
                     for conversation in conversations
                 ],
+                # Trends for the home screen's charts: the reader's uploads
+                # and questions over time, what their library is made of,
+                # and for an administrator a week of the organisation's
+                # headline numbers. Cached briefly - this view is polled
+                # while documents process. See operations.analytics.
+                "activity": analytics.dashboard_activity(user),
             }
         )

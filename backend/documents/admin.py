@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.db import models
 
+from accounts.permissions import is_department_admin
+
 from . import authorization
 from .models import (
     AuditLog,
@@ -10,6 +12,7 @@ from .models import (
     DocumentVersion,
     ExtractedField,
     ExtractionResult,
+    Feedback,
     PageContent,
     ProcessingEvent,
     ProcessingJob,
@@ -250,3 +253,56 @@ class ExtractedFieldAdmin(DepartmentScopedAdmin):
     )
     list_filter = ("status", "field_name")
     search_fields = ("field_name", "value")
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(admin.ModelAdmin):
+    """Ratings on answers, read-only - the same rows the in-app review queue
+    (operations.feedback) lists, under the same rules.
+
+    Scoped like that queue rather than by document: feedback belongs to a
+    conversation, and a conversation to the department it was asked in. Who
+    rated is left out here as it is there - the rows judge answers, not
+    people.
+    """
+
+    list_display = (
+        "id",
+        "rating",
+        "message",
+        "answer_abstained",
+        "answer_citations",
+        "created_at",
+    )
+    list_filter = ("rating", "answer_abstained")
+    search_fields = ("comment",)
+    fields = (
+        "message",
+        "rating",
+        "comment",
+        "answer_abstained",
+        "answer_citations",
+        "created_at",
+    )
+    readonly_fields = fields
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request).select_related("message")
+        if authorization.is_system_admin(request.user):
+            return queryset
+        if is_department_admin(request.user):
+            return queryset.filter(
+                message__conversation__department=authorization.get_profile(
+                    request.user
+                ).department
+            )
+        return queryset.none()
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
