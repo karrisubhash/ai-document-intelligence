@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "about": "The sample library: synthetic institutional documents for the demo and for empty installations. The .txt files are copies of evaluation/corpus (which stays untouched); the PDFs and the scanned notice are written by ../build.py.",
+  "samples": [
+    {"file": "student-handbook-2025-26.pdf", "title": "Student Handbook 2025–26", "document_type": "GENERAL"},
+    {"file": "academic-calendar-2025-26.pdf", "title": "Academic Calendar 2025–26", "document_type": "CIRCULAR"},
+    {"file": "laboratory-safety-manual.pdf", "title": "Laboratory Safety Manual", "document_type": "POLICY"},
+    {"file": "library-notice-scan.png", "title": "Library Notice: Extended Reading-Room Hours (scanned)", "document_type": "CIRCULAR"},
+    {"file": "academic-regulations.txt", "title": "Academic Regulations R20", "document_type": "REGULATION"},
+    {"file": "examination-policy.txt", "title": "Examination Policy", "document_type": "POLICY"},
+    {"file": "fee-structure.txt", "title": "Fee Structure 2024–25", "document_type": "GENERAL"},
+    {"file": "grievance-procedure.txt", "title": "Student Grievance Redressal Procedure", "document_type": "POLICY"},
+    {"file": "hostel-regulations.txt", "title": "Hostel Regulations", "document_type": "REGULATION"},
+    {"file": "it-acceptable-use.txt", "title": "IT Acceptable Use Policy", "document_type": "POLICY"},
+    {"file": "library-rules.txt", "title": "Library Rules", "document_type": "REGULATION"},
+    {"file": "machine-design-notes.txt", "title": "Theory of Machines: Brakes, Clutches and Dynamometers (Unit 4 notes)", "document_type": "SYLLABUS"},
+    {"file": "placement-policy.txt", "title": "Placement and Internship Policy", "document_type": "POLICY"},
+    {"file": "scholarship-rules.txt", "title": "Scholarship and Financial Aid Rules", "document_type": "REGULATION"},
+    {"file": "staff-attendance-leave.txt", "title": "Staff Attendance and Leave Rules", "document_type": "REGULATION"},
+    {"file": "transport-circular.txt", "title": "Circular TR/2024/117: Campus Bus Services 2024–25", "document_type": "CIRCULAR"}
+  ]
+}

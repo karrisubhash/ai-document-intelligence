@@ -1,0 +1,31 @@
+INFORMATION TECHNOLOGY ACCEPTABLE USE POLICY
+Institute of Technology - Computer Centre
+
+Clause 1.1 Accounts
+Every student is issued one institute account. Sharing account credentials
+with another person is prohibited, and the account holder remains responsible
+for all activity under the account.
+
+Clause 1.4 Passwords
+A password must be at least 12 characters and is changed every 180 days. The
+Computer Centre never asks for a password by electronic mail, and any message
+that does so should be reported.
+
+Clause 2.2 Network quota
+Each student account carries a monthly data allowance of 50 gigabytes.
+Beyond the allowance, access continues at a reduced speed rather than being
+cut off.
+
+Clause 2.6 Prohibited use
+Operating a commercial service, running a network scanner, or attempting to
+access another user's files is prohibited. Access privileges are suspended
+immediately on detection, pending an inquiry.
+
+Clause 3.3 Laboratory computers
+Files stored on laboratory computers are deleted at the end of each semester
+and are not backed up. Work of lasting value is the student's own
+responsibility to preserve.
+
+Clause 4.1 Printing
+The printing allowance is 200 pages per semester. Additional pages are
+charged at 2 rupees per page.
