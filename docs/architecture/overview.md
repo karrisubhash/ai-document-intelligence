@@ -69,6 +69,7 @@ answerer → grounding. An answer that fails grounding becomes an abstention. Se
 | `backend/documents/operations/` | Audit trail, processing monitor, system status, dashboard, health checks |
 | `backend/documents/evaluation/` | Governed benchmarks, metrics, regression gate |
 | `backend/documents/observability/` | Structured logging with content redaction, Prometheus metrics, telemetry |
+| `backend/notifications/` | The bell: a service any feature calls (`notify`), producers for processing results and the sign-up lifecycle (signal receivers), the notifications API and the administrators' attention counts ([notifications.md](notifications.md)) |
 | `frontend/` | The product web application ([frontend/README.md](../../frontend/README.md)) |
 | `ai/` | Offline training and evaluation of classifiers; imports no Django |
 | `infrastructure/` | nginx (edge image, TLS, CSP), Prometheus, Grafana, deployment checks |
