@@ -64,6 +64,53 @@ export function formatPercent(fraction: number | null | undefined, digits = 0): 
   return `${(fraction * 100).toFixed(digits)}%`;
 }
 
+const integer = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
+
+/** 1,234 - for counts, axis values and tooltips. */
+export function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return Number.isInteger(value) ? integer.format(value) : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/** 1.2K - for tight places such as an axis tick. */
+export function formatCompact(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return Math.abs(value) < 1000 ? formatNumber(value) : compact.format(value);
+}
+
+/**
+ * A calendar day sent as "YYYY-MM-DD", as a LOCAL date. `new Date("2026-11-07")`
+ * is midnight UTC, which west of Greenwich is the evening of the 6th - so a
+ * day bucket would be labelled with the day before.
+ */
+export function parseLocalDate(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+const shortDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+const longDay = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+
+/** "Nov 7" for a "YYYY-MM-DD" day; the input itself if it is not one. */
+export function formatShortDay(value: string): string {
+  const date = parseLocalDate(value);
+  return date ? shortDay.format(date) : value;
+}
+
+/** "Sat, Nov 7, 2026" for a "YYYY-MM-DD" day; the input itself if it is not one. */
+export function formatLongDay(value: string): string {
+  const date = parseLocalDate(value);
+  return date ? longDay.format(date) : value;
+}
+
 export function pluralize(count: number, singular: string, plural = `${singular}s`) {
   return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }

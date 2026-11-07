@@ -1,0 +1,611 @@
+/*
+ * The chart kit (src/components/charts). Built on the :root tokens of
+ * styles.css; the only new tokens are the series colours below.
+ *
+ * SERIES COLOURS. Eight categorical slots, used in this order and never
+ * cycled. The order is the colour-blind safety mechanism, not decoration:
+ * checked (OKLab, simulated protan/deutan/tritan) against this app's card
+ * surfaces, every adjacent pair stays distinguishable - light on #ffffff:
+ * worst adjacent CVD separation 9.1, normal vision 19.6; dark on #161618:
+ * 8.4 and 19.3. Dark mode is its own set of steps from the same hues,
+ * chosen for the dark surface, not an automatic flip. Three light slots
+ * (aqua, yellow, magenta) are under 3:1 against white, which is why every
+ * chart names its series in a legend or label and carries a data table.
+ */
+
+:root {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #e34948;
+  --chart-grid: var(--border);
+  --chart-baseline: var(--border-strong);
+}
+
+/* Declared twice, as styles.css does: once for the system preference
+   (unless the reader chose light), once for an explicit choice. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+  }
+}
+
+:root[data-theme="dark"] {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}
+
+.chart-c-1 { --c: var(--series-1); }
+.chart-c-2 { --c: var(--series-2); }
+.chart-c-3 { --c: var(--series-3); }
+.chart-c-4 { --c: var(--series-4); }
+.chart-c-5 { --c: var(--series-5); }
+.chart-c-6 { --c: var(--series-6); }
+.chart-c-7 { --c: var(--series-7); }
+.chart-c-8 { --c: var(--series-8); }
+.chart-c-success { --c: var(--success-mark); }
+.chart-c-warning { --c: var(--warning-mark); }
+.chart-c-danger { --c: var(--danger-mark); }
+.chart-c-info { --c: var(--info-mark); }
+.chart-c-muted { --c: var(--border-strong); }
+
+/* --- Frame ---------------------------------------------------------------- */
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chart-body {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.chart-plot {
+  position: relative;
+  border-radius: var(--radius-sm);
+}
+
+.chart-plot:focus {
+  outline: none;
+}
+
+.chart-plot:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
+}
+
+.chart-svg {
+  display: block;
+  overflow: visible;
+  /* A horizontal drag reads the chart; a vertical one still scrolls. */
+  touch-action: pan-y;
+}
+
+.chart-grid line {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-grid line.chart-baseline {
+  stroke: var(--chart-baseline);
+}
+
+.chart-axis-text {
+  fill: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-hover-band {
+  fill: var(--text);
+  fill-opacity: 0.05;
+}
+
+/* --- Marks ---------------------------------------------------------------- */
+
+.chart-line {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-area {
+  fill: var(--c);
+  fill-opacity: 0.12;
+  stroke: none;
+}
+
+.chart-dot {
+  fill: var(--c);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart-bar {
+  fill: var(--c);
+  transition: opacity 0.15s;
+}
+
+.chart-swatch {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--c);
+}
+
+.sparkline {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.sparkline .chart-line {
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+.sparkline-point {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 4;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* --- Tooltip -------------------------------------------------------------- */
+
+.chart-tooltip {
+  position: absolute;
+  top: 4px;
+  z-index: 5;
+  min-width: 150px;
+  max-width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  pointer-events: none;
+  transform: translateX(12px);
+}
+
+.chart-tooltip-left {
+  transform: translateX(calc(-100% - 12px));
+}
+
+.chart-tooltip-title {
+  margin-bottom: 4px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.chart-tooltip-label {
+  flex: 1;
+}
+
+.chart-tooltip-value {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Legend --------------------------------------------------------------- */
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-legend-value {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-legend-share {
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.chart-legend-stacked {
+  display: grid;
+  gap: 8px;
+}
+
+.chart-legend-stacked .chart-legend-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+/* --- States --------------------------------------------------------------- */
+
+@keyframes chart-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.chart-skeleton {
+  width: 100%;
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  animation: chart-pulse 1.6s ease-in-out infinite;
+}
+
+.chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.chart-empty-art {
+  width: 64px;
+  height: 32px;
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-table caption {
+  margin-bottom: 6px;
+  color: var(--text-2);
+  font-weight: 600;
+  text-align: left;
+}
+
+.chart-table th,
+.chart-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+}
+
+.chart-table th:first-child {
+  text-align: left;
+}
+
+/* --- BarList -------------------------------------------------------------- */
+
+.barlist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.barlist-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.barlist-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: var(--radius-sm);
+  background: var(--c);
+  opacity: 0.15;
+  transition: width 0.3s var(--ease);
+}
+
+.barlist-skeleton {
+  background: var(--surface-3);
+  opacity: 1;
+  animation: chart-pulse 1.6s ease-in-out infinite;
+}
+
+.barlist-label {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.barlist-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.barlist-link:hover {
+  text-decoration: underline;
+}
+
+.barlist-hint {
+  display: block;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.barlist-value {
+  position: relative;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- Donut and segmented bar ------------------------------------------------- */
+
+.donut {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+}
+
+.donut-figure {
+  position: relative;
+  flex: none;
+}
+
+.donut-figure svg {
+  display: block;
+}
+
+.donut-arc {
+  fill: var(--c);
+  transition: opacity 0.15s;
+}
+
+.donut-arc-dim {
+  opacity: 0.35;
+}
+
+.donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.donut-value {
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.donut-label {
+  max-width: 62%;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.donut .chart-legend {
+  flex: 1;
+  min-width: 170px;
+}
+
+.segbar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.segbar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.segbar-part {
+  min-width: 3px;
+  height: 100%;
+  background: var(--c);
+}
+
+.segbar-loading {
+  animation: chart-pulse 1.6s ease-in-out infinite;
+}
+
+/* --- KPI tile ------------------------------------------------------------- */
+
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 150px;
+  padding: 16px 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  color: inherit;
+  text-decoration: none;
+}
+
+.kpi-link {
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.kpi-link:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.kpi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kpi-label {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.kpi-icon {
+  color: var(--text-3);
+}
+
+.kpi-value {
+  min-height: 31px;
+  color: var(--text);
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+.kpi-delta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 18px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.kpi-delta-good {
+  color: var(--success);
+}
+
+.kpi-delta-bad {
+  color: var(--danger);
+}
+
+.kpi-delta-neutral {
+  color: var(--text-3);
+}
+
+.kpi-period {
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.kpi-caption {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.kpi-spark {
+  display: block;
+  height: 30px;
+  margin-top: auto;
+}
+
+.kpi-skeleton {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  animation: chart-pulse 1.6s ease-in-out infinite;
+}
+
+.kpi-value.kpi-skeleton {
+  width: 55%;
+  height: 31px;
+}
+
+.kpi-delta.kpi-skeleton {
+  width: 35%;
+  height: 16px;
+}
+
+/* --- Forced colours --------------------------------------------------------- */
+
+/* Keep the series colours: forced to one system colour every series looks
+   the same, and the legend swatches stop matching their marks. */
+@media (forced-colors: active) {
+  .chart-svg,
+  .sparkline,
+  .chart-swatch,
+  .segbar-part,
+  .barlist-bar,
+  .donut-figure svg {
+    forced-color-adjust: none;
+  }
+
+  .kpi,
+  .chart-tooltip {
+    border: 1px solid CanvasText;
+  }
+}
