@@ -12,8 +12,10 @@ design rationale; these pages are the working reference.
 | Development | [development/setup.md](development/setup.md) | Running the stack locally |
 | | [development/testing.md](development/testing.md) | The four test layers and how to run each, including the browser suite |
 | API | [api/reference.md](api/reference.md) | Every endpoint, who may call it, and what it returns |
+| | [api/analytics.md](api/analytics.md) | Analytics, the feedback review queue and the dashboard's activity block: exact shapes, scope, privacy |
 | Deployment | [deployment/production.md](deployment/production.md) | The production stack, TLS, images, first boot, configuration |
 | Operations | [operations/runbook.md](operations/runbook.md) | Health, readiness, stalled jobs, re-indexing, backups and restore |
+| | [operations/analytics.md](operations/analytics.md) | What the Analytics page shows, how it counts, caching, and what it never reveals |
 | | [operations/ci.md](operations/ci.md) | The CI pipeline, and exactly what has and has not been executed |
 | | [operations/performance.md](operations/performance.md) | Measured ingestion throughput, latency, query plans and resource use at 3,000 documents |
 | Security | [security/model.md](security/model.md) | Identity, authorization, sessions, uploads, AI security, audit, known gaps |
