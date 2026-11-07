@@ -63,7 +63,7 @@ class Preset:
     fallback_models: tuple = ()
 
     # Optional request parameters this backend is KNOWN to accept. Only
-    # per preset, never globally - see OpenAICompatibleAnswerer._request_kwargs
+    # per preset, never globally - see OpenAICompatibleAnswerer._request_for
     # for why.
     request_extras: tuple = ()
 
