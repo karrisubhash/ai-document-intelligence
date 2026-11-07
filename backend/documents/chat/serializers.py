@@ -86,6 +86,7 @@ class MessageSerializer(serializers.ModelSerializer):
             source=metadata.get("source", ""),
             notes=metadata.get("notes") or (),
         )
+
     # So an answer rated earlier still shows its rating when the
     # conversation is reopened: {"rating", "comment"}, or null.
     my_feedback = serializers.SerializerMethodField()
