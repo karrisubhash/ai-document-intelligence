@@ -108,6 +108,9 @@ def insight_payload(document) -> dict:
                 "start": entity.character_start,
                 "end": entity.character_end,
                 "count": entity.occurrences,
+                # Additive to the contract: what a date or deadline is for,
+                # in the document's words ("" when there is nothing to say).
+                "label": entity.label,
             }
             for entity in insight.entities.all()
         ]

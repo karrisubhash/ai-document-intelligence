@@ -121,9 +121,20 @@ class InsightsEndpointTests(InsightsApiTestCase):
         for item in data["entities"]:
             self.assertEqual(
                 set(item),
-                {"type", "text", "normalized", "page_number", "start", "end", "count"},
+                {
+                    "type",
+                    "text",
+                    "normalized",
+                    "page_number",
+                    "start",
+                    "end",
+                    "count",
+                    "label",
+                },
             )
             self.assertEqual(page[item["start"] : item["end"]], item["text"])
+        deadline = next(e for e in data["entities"] if e["type"] == "DEADLINE")
+        self.assertEqual(deadline["label"], "Last date for renewal of the bus pass")
         self.assertEqual(
             set(data["stats"]),
             {"pages", "words", "reading_minutes", "ocr_pages", "language"},
