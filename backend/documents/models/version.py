@@ -62,6 +62,11 @@ class DocumentVersion(models.Model):
                 name="unique_document_version_number",
             )
         ]
+        indexes = [
+            # Uploads per day and per week (operations.analytics and the
+            # dashboard's activity block): every file uploaded, by time.
+            models.Index(fields=["created_at"], name="docversion_created_idx"),
+        ]
 
     def __str__(self):
         return f"{self.document.title} v{self.version_number}"

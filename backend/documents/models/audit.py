@@ -96,6 +96,14 @@ class AuditLog(models.Model):
             models.Index(
                 fields=["document_ref", "-created_at"], name="auditlog_document_idx"
             ),
+            # One kind of event over a period: searches and document views
+            # per day for the analytics page, and the audit screen's own
+            # Action filter, which reads one action newest-first. Through the
+            # created_at index alone, either walks every row of the period,
+            # of every action.
+            models.Index(
+                fields=["action", "-created_at"], name="auditlog_action_created_idx"
+            ),
         ]
 
     def __str__(self):
