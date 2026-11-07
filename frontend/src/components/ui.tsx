@@ -235,6 +235,10 @@ export function ErrorState({
       : status === 404
         ? "It does not exist, or you do not have access to it."
         : errorMessage(error);
+  // A server fault is the one a person may need to report: its request id
+  // finds the matching log lines (backend/documents/observability).
+  const reference =
+    error instanceof ApiError && error.status >= 500 ? error.requestId : null;
   return (
     <Alert
       tone="danger"
@@ -247,7 +251,16 @@ export function ErrorState({
         ) : null
       }
     >
-      {text}
+      {reference ? (
+        <>
+          <p>{text}</p>
+          <p className="error-reference">
+            Reference <code>{reference}</code>
+          </p>
+        </>
+      ) : (
+        text
+      )}
     </Alert>
   );
 }

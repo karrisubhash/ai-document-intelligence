@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, type ReactNode } from "react";
+import { Suspense, useRef, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import type { Capabilities } from "./api/types";
@@ -6,6 +6,8 @@ import { useAuth } from "./auth/AuthContext";
 import { BrandMark } from "./components/icons";
 import Layout from "./components/Layout";
 import { Button, EmptyState, Spinner } from "./components/ui";
+// React.lazy, plus one guarded reload when a chunk is gone after a deploy.
+import { lazy } from "./lib/lazy";
 import LoginPage from "./pages/LoginPage";
 
 // Split by area: someone who only searches never downloads the admin

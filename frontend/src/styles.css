@@ -4,8 +4,16 @@
  * src/lib/theme.ts). Contrast is chosen to meet WCAG AA for text on every
  * surface, and every interactive element has a visible focus indicator.
  *
- * Spacing runs on a 4px grid; radii, shadows and type sizes come from the
- * tokens below, so a component never invents its own.
+ * Type sizes, weights, spacing, radii, shadows, motion and stacking come
+ * from the tokens below (docs/development/design-system.md), so a component
+ * never invents its own. A literal left in a rule is deliberate: a glyph
+ * sized to the tile it sits in, a line drawn in a picture, an optical
+ * nudge - and says so where it is not obvious.
+ *
+ * Breakpoints (custom properties cannot be used in media queries, so they
+ * are conventions): 560px phone, 860px tablet (the sidebar becomes a
+ * drawer), 1080px narrow desktop, 1200px. 480/640/720px are component
+ * breakpoints where one layout stops fitting.
  */
 
 :root {
@@ -82,10 +90,80 @@
   --shadow-xl: 0 24px 48px -12px rgba(16, 24, 40, 0.2);
   --overlay: rgba(16, 24, 40, 0.42);
 
+  /* Type: one scale, set from 14px body text. Each step is used for one
+     kind of text, so a size says what the text is. */
+  --text-2xs: 11px; /* keys, citation markers, counts in a pill */
+  --text-xs: 12px; /* captions, badges, table headings, overlines */
+  --text-sm: 13px; /* secondary text, labels, meta lines */
+  --text-base: 14px; /* body, controls */
+  --text-md: 15px; /* card titles, large controls, result titles */
+  --text-lg: 17px; /* dialog and section titles, empty states */
+  --text-xl: 20px; /* page titles on a phone */
+  --text-2xl: 24px; /* hero headings */
+  --text-3xl: 28px; /* page titles, figures */
+  --text-4xl: 36px; /* display */
+
+  --leading-none: 1;
+  --leading-tight: 1.15; /* display, page titles, figures */
+  --leading-snug: 1.3; /* headings and titles that may wrap */
+  --leading-normal: 1.5; /* body */
+  --leading-relaxed: 1.65; /* reading: answers, page text */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 550; /* controls and labels: buttons, badges, fields */
+  --weight-semibold: 600; /* headings, titles */
+  --weight-bold: 650; /* display: page titles, figures, the brand */
+
+  --tracking-tight: -0.025em; /* display sizes */
+  --tracking-snug: -0.01em; /* headings */
+  --tracking-wide: 0.04em; /* uppercase overlines */
+
+  /* Space: a 4px grid. The -5 steps are the half steps (6, 10, 14px) the
+     interface uses for tight gaps beside icons and inside controls. */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-3-5: 14px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+  --space-16: 64px;
+
+  /* Motion. Fast for hover and press feedback, base for things that enter
+     (menus, dialogs, toasts), slow for larger surfaces. Every duration is
+     cut to nothing under prefers-reduced-motion (end of this file). */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  /* The original name of --ease-out, kept for rules that use it. */
+  --ease: var(--ease-out);
+
+  /* Stacking, lowest first. Native modal dialogs (Dialog, quick find) sit
+     in the browser's top layer, above all of these. */
+  --z-raised: 1; /* a dot drawn over its own line */
+  --z-sticky: 5; /* a bar held at the bottom of the content */
+  --z-topbar: 20;
+  --z-sidebar: 30;
+  --z-scrim: 35; /* behind the phone's navigation drawer */
+  --z-drawer: 40; /* the phone's navigation drawer */
+  --z-dropdown: 40; /* menus */
+  --z-skip-link: 100;
+  --z-toast: 200;
+
   --sidebar: 260px;
   --sidebar-rail: 68px;
   --topbar: 56px;
-  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
@@ -2808,6 +2886,109 @@ a.table-title:hover {
   border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow: var(--shadow-lg);
+}
+
+/* --- Something went wrong (components/ErrorBoundary.tsx) ------------------------------------ */
+
+.crash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 560px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.crash-route {
+  padding: var(--space-16) var(--space-4) var(--space-12);
+  animation: page-in var(--dur-base) var(--ease-out) both;
+}
+
+.crash-card {
+  width: min(520px, 100%);
+  padding: var(--space-10) var(--space-8) var(--space-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.crash-app .brand-mark {
+  margin-bottom: var(--space-3);
+}
+
+.crash-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--space-1);
+  border-radius: 50%;
+  background: var(--danger-soft);
+  color: var(--danger);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--danger-soft) 50%, transparent);
+}
+
+.crash-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-tight);
+}
+
+.crash-title:focus {
+  outline: none;
+}
+
+.crash-text {
+  max-width: 52ch;
+  color: var(--text-2);
+}
+
+.crash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.crash-reference,
+.error-reference {
+  font-size: var(--text-sm);
+  color: var(--text-3);
+}
+
+.crash-code,
+.error-reference code {
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.crash-details {
+  max-width: 100%;
+  font-size: var(--text-sm);
+  color: var(--text-3);
+}
+
+.crash-details summary {
+  cursor: pointer;
+}
+
+.crash-details summary:hover {
+  color: var(--text-2);
+}
+
+.crash-details .crash-code {
+  display: block;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.error-reference {
+  margin-top: var(--space-1);
 }
 
 /* --- Sign in ------------------------------------------------------------------------- */

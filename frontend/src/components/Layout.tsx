@@ -16,6 +16,7 @@ import { displayName } from "../lib/format";
 import { ROLE_LABEL } from "../lib/labels";
 import { setTheme, useResolvedTheme, useTheme } from "../lib/theme";
 import CommandPalette from "./CommandPalette";
+import { RouteErrorBoundary } from "./ErrorBoundary";
 import { BrandMark, Icon } from "./icons";
 import { PRIMARY, adminItems, sectionFor, type NavItem } from "./navigation";
 import {
@@ -330,7 +331,11 @@ export default function Layout({ children }: { children: ReactNode }) {
           </button>
         </header>
         <main id="main" className="main" tabIndex={-1}>
-          <TrailContext.Provider value={setTrail}>{children}</TrailContext.Provider>
+          <TrailContext.Provider value={setTrail}>
+            {/* A page that throws is replaced by an explanation; the shell
+                around it, and the way to another screen, keep working. */}
+            <RouteErrorBoundary>{children}</RouteErrorBoundary>
+          </TrailContext.Provider>
         </main>
       </div>
 

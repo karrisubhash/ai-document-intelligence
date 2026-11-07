@@ -60,13 +60,26 @@ export class ApiError extends Error {
   readonly payload: unknown;
   /** Seconds until a throttled (429) call may be repeated, from Retry-After. */
   readonly retryAfter: number | null;
+  /**
+   * The server's X-Request-ID for this response, when it sent one: the key
+   * to the matching log lines, so an error screen can quote it as a
+   * reference a person can report.
+   */
+  readonly requestId: string | null;
 
-  constructor(status: number, message: string, payload: unknown, retryAfter: number | null = null) {
+  constructor(
+    status: number,
+    message: string,
+    payload: unknown,
+    retryAfter: number | null = null,
+    requestId: string | null = null,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.payload = payload;
     this.retryAfter = retryAfter;
+    this.requestId = requestId;
   }
 
   /** DRF field errors, e.g. {"title": ["This field is required."]}. */
@@ -95,6 +108,15 @@ const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 function retryAfterSeconds(header: string | null): number | null {
   const seconds = header ? Number(header) : NaN;
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+/**
+ * The X-Request-ID a response carried, if it has the shape the server
+ * issues (documents/observability/context.py: at most 64 letters, digits,
+ * dashes and underscores). Anything else is not quoted back to a person.
+ */
+function requestIdOf(header: string | null): string | null {
+  return header && /^[A-Za-z0-9_-]{1,64}$/.test(header) ? header : null;
 }
 
 export function readCookie(name: string): string {
@@ -221,6 +243,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       describe(response.status, parsed),
       parsed,
       retryAfterSeconds(response.headers.get("Retry-After")),
+      requestIdOf(response.headers.get("X-Request-ID")),
     );
   }
 
@@ -279,7 +302,13 @@ export async function streamChat(
       // Not JSON; kept as text for describe().
     }
     if (response.status === 401) onUnauthorized?.();
-    throw new ApiError(response.status, describe(response.status, parsed), parsed);
+    throw new ApiError(
+      response.status,
+      describe(response.status, parsed),
+      parsed,
+      retryAfterSeconds(response.headers.get("Retry-After")),
+      requestIdOf(response.headers.get("X-Request-ID")),
+    );
   }
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -413,6 +442,7 @@ export function uploadWithProgress<T>(
                 describe(xhr.status, parsed),
                 parsed,
                 retryAfterSeconds(xhr.getResponseHeader("Retry-After")),
+                requestIdOf(xhr.getResponseHeader("X-Request-ID")),
               ),
             );
           }
@@ -441,7 +471,13 @@ export async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blo
     } catch {
       // body was not JSON
     }
-    throw new ApiError(response.status, describe(response.status, parsed), parsed);
+    throw new ApiError(
+      response.status,
+      describe(response.status, parsed),
+      parsed,
+      retryAfterSeconds(response.headers.get("Retry-After")),
+      requestIdOf(response.headers.get("X-Request-ID")),
+    );
   }
   return response.blob();
 }
