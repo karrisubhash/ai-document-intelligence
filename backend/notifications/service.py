@@ -101,9 +101,10 @@ def coalesce(
     `build(previous)` receives the open notification, locked, or None, and
     returns the Content to store - or None to leave everything as it is,
     which is how a producer stays idempotent. It runs inside the
-    transaction, so it must not have side effects of its own.
+    transaction, and may run twice (see below), so it must not have side
+    effects of its own.
 
-    Returns the notification written, the open one untouched, or None.
+    Returns the notification written, or None when build had nothing to add.
     """
     key = _clean_key(dedupe_key)
     for attempt in range(2):
@@ -137,7 +138,7 @@ def _coalesce_once(recipient, key, build, window):
 
     content = build(previous)
     if content is None:
-        return previous
+        return None
     content = clean(content)
 
     if previous is not None and content.fresh:

@@ -107,12 +107,12 @@ class CoalesceTests(TestCase):
         first = service.coalesce(self.nia, "batch", self.counting)
         stamp = first.updated_at
 
-        same = service.coalesce(self.nia, "batch", lambda previous: None)
+        self.assertIsNone(service.coalesce(self.nia, "batch", lambda previous: None))
 
-        self.assertEqual(same.pk, first.pk)
-        same.refresh_from_db()
-        self.assertEqual(same.updated_at, stamp)
+        first.refresh_from_db()
+        self.assertEqual((first.title, first.updated_at), ("1 done", stamp))
         self.assertIsNone(service.coalesce(person("sam"), "batch", lambda p: None))
+        self.assertEqual(Notification.objects.count(), 1)
 
     def test_news_after_the_window_starts_a_new_notification(self):
         old = service.coalesce(self.nia, "batch", self.counting)
