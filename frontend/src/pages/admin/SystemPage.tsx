@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+
 import { api } from "../../api/client";
 import { useResource } from "../../api/hooks";
 import { Icon } from "../../components/icons";
@@ -14,11 +16,25 @@ import {
 } from "../../components/ui";
 import { formatDateTime } from "../../lib/format";
 import { humanize } from "../../lib/labels";
+import { AIProvidersCard } from "./AIProvidersCard";
 
 export default function SystemPage() {
   useDocumentTitle("System status");
   const status = useResource(() => api.adminSystem(), []);
   const data = status.data;
+  // The chain as the AI providers card shows it, from the same payload.
+  const ai = useMemo(
+    () =>
+      data?.ai.chain && data.ai.totals
+        ? {
+            checked_at: data.checked_at,
+            enabled: Boolean(data.ai.enabled),
+            chain: data.ai.chain,
+            totals: data.ai.totals,
+          }
+        : null,
+    [data],
+  );
 
   return (
     <div className="page">
@@ -101,6 +117,8 @@ export default function SystemPage() {
               />
             </Card>
           </div>
+
+          <AIProvidersCard initial={ai} />
 
           <Card title="AI configuration" icon="cpu">
             <DescriptionList

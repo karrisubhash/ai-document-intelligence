@@ -50,7 +50,7 @@ export function fromResponse(response: ChatResponse): AnswerView {
     abstentionReason: response.abstention_reason,
     citations: response.citations,
     generative: response.model.generative,
-    modelName: response.model.name,
+    modelName: response.model_display ?? response.model.name,
     durationMs: response.duration_ms,
     supportRatio: response.grounding.support_ratio,
     notes: response.notes,
@@ -79,7 +79,7 @@ export function fromMessage(message: ChatMessage): AnswerView {
     abstentionReason: message.abstention_reason,
     citations: message.citations ?? [],
     generative: message.generative,
-    modelName: message.model_name,
+    modelName: message.model_display ?? message.model_name,
     durationMs: message.duration_ms,
     supportRatio: message.support_ratio,
     notes: meta.notes ?? [],
@@ -385,7 +385,7 @@ export function Answer({
             {answer.semantic ? " (keyword and meaning search)" : " (keyword search)"}
           </li>
           {answer.reranker ? <li>Ranked by {answer.reranker}</li> : null}
-          <li>Answered by {answer.modelName || "—"}</li>
+          <li>{answer.generative ? `Answered by ${answer.modelName}` : answer.modelName || "Answered by —"}</li>
           {!answer.abstained && answer.source !== "general" ? (
             <li>
               Every figure checked against the cited passages; wording support{" "}
