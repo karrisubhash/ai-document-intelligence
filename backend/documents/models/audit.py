@@ -39,6 +39,9 @@ class AuditLog(models.Model):
         DEPARTMENT_CREATE = "DEPARTMENT_CREATE", "Department create"
         DEPARTMENT_UPDATE = "DEPARTMENT_UPDATE", "Department update"
         JOB_RETRY = "JOB_RETRY", "Processing job retry"
+        # A one-token request sent to one AI provider link from System
+        # status. It spends a real call of that link's daily allowance.
+        AI_PROVIDER_TEST = "AI_PROVIDER_TEST", "AI provider test"
 
     class Result(models.TextChoices):
         ALLOWED = "ALLOWED", "Allowed"

@@ -170,6 +170,9 @@ REST_FRAMEWORK = {
         # Each request deletes (or is refused, and audits) up to 100
         # documents. Deleting 10,000 documents takes ~100 requests.
         "bulk_delete": os.getenv("THROTTLE_BULK_DELETE", "300/hour"),
+        # System status's "Test" button: each one is a real model call
+        # that spends a free-tier request.
+        "ai_test": os.getenv("THROTTLE_AI_TEST", "10/hour"),
     },
 }
 

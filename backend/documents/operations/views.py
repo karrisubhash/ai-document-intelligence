@@ -23,7 +23,7 @@ from documents.audit import record_event
 from documents.models import AuditLog, Conversation, Document, ProcessingJob
 from documents.processing.errors import ErrorCode
 
-from . import health
+from . import ai, health
 from .serializers import AuditLogSerializer, OperationsJobSerializer
 
 User = get_user_model()
@@ -266,7 +266,9 @@ class SystemStatusView(APIView):
                     "active": User.objects.filter(is_active=True).count(),
                     "inactive": User.objects.filter(is_active=False).count(),
                 },
-                "ai": capture_configuration(),
+                # Configured components, plus the model chain's live state
+                # and today's totals (operations.ai).
+                "ai": {**capture_configuration(), **ai.overview()},
                 "pipeline": {
                     "classifier": bool(getattr(settings, "DOCUMENT_CLASSIFIER", "")),
                     "field_extractor": bool(
