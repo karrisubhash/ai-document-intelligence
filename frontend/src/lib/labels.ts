@@ -84,6 +84,8 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   DEPARTMENT_CREATE: "Created department",
   DEPARTMENT_UPDATE: "Updated department",
   JOB_RETRY: "Retried processing",
+  GUEST_PURGE: "Cleared expired demo guests",
+  SAMPLES_LOAD: "Loaded sample documents",
 };
 
 /**

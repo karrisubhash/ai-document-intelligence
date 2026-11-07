@@ -79,6 +79,11 @@ export interface Capabilities {
   view_system_status: boolean;
   upload_to_any_department: boolean;
   create_collections: boolean;
+  /**
+   * A one-click demo visitor: read-only, enforced by the server. Optional,
+   * so an absent flag (an older server) means "not a guest".
+   */
+  is_guest?: boolean;
 }
 
 export interface Me {

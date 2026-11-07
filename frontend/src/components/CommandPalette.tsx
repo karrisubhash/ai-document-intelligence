@@ -148,7 +148,8 @@ export default function CommandPalette({
     });
   }
 
-  if (matches("upload a document new file add")) {
+  // Not for a demo guest, who cannot upload.
+  if (!can("is_guest") && matches("upload a document new file add")) {
     commands.push({
       id: "upload",
       group: "Actions",

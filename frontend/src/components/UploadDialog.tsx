@@ -61,7 +61,45 @@ function droppedItems(event: DragEvent): (File | PickedFolder)[] {
   });
 }
 
-export default function UploadDialog({
+type UploadDialogProps = {
+  open: boolean;
+  onClose: () => void;
+  onUploaded: (document: DocumentDetail) => void;
+  onBatchUploaded: (documents: DocumentDetail[]) => void;
+};
+
+/**
+ * Upload, or - for a one-click demo guest, whose uploads the server refuses
+ * - a word on why not and how to get an account. Every way in (a page's
+ * button, quick find) opens this, so it is the one place to say it.
+ */
+export default function UploadDialog(props: UploadDialogProps) {
+  const { can } = useAuth();
+  if (can("is_guest")) {
+    return (
+      <Dialog
+        open={props.open}
+        onClose={props.onClose}
+        title="Uploading is off in the demo"
+        size="sm"
+        footer={
+          <Button variant="primary" onClick={props.onClose}>
+            Got it
+          </Button>
+        }
+      >
+        <p className="guest-note">
+          <Icon name="lock" size={16} />
+          The demo workspace is read-only, so everyone who tries it finds the same sample
+          library. Request an account to upload and ask about your own documents.
+        </p>
+      </Dialog>
+    );
+  }
+  return <UploadForm {...props} />;
+}
+
+function UploadForm({
   open,
   onClose,
   onUploaded,

@@ -76,6 +76,18 @@ export default function AccountPage() {
         </p>
       </Card>
 
+      {me.capabilities?.is_guest ? (
+        // A demo account has no password to change: it is reached only
+        // through the session the demo started, and it is cleared after a
+        // day.
+        <Card title="Demo account" icon="sparkles">
+          <p className="guest-note">
+            <Icon name="lock" size={16} />
+            This account was made for your visit to the demo. It has no password, can read but
+            not change anything, and is deleted with its conversations after a day.
+          </p>
+        </Card>
+      ) : (
       <Card
         title="Change password"
         icon="key"
@@ -142,6 +154,7 @@ export default function AccountPage() {
           </div>
         </form>
       </Card>
+      )}
     </div>
   );
 }

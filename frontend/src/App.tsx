@@ -22,6 +22,8 @@ const DepartmentsPage = lazy(() => import("./pages/admin/DepartmentsPage"));
 const AuditPage = lazy(() => import("./pages/admin/AuditPage"));
 const ProcessingPage = lazy(() => import("./pages/admin/ProcessingPage"));
 const SystemPage = lazy(() => import("./pages/admin/SystemPage"));
+// Only for visitors who are not signed in; members never download it.
+const LandingPage = lazy(() => import("./pages/LandingPage"));
 
 /**
  * Hides a screen from someone who cannot use it. A convenience only: every
@@ -97,7 +99,24 @@ export default function App() {
     );
   }
 
-  if (state === "signed-out") return <LoginPage />;
+  if (state === "signed-out") {
+    // The landing page at "/"; everywhere else the focused sign-in, so an
+    // address bookmarked or shared while signed in opens after sign-in.
+    return (
+      <Suspense
+        fallback={
+          <div className="centered">
+            <Spinner />
+          </div>
+        }
+      >
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="*" element={<LoginPage />} />
+        </Routes>
+      </Suspense>
+    );
+  }
 
   if (state === "unreachable") {
     return (

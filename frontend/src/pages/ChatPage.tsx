@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import { useResource, type Resource } from "../api/hooks";
 import type { Citation, ConversationSummary, Paginated } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 import {
   Answer,
   SourceDialog,
@@ -77,6 +78,9 @@ function ConversationList({
   // Multi-select for deleting several at once. `all` means every one of the
   // user's conversations, including older ones not loaded yet.
   const [selecting, setSelecting] = useState(false);
+  // A demo guest's conversations are kept until the demo is cleared: the
+  // server refuses renaming and deleting them, so neither is offered.
+  const manage = !useAuth().can("is_guest");
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [all, setAll] = useState(false);
   const [confirmingBulk, setConfirmingBulk] = useState(false);
@@ -144,7 +148,7 @@ function ConversationList({
       <Button variant="primary" icon="square-pen" className="btn-block" onClick={onNew}>
         New question
       </Button>
-      {loaded.length ? (
+      {manage && loaded.length ? (
         <div className={selecting ? "conversation-select-bar" : "conversation-select-idle"}>
           {selecting ? (
             <>
@@ -232,7 +236,7 @@ function ConversationList({
                 </Link>
                 {/* Not rendered while selecting: a class's display: flex
                     would override the hidden attribute. */}
-                {selecting ? null : (
+                {selecting || !manage ? null : (
                   <div className="conversation-actions">
                     <IconButton
                       icon="pencil"

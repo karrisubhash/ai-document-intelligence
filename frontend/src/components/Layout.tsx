@@ -16,6 +16,7 @@ import { displayName } from "../lib/format";
 import { ROLE_LABEL } from "../lib/labels";
 import { setTheme, useResolvedTheme, useTheme } from "../lib/theme";
 import CommandPalette from "./CommandPalette";
+import GuestBanner from "./GuestBanner";
 import { BrandMark, Icon } from "./icons";
 import { PRIMARY, adminItems, sectionFor, type NavItem } from "./navigation";
 import {
@@ -329,6 +330,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             <Icon name={resolvedTheme === "dark" ? "sun" : "moon"} size={18} />
           </button>
         </header>
+        <GuestBanner />
         <main id="main" className="main" tabIndex={-1}>
           <TrailContext.Provider value={setTrail}>{children}</TrailContext.Provider>
         </main>

@@ -1,0 +1,95 @@
+/* The demo banner (components/GuestBanner.tsx) and the read-only notes that
+   stand in for actions a demo guest cannot take. */
+
+.guest-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 14px;
+}
+
+.guest-banner-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--brand-gradient);
+  color: #fff;
+}
+
+.guest-banner-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.guest-banner-detail {
+  color: var(--text-2);
+}
+
+.guest-banner-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--accent-strong);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.guest-banner-action:hover:not(:disabled) {
+  background: var(--accent-soft-hover);
+}
+
+.guest-banner-action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.guest-banner-action:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.guest-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+.guest-note .icon {
+  margin-top: 2px;
+  color: var(--accent-strong);
+}
+
+@media (max-width: 560px) {
+  .guest-banner {
+    flex-wrap: wrap;
+    padding: 10px 16px;
+  }
+
+  .guest-banner-detail {
+    display: none;
+  }
+
+  .guest-banner-action {
+    width: 100%;
+    justify-content: center;
+  }
+}

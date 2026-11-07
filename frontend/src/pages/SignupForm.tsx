@@ -58,7 +58,7 @@ function Sent({ username }: { username: string }) {
       {/* Replacing this page, so Back does not return to a filled-in form
           that would only be refused: the name is already taken - by this
           request. */}
-      <Link to="/" replace className="btn btn-primary btn-lg btn-block">
+      <Link to="/login" replace className="btn btn-primary btn-lg btn-block">
         Back to sign in
       </Link>
     </div>
@@ -332,7 +332,7 @@ export default function SignupForm({ options }: { options: SignupOptions }) {
       </form>
       <p className="login-switch">
         Already have an account?{" "}
-        <Link to="/" className="link">
+        <Link to="/login" className="link">
           Sign in
         </Link>
       </p>
