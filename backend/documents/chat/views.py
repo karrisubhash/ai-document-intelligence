@@ -3,6 +3,7 @@ import json
 import logging
 import queue
 import threading
+import time
 
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import connections, transaction
@@ -23,8 +24,8 @@ from documents.audit import record_event
 from documents.authorization import get_profile
 from documents.models import AuditLog, Conversation, Message
 from documents.observability import telemetry
-from documents.rag import followup, general, streaming
-from documents.rag.engine import Abstention
+from documents.rag import followup, gateway, general, labels, streaming
+from documents.rag.engine import Abstention, llm_metadata
 from documents.rag.llm import ABSTENTION_TEXT
 from documents.throttling import BurstUserThrottle, ShortWindowUserThrottle
 
@@ -150,6 +151,7 @@ class ChatView(APIView):
                     answer.generative = True
                     answer.model_name = reply.model_name
                     answer.model_version = reply.model_version
+                    answer.llm = llm_metadata(reply)
                     source = "general"
         except Exception:
             # Created for this question, which was never answered: left in
@@ -157,6 +159,22 @@ class ChatView(APIView):
             if created:
                 conversation.delete()
             raise
+
+        # Said in the answer itself rather than buried in its notes: which
+        # model wrote it, and whether it was quoted because the AI was at
+        # capacity (documents.rag.labels).
+        degraded = labels.degraded(
+            answerer=answer.answerer_fell_back,
+            reranker=answer.reranker_degraded,
+            llm=answer.llm,
+            source=source,
+        )
+        model_display = labels.answer_display(
+            model_name=answer.model_name,
+            model_version=answer.model_version,
+            generative=answer.generative,
+            llm=answer.llm,
+        )
 
         with transaction.atomic():
             Message.objects.create(
@@ -194,6 +212,10 @@ class ChatView(APIView):
                     "followup": resolved.as_metadata,
                     "timings": answer.timings,
                     "source": source,
+                    # What the provider said: model actually used, what it
+                    # fell back from, tokens, finish reason, data use.
+                    "llm": answer.llm,
+                    "degraded": degraded,
                 },
             )
             # touch() so the conversation sorts by recency.
@@ -266,6 +288,13 @@ class ChatView(APIView):
             # "general" (general knowledge, uncited - see
             # documents.rag.general) or "none" (an abstention).
             "source": source,
+            # The author for people ("Gemini 3.5 Flash", "GPT-OSS 120B ·
+            # Groq", "Quoted from your documents"); `model.name` stays the
+            # answerer's class for anything that reads it.
+            "model_display": model_display,
+            # {answerer, reranker, reason}: what ran in a lesser mode, and
+            # whether it was capacity (comes back) or a failure.
+            "degraded": degraded,
         }
 
     def _conversation(self, request, conversation_id):
@@ -477,3 +506,35 @@ class ConversationDetailView(APIView):
         conversation = get_object_or_404(Conversation, id=pk, owner=request.user)
         conversation.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChatCapabilitiesView(APIView):
+    """GET /api/v1/chat/capabilities/ - what chat can do right now.
+
+    For the composer: whether answers are being written by a model or, with
+    every model cooling down or out of today's quota, quoted from the
+    documents - and when writing resumes. No provider, model or key is
+    named; that is the system administrators' System status screen.
+
+    Cheap by construction (a few cache reads, no network), and remembered
+    for CACHE_SECONDS per process on top, because every open chat page asks.
+    Never audited: it is a read of service state, not of anyone's data.
+    """
+
+    permission_classes = [IsAuthenticated]
+    CACHE_SECONDS = 5.0
+
+    _lock = threading.Lock()
+    _cached = (0.0, None)
+
+    def get(self, request):
+        now = time.monotonic()
+        with self._lock:
+            stamp, body = ChatCapabilitiesView._cached
+        if body is None or now - stamp > self.CACHE_SECONDS:
+            body = gateway.capabilities()
+            with self._lock:
+                ChatCapabilitiesView._cached = (now, body)
+        response = Response(body)
+        response["Cache-Control"] = f"private, max-age={int(self.CACHE_SECONDS)}"
+        return response

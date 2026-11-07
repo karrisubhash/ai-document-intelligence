@@ -147,3 +147,50 @@ def display_for_version(
         # "claude-opus-5": the Claude answerer records the bare model.
         return model_display("", provider, served_by=served_by)
     return model_display(provider, model, served_by=served_by)
+
+
+def answer_display(
+    *, model_name: str, model_version: str, generative: bool, llm=None
+) -> str:
+    """The name to show for one stored or fresh answer.
+
+    Empty when no answerer ran at all (nothing was retrieved): there is no
+    author to name. Quoted when the extractive answerer produced it.
+    """
+    if not generative:
+        return QUOTED if model_name else ""
+    llm = llm or {}
+    if llm.get("model"):
+        return model_display(
+            llm.get("provider", ""), llm["model"], served_by=llm.get("served_by", "")
+        )
+    return display_for_version(model_version, generative=True)
+
+
+# The engine's own notes, for answers stored before `degraded` was recorded.
+_ANSWERER_NOTE = "answered by quoting passages instead"
+_RERANKER_NOTE = "passages were scored lexically instead"
+
+
+def degraded(
+    *, answerer: bool, reranker: bool, llm=None, source: str = "", notes=()
+) -> dict:
+    """What ran in a lesser mode for this answer, for the UI to say plainly.
+
+    `reason` is "capacity" when the AI was at its limits (a cooldown or the
+    day's quota - it comes back by itself), "unavailable" when something
+    failed, or None. A general-knowledge reply was written by a model and
+    does not rest on ranked passages, so nothing about it is degraded.
+    """
+    if source == "general":
+        return {"answerer": False, "reranker": False, "reason": None}
+    notes = list(notes or ())
+    answerer = bool(answerer) or any(_ANSWERER_NOTE in note for note in notes)
+    reranker = bool(reranker) or any(_RERANKER_NOTE in note for note in notes)
+    reason = None
+    if answerer:
+        kind = (llm or {}).get("fallback_kind")
+        reason = "capacity" if kind == "capacity" else "unavailable"
+    elif reranker:
+        reason = "unavailable"
+    return {"answerer": answerer, "reranker": reranker, "reason": reason}
