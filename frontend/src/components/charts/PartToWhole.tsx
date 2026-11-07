@@ -17,6 +17,11 @@ function shares(items: PartItem[]) {
   return { total, share: (value: number) => (total > 0 ? Math.max(0, value) / total : 0) };
 }
 
+/** A share as a percentage; a part that exists never reads "0%". */
+function percent(share: number): string {
+  return share > 0 && share < 0.005 ? "<1%" : formatPercent(share);
+}
+
 /** The legend under a part-to-whole chart: every part with value and share. */
 function PartLegend({ items, format }: { items: PartItem[]; format: ValueFormat }) {
   const { share } = shares(items);
@@ -30,7 +35,7 @@ function PartLegend({ items, format }: { items: PartItem[]; format: ValueFormat 
         index,
         value: (
           <>
-            {format(item.value)} <span className="chart-legend-share">{formatPercent(share(item.value))}</span>
+            {format(item.value)} <span className="chart-legend-share">{percent(share(item.value))}</span>
           </>
         ),
       }))}
@@ -83,7 +88,7 @@ export function Donut({
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-labelledby={ids.title} aria-describedby={ids.desc}>
           <title id={ids.title}>{title}</title>
           <desc id={ids.desc}>
-            {items.map((item) => `${item.label}: ${format(item.value)} (${formatPercent(share(item.value))})`).join("; ")}
+            {items.map((item) => `${item.label}: ${format(item.value)} (${percent(share(item.value))})`).join("; ")}
           </desc>
           {items.map((item, index) => {
             const [start, end] = spans[index];
@@ -110,7 +115,7 @@ export function Donut({
         columns={["Part", "Value", "Share"]}
         rows={items.map((item) => ({
           key: item.key,
-          cells: [item.label, format(item.value), formatPercent(share(item.value))],
+          cells: [item.label, format(item.value), percent(share(item.value))],
         }))}
       />
     </div>
@@ -139,7 +144,7 @@ export function SegmentedBar({
   if (loading) return <div className="segbar segbar-loading" aria-hidden="true" />;
   const { total, share } = shares(items);
   const summary = total
-    ? items.map((item) => `${item.label} ${format(item.value)} (${formatPercent(share(item.value))})`).join(", ")
+    ? items.map((item) => `${item.label} ${format(item.value)} (${percent(share(item.value))})`).join(", ")
     : "nothing yet";
   return (
     <div className="segbar-wrap">

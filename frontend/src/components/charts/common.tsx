@@ -176,8 +176,8 @@ export function DataTable({
   rows: { key: string; cells: string[] }[];
   visible?: boolean;
 }) {
-  return (
-    <table className={visible ? "chart-table" : "visually-hidden"}>
+  const table = (
+    <table className="chart-table">
       <caption>{caption}</caption>
       <thead>
         <tr>
@@ -205,6 +205,10 @@ export function DataTable({
       </tbody>
     </table>
   );
+  // Hidden through a wrapper, not on the table itself: a table ignores the
+  // 1px width and the overflow clip, so a wide one hidden that way still
+  // widened the page - by 200px on a phone.
+  return visible ? table : <div className="visually-hidden">{table}</div>;
 }
 
 /** A placeholder the size of the chart while its data loads. */

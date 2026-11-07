@@ -150,7 +150,7 @@ export function Cartesian({
 
   return (
     <div className="chart">
-      {showLegend && !loading ? (
+      {showLegend && !loading && !nothing ? (
         <Legend items={series.map((item, index) => ({ key: item.key, label: item.label, color: item.color, index }))} />
       ) : null}
       <div className="chart-body" ref={ref} style={{ height: `${height}px` }}>

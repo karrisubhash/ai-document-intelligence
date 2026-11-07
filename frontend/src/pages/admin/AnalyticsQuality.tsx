@@ -227,8 +227,8 @@ function Benchmarks() {
       <Card title="Benchmark" icon="gauge">
         <EmptyState title="No benchmark runs yet" icon="gauge">
           A benchmark replays a fixed set of questions with known answers and scores retrieval, grounding,
-          citations and abstention, so a change to the system can be measured rather than guessed. Runs are
-          started by an operator (<code>manage.py evaluate</code>) and appear here.
+          citations and abstention, so a change to the system can be measured rather than guessed. An
+          operator starts a run with the evaluate management command; its scores appear here.
         </EmptyState>
       </Card>
     );

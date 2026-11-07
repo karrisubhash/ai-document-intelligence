@@ -41,7 +41,7 @@ export function describeDelta({ value, previous, style = "percent", good = "up" 
     const change = difference / previous;
     text = `${change >= 0 ? "+" : "−"}${formatPercent(Math.abs(change), Math.abs(change) < 0.1 ? 1 : 0)}`;
   }
-  if (direction === 0 && style !== "percent") text = "No change";
+  if (direction === 0) text = "No change";
   const tone =
     direction === 0 || good === "neutral"
       ? ("neutral" as const)
