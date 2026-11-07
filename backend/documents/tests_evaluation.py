@@ -7,16 +7,20 @@ exhaustively by hand-worked examples rather than sampled through the stack.
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from accounts.models import UserProfile
 from documents import rag
 from documents.evaluation import loader, metrics, runner
 from documents.models import (
     Conversation,
     Document,
+    EvaluationCase,
     EvaluationCaseResult,
     EvaluationDataset,
     EvaluationRun,
@@ -528,7 +532,10 @@ class EvaluationAPITests(TestCase):
         self.addCleanup(chunking_service.reset_provider_cache)
         self.addCleanup(rag.reset_caches)
 
-        self.user = make_user("eval_api_user", department="Registry")
+        # The benchmark is an administrator's quality tool.
+        self.user = make_user(
+            "eval_api_user", UserProfile.Role.DEPARTMENT_ADMIN, department="Registry"
+        )
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
@@ -559,7 +566,11 @@ class EvaluationAPITests(TestCase):
     def test_a_run_from_another_department_is_hidden(self):
         """A benchmark leaks the corpus it was built from through its
         questions and expected answers."""
-        outsider = make_user("eval_api_outsider", department="Mechanical")
+        outsider = make_user(
+            "eval_api_outsider",
+            UserProfile.Role.DEPARTMENT_ADMIN,
+            department="Mechanical",
+        )
         client = APIClient()
         client.force_authenticate(outsider)
 
@@ -569,13 +580,58 @@ class EvaluationAPITests(TestCase):
             status.HTTP_404_NOT_FOUND,
         )
 
-    def test_a_user_with_no_department_sees_nothing(self):
+    def test_a_department_member_cannot_read_the_benchmark(self):
+        """Its questions and expected answers are the department's answer
+        key. Any member could read them while these views asked only for a
+        signed-in user."""
+        member = make_user("eval_api_member", department="Registry")
+        client = APIClient()
+        client.force_authenticate(member)
+        for url in (
+            reverse("evaluation-list"),
+            reverse("evaluation-detail", args=[self.run.id]),
+            reverse("evaluation-results", args=[self.run.id]),
+            reverse("evaluation-compare", args=[self.run.id, self.run.id]),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(client.get(url).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_a_user_with_no_department_is_refused(self):
         stray = get_user_model().objects.create_user(
             username="eval_stray", password="pass1234"
         )
         client = APIClient()
         client.force_authenticate(stray)
-        self.assertEqual(client.get(reverse("evaluation-list")).data["count"], 0)
+        self.assertEqual(
+            client.get(reverse("evaluation-list")).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_the_run_list_costs_the_same_queries_however_long(self):
+        """Each run's case count is counted with its dataset, not per row."""
+        EvaluationCase.objects.create(dataset=self.dataset, question="q?")
+
+        def count():
+            with CaptureQueriesContext(connection) as queries:
+                response = self.client.get(reverse("evaluation-list"))
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            return len(queries.captured_queries), response.data
+
+        before, _ = count()
+        for number in range(4):
+            other = EvaluationDataset.objects.create(
+                name="api-fixture", version=f"2.0.{number}", department="Registry"
+            )
+            EvaluationRun.objects.create(dataset=other)
+        after, data = count()
+        self.assertEqual(after, before)
+        self.assertEqual(data["count"], 5)
+        cases = {
+            run["dataset"]["version"]: run["dataset"]["cases"]
+            for run in data["results"]
+        }
+        self.assertEqual(cases["1.0.0"], 1)
+        self.assertEqual(cases["2.0.0"], 0)
 
     def test_detail_returns_one_run(self):
         response = self.client.get(reverse("evaluation-detail", args=[self.run.id]))

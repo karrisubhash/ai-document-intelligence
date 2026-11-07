@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
@@ -179,6 +180,10 @@ REST_FRAMEWORK = {
         # System status's "Test" button: each one is a real model call
         # that spends a free-tier request.
         "ai_test": os.getenv("THROTTLE_AI_TEST", "10/hour"),
+        # The analytics page's Refresh (?fresh=1): the one request that
+        # skips the cache and runs every aggregation again. A cached answer
+        # costs a cache read and is not limited beyond "user".
+        "analytics_refresh": os.getenv("THROTTLE_ANALYTICS_REFRESH", "60/hour"),
     },
 }
 
@@ -923,6 +928,36 @@ if RUNNING_TESTS:
     # enforced; the budget tests set their own limits with override_settings.
     RAG_ANSWERER_CHAIN = ""
     LLM_DAILY_LIMITS = "*=0"
+
+
+# --- Analytics (documents.operations.analytics) -----------------------------
+#
+# The administration Analytics page and the dashboard's activity block are
+# aggregations over rows the platform already writes - answers, feedback,
+# processing runs, uploads, the audit log - computed in SQL and kept in the
+# cache above, never recomputed per request.
+#
+# How long one computed report is served before it is computed again, per
+# department scope and range. The page says how old what it shows is, and
+# its Refresh button skips this (throttled: "analytics_refresh").
+ANALYTICS_CACHE_SECONDS = int(os.getenv("ANALYTICS_CACHE_SECONDS", "300"))
+# The dashboard's activity block, per user. Shorter, because it is the home
+# screen and shows the reader's own questions and uploads.
+DASHBOARD_ACTIVITY_CACHE_SECONDS = int(
+    os.getenv("DASHBOARD_ACTIVITY_CACHE_SECONDS", "60")
+)
+# Where a "day" begins and ends for every daily series. TIME_ZONE stays UTC
+# (stored timestamps are UTC either way); this only decides the buckets, so
+# that a campus in India sees its Monday as Monday rather than a day that
+# starts at 05:30. An IANA name, e.g. "Asia/Kolkata".
+ANALYTICS_TIME_ZONE = os.getenv("ANALYTICS_TIME_ZONE", "").strip() or TIME_ZONE
+try:
+    ZoneInfo(ANALYTICS_TIME_ZONE)
+except (ZoneInfoNotFoundError, ValueError) as exc:
+    raise ImproperlyConfigured(
+        f"ANALYTICS_TIME_ZONE={ANALYTICS_TIME_ZONE!r} is not an IANA time zone "
+        "name, such as 'UTC' or 'Asia/Kolkata'."
+    ) from exc
 
 
 CELERY_BROKER_URL = os.getenv(

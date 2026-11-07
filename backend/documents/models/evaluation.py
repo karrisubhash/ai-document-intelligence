@@ -208,6 +208,11 @@ class Feedback(models.Model):
                 fields=["message", "user"], name="one_feedback_per_user_per_message"
             )
         ]
+        indexes = [
+            # Feedback per day on the analytics page, and the review queue
+            # (operations.feedback), which reads the newest first.
+            models.Index(fields=["-created_at"], name="feedback_created_idx"),
+        ]
 
     def __str__(self):
         return f"{self.rating} on message {self.message_id}"

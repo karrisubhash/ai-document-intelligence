@@ -124,3 +124,63 @@ export function humanize(value: string): string {
     .replace(/_/g, " ")
     .replace(/^\w/, (letter) => letter.toUpperCase());
 }
+
+/**
+ * Short names for the analytics endpoint's abstention codes, for a chart
+ * label; explainAbstention() gives the sentence behind each.
+ */
+export const ABSTENTION_LABEL: Record<string, string> = {
+  no_documents: "Not in any document you can see",
+  not_relevant: "Nothing relevant enough",
+  no_context: "No usable passage",
+  nothing_found: "Passages read, no answer in them",
+  answerer_failed: "Answerer could not finish",
+  ungrounded: "Answer could not be verified",
+  in_figure: "Possibly in a chart or image",
+  parts_unanswered: "No part of the question answerable",
+  empty_question: "Empty question",
+  other: "Other reasons",
+};
+
+/** Processing failure codes (ProcessingJob.error_code) in plain words. */
+export const ERROR_CODE_LABEL: Record<string, string> = {
+  MISSING_FILE: "File missing from storage",
+  EMPTY_FILE: "Empty file",
+  UNSUPPORTED_FILE_TYPE: "Unsupported file type",
+  FILE_TOO_LARGE: "File too large",
+  TOO_MANY_PAGES: "Too many pages",
+  CORRUPT_DOCUMENT: "Damaged or unreadable file",
+  EXTRACTION_FAILED: "Text could not be read",
+  OCR_FAILED: "Scanned text could not be recognised",
+  EMPTY_EXTRACTION: "No text found in the file",
+  CLASSIFICATION_FAILED: "Could not be classified",
+  FIELD_EXTRACTION_FAILED: "Fields could not be extracted",
+  CHUNKING_FAILED: "Could not be indexed",
+  MALWARE_DETECTED: "Quarantined: malware detected",
+  SCAN_FAILED: "Security scan failed",
+  INFRASTRUCTURE_ERROR: "Server problem while processing",
+  TIMEOUT: "Took too long",
+  STALLED: "Worker stopped responding",
+  UNEXPECTED_ERROR: "Unexpected error",
+};
+
+export function errorCodeLabel(code: string): string {
+  return code ? (ERROR_CODE_LABEL[code] ?? humanize(code)) : "Reason not recorded";
+}
+
+/** The answer pipeline's timed stages (Message.metadata.timings). */
+export const ANSWER_STAGE_LABEL: Record<string, string> = {
+  retrieval: "Finding passages",
+  rerank: "Ranking passages",
+  generation: "Writing the answer",
+  grounding: "Checking against sources",
+};
+
+/** File kinds as the pipeline types them (analytics storage.by_kind). */
+export const FILE_KIND_LABEL: Record<string, string> = {
+  PDF: "PDF",
+  DOCX: "Word",
+  TXT: "Text",
+  IMAGE: "Image",
+  OTHER: "Other",
+};

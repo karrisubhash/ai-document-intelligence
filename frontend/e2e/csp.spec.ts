@@ -44,6 +44,7 @@ test("no screen triggers a Content-Security-Policy violation", async ({ page }) 
     "/search",
     "/ask",
     "/account",
+    "/admin/analytics",
     "/admin/users",
     "/admin/departments",
     "/admin/processing",

@@ -407,6 +407,8 @@ export interface ChatMessage {
   created_at: string;
   model_display?: string;
   degraded?: Degraded | null;
+  /** The reader's own rating of this answer, if they gave one. */
+  my_feedback?: { rating: FeedbackRating; comment: string } | null;
 }
 
 export interface ConversationSummary {
@@ -451,6 +453,8 @@ export interface Dashboard {
   }[];
   /** Sign-up requests waiting for this administrator; null for anyone else. */
   pending_signup_requests?: number | null;
+  /** Trends for the home screen's charts (src/api/analytics.ts). */
+  activity?: import("./analytics").DashboardActivity;
 }
 
 export interface Department {

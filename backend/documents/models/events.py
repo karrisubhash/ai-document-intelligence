@@ -24,6 +24,11 @@ class ProcessingEvent(models.Model):
 
     class Meta:
         ordering = ["created_at"]
+        indexes = [
+            # Stage durations over a period (operations.analytics): the
+            # stages that finished in it. Every run writes one row per stage.
+            models.Index(fields=["completed_at"], name="procevent_completed_idx"),
+        ]
 
     def __str__(self):
         return f"{self.stage} - {self.status}"

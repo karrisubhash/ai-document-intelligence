@@ -46,6 +46,11 @@ class ProcessingJob(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            # Throughput and failures per day (operations.analytics): runs
+            # by the time they finished, completed or failed.
+            models.Index(fields=["completed_at"], name="procjob_completed_idx"),
+        ]
 
     def __str__(self):
         return f"Job #{self.id} for {self.document_version}"

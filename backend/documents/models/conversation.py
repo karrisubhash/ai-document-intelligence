@@ -76,7 +76,16 @@ class Message(models.Model):
 
     class Meta:
         ordering = ["created_at", "id"]
-        indexes = [models.Index(fields=["conversation", "created_at"])]
+        indexes = [
+            models.Index(fields=["conversation", "created_at"]),
+            # The analytics read model (operations.analytics) asks for every
+            # answer given in a period - assistant turns by time, across all
+            # conversations - which the conversation-leading index above
+            # cannot serve without reading every conversation's messages.
+            models.Index(
+                fields=["role", "created_at"], name="message_role_created_idx"
+            ),
+        ]
 
     def __str__(self):
         return f"{self.role}: {self.content[:50]}"
