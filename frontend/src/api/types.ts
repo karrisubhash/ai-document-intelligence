@@ -282,6 +282,63 @@ export interface SearchHit {
   matched_by: string[];
   lexical_rank: number | null;
   vector_rank: number | null;
+  // Presentation (backend search.presentation). Optional: older servers
+  // and many test fixtures send none of them.
+  document_type?: DocumentType;
+  department?: string;
+  document_updated_at?: string;
+  file_name?: string;
+  file_kind?: string;
+  version_number?: number;
+  /** "TABLE" for a passage cut from a detected table. */
+  chunk_kind?: string;
+  /** The words the search matched, as code-point offsets into `text`. */
+  highlights?: TextSpan[];
+  /** A window of `text` around the first highlight, in code points. */
+  snippet?: TextSpan;
+}
+
+/** Code-point offsets [start, end) into a passage's text. */
+export interface TextSpan {
+  start: number;
+  end: number;
+}
+
+/** One stretch of a page in a document group (adjacent chunks merged). */
+export interface SearchPassage {
+  chunk_ids: number[];
+  page_number: number;
+  character_start: number;
+  character_end: number;
+  text: string;
+  highlights: TextSpan[];
+  snippet: TextSpan;
+  relevance: number | null;
+  matched_by: string[];
+  chunk_kind: string;
+}
+
+/** `group_by: "document"`: documents in the order of their best passage. */
+export interface SearchGroup {
+  document_id: number;
+  document_title: string;
+  document_type: DocumentType;
+  department: string;
+  updated_at: string;
+  file_name: string;
+  file_kind: string;
+  version_number: number;
+  relevance: number | null;
+  matched_by: string[];
+  /** At most three; `more_passages` counts the rest. */
+  passages: SearchPassage[];
+  more_passages: number;
+}
+
+/** A situation the client words for its reader (docs/api/reference.md). */
+export interface SearchNotice {
+  code: string;
+  params: Record<string, unknown>;
 }
 
 export interface SearchResponse {
@@ -306,8 +363,13 @@ export interface SearchResponse {
     /** Candidates scored below the floor and left out unless asked for. */
     below_floor: number;
   };
+  /** Operator diagnostics; show `notices` to people instead. */
   notes: string[];
+  notices?: SearchNotice[];
   results: SearchHit[];
+  /** Present when the request asked for `group_by: "document"`. */
+  groups?: SearchGroup[];
+  server_ms?: number;
 }
 
 export interface Citation {
