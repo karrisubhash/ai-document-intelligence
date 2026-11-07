@@ -20,6 +20,14 @@ READ_ONLY_ACTIONS = {
     "tables",
     "figures",
     "source",
+    # The brief, its related documents and the first-page picture. Read on
+    # every visit to a document and, for thumbnails, dozens at a time by a
+    # library grid - so, like the polled processing timeline, they are NOT
+    # in ACTION_TO_AUDIT_EVENT: the visit itself is audited by `retrieve`.
+    # A refusal on any of them is still recorded (see has_object_permission).
+    "insights",
+    "related",
+    "thumbnail",
 }
 
 # Exactly the message DRF's own get_object() produces for an id that does

@@ -270,9 +270,12 @@ class DocumentProcessingEndpointTests(AuthenticatedAPITestCase):
                 ProcessingJob.Stage.CLASSIFICATION,
                 ProcessingJob.Stage.EXTRACTION,
                 ProcessingJob.Stage.INDEXING,
+                # Post-publish enrichment, recorded on the same timeline.
+                ProcessingJob.Stage.INSIGHTS,
             ],
         )
-        # CLASSIFICATION is SKIPPED while no model is configured; nothing failed.
+        # Nothing failed: a stage with nothing to do (no layout classifier,
+        # no schema for a GENERAL document) records SKIPPED.
         self.assertNotIn(
             ProcessingEvent.Status.FAILED,
             [event["status"] for event in job["events"]],

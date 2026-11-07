@@ -708,6 +708,14 @@ class ResponseShapeTests(DiscoveryTestCase):
                 "can_manage",
                 "created_at",
                 "updated_at",
+                # Added with document intelligence: who decided the type and
+                # how sure the detector was, the page count, whether a
+                # thumbnail exists, and the stage of an in-flight run.
+                "document_type_source",
+                "type_confidence",
+                "page_count",
+                "has_thumbnail",
+                "current_stage",
             },
         )
 

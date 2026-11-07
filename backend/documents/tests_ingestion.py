@@ -289,6 +289,8 @@ class OcrPathTests(IngestionTestCase):
                 ProcessingJob.Stage.CLASSIFICATION,
                 ProcessingJob.Stage.EXTRACTION,
                 ProcessingJob.Stage.INDEXING,
+                # Post-publish enrichment, after the job completed.
+                ProcessingJob.Stage.INSIGHTS,
             ],
         )
 
