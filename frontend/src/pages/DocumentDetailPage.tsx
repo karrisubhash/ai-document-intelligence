@@ -16,13 +16,12 @@ import {
 import { usePageTrail } from "../components/Layout";
 import VersionsPanel from "../components/document/VersionsPanel";
 import { FileTypeIcon, Icon } from "../components/icons";
+import { InsightsOverview, typeProvenance } from "../components/document/Insights";
 import {
   Alert,
   Badge,
   Button,
-  Card,
   ConfirmDialog,
-  DescriptionList,
   Dialog,
   ErrorState,
   Field,
@@ -39,9 +38,8 @@ import {
   useToast,
   type TabItem,
 } from "../components/ui";
-import { formatLabel } from "../lib/files";
-import { formatBytes, formatDateTime, formatPercent } from "../lib/format";
-import { IN_FLIGHT, TYPE_LABEL, humanize } from "../lib/labels";
+import { formatBytes } from "../lib/format";
+import { IN_FLIGHT, TYPE_LABEL } from "../lib/labels";
 
 const TABS: TabItem[] = [
   { id: "overview", label: "Overview", icon: "info" },
@@ -54,83 +52,29 @@ const TABS: TabItem[] = [
   { id: "processing", label: "Processing", icon: "activity" },
 ];
 
-function Overview({ document }: { document: DocumentDetail }) {
-  const classification = useResource(
-    () => api.classification(document.id),
-    [document.id, document.status],
-  );
-  const version = document.current_version;
-  const verdict = classification.data?.[0];
+/** Which count belongs to which tab. */
+const COUNTED: Record<string, "fields_found" | "tables" | "figures"> = {
+  fields: "fields_found",
+  tables: "tables",
+  figures: "figures",
+};
 
-  return (
-    <div className="grid-2">
-      <Card title="Details" icon="info">
-        <DescriptionList
-          items={[
-            ["Type", TYPE_LABEL[document.document_type]],
-            ["Department", document.department || "None (visible to the owner only)"],
-            ["Owner", document.owner_username || "—"],
-            ["Status", <StatusBadge key="s" status={document.status} />],
-            ["Created", formatDateTime(document.created_at)],
-            ["Last updated", formatDateTime(document.updated_at)],
-            ...(document.is_archived
-              ? ([["Archived", formatDateTime(document.archived_at)]] as [string, string][])
-              : []),
-          ]}
-        />
-      </Card>
-      <div className="stack-lg">
-        <Card title="Current file" icon="file">
-          {version ? (
-            <DescriptionList
-              items={[
-                ["File", version.file_name],
-                ["Version", `v${version.version_number}`],
-                ["Size", formatBytes(version.file_size)],
-                [
-                  "Format",
-                  <span key="f" title={version.mime_type || undefined}>
-                    {formatLabel(version.mime_type)}
-                  </span>,
-                ],
-                ["Uploaded", formatDateTime(version.created_at)],
-              ]}
-            />
-          ) : (
-            <p className="muted">No file has been uploaded.</p>
-          )}
-        </Card>
-        <Card title="Classification" icon="cpu">
-          {classification.loading && !classification.data ? (
-            <Skeleton lines={2} />
-          ) : classification.error && !classification.data ? (
-            // A failed REQUEST is not a document that was never classified.
-            <ErrorState
-              error={classification.error}
-              onRetry={classification.reload}
-              title="The classification could not be loaded"
-            />
-          ) : verdict ? (
-            <DescriptionList
-              items={[
-                [
-                  "Predicted type",
-                  verdict.predicted_label ? humanize(verdict.predicted_label) : "Unsure — abstained",
-                ],
-                ["Confidence", formatPercent(verdict.confidence)],
-                ["Model", `${verdict.model_name} ${verdict.model_version}`],
-              ]}
-            />
-          ) : (
-            <p className="muted">
-              Not classified. Classification runs only when a classifier is configured; it
-              never guesses a label.
-            </p>
-          )}
-        </Card>
-      </div>
-    </div>
-  );
+/**
+ * The tabs this document has: Fields, Tables and Figures carry their count,
+ * and are left out when it is zero - an empty tab is a click that finds
+ * nothing. Kept while selected, so a deep link to one still opens it.
+ * Before the counts are known (an older API), every tab is shown.
+ */
+export function tabsFor(document: DocumentDetail, selected: string): TabItem[] {
+  const counts = document.counts;
+  if (!counts) return TABS;
+  return TABS.flatMap((item) => {
+    const key = COUNTED[item.id];
+    if (!key) return [item];
+    const count = counts[key];
+    if (count === 0 && item.id !== selected) return [];
+    return [{ ...item, count }];
+  });
 }
 
 function EditDialog({
@@ -346,7 +290,13 @@ export default function DocumentDetailPage() {
         description={
           <span className="doc-meta">
             <StatusBadge status={document.status} />
-            <Badge tone="neutral">{TYPE_LABEL[document.document_type]}</Badge>
+            <Badge
+              tone="neutral"
+              icon={document.document_type_source === "auto" ? "sparkles" : undefined}
+              title={typeProvenance(document) ?? undefined}
+            >
+              {TYPE_LABEL[document.document_type]}
+            </Badge>
             {document.department ? (
               <Badge tone="neutral" icon="building">
                 {document.department}
@@ -507,9 +457,16 @@ export default function DocumentDetailPage() {
       ) : null}
 
       <div>
-        <Tabs tabs={TABS} selected={tab} onSelect={selectTab} label="Document sections" />
+        <Tabs
+          tabs={tabsFor(document, tab)}
+          selected={tab}
+          onSelect={selectTab}
+          label="Document sections"
+        />
         <TabPanel id={tab}>
-          {tab === "overview" ? <Overview document={document} /> : null}
+          {tab === "overview" ? (
+            <InsightsOverview document={document} onEditType={() => setEditing(true)} />
+          ) : null}
           {tab === "preview" ? <PreviewPanel document={document} /> : null}
           {tab === "text" ? (
             <ContentPanel

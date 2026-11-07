@@ -2,7 +2,12 @@ import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "rea
 
 import { ApiError, api } from "../api/client";
 import { useResource } from "../api/hooks";
-import { DOCUMENT_TYPES, type DocumentDetail, type DocumentType } from "../api/types";
+import {
+  DOCUMENT_TYPES,
+  type CreatedDocument,
+  type DocumentDetail,
+  type DocumentType,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import {
   MAX_BATCH_FILES,
@@ -17,6 +22,7 @@ import { BATCH_ACCEPT_ATTRIBUTE } from "../lib/files";
 import { formatBytes } from "../lib/format";
 import { TYPE_LABEL } from "../lib/labels";
 import { ZipError } from "../lib/zip";
+import { DuplicateNote, DuplicateNotice } from "./DuplicateNotice";
 import { FileTypeIcon, Icon } from "./icons";
 import { Alert, Badge, Button, Dialog, Field, IconButton, errorMessage, plural } from "./ui";
 
@@ -118,9 +124,13 @@ export default function UploadDialog({
   // A zip is opened asynchronously; what it held is dropped if the dialog
   // was closed or reopened meanwhile.
   const generation = useRef(0);
+  // One file, uploaded, that the server says is already stored elsewhere:
+  // the dialog stays open to say so, instead of moving straight on.
+  const [sameFile, setSameFile] = useState<CreatedDocument | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setSameFile(null);
     generation.current += 1;
     stopRef.current = false;
     controller.current = null;
@@ -174,7 +184,8 @@ export default function UploadDialog({
 
   const close = () => {
     if (busy) return;
-    if (created.length) onBatchUploaded(created);
+    if (sameFile) onBatchUploaded([sameFile]);
+    else if (created.length) onBatchUploaded(created);
     else onClose();
   };
 
@@ -352,7 +363,13 @@ export default function UploadDialog({
 
     setProgress(0);
     try {
-      onUploaded(await send(file, file.title.trim(), await file.load(), setProgress));
+      const created = await send(file, file.title.trim(), await file.load(), setProgress);
+      if (created.possible_duplicates?.length) {
+        setProgress(null);
+        setSameFile(created);
+        return;
+      }
+      onUploaded(created);
     } catch (caught) {
       setProgress(null);
       if (caught instanceof ApiError) {
@@ -422,7 +439,18 @@ export default function UploadDialog({
   }
 
   let footer;
-  if (phase === "uploading") {
+  if (sameFile) {
+    footer = (
+      <>
+        <Button variant="ghost" onClick={close}>
+          Close
+        </Button>
+        <Button variant="primary" onClick={() => onUploaded(sameFile)}>
+          Open the new document
+        </Button>
+      </>
+    );
+  } else if (phase === "uploading") {
     footer = (
       <>
         <Button variant="ghost" onClick={stop} disabled={stopping}>
@@ -476,7 +504,16 @@ export default function UploadDialog({
       description="One file, several, or a .zip of them. Each is scanned, read and indexed in the background, then becomes searchable."
       footer={footer}
     >
-      <form id="upload-form" className="stack" onSubmit={submit} noValidate>
+      {sameFile?.possible_duplicates?.length ? (
+        <DuplicateNotice duplicates={sameFile.possible_duplicates} />
+      ) : null}
+      <form
+        id="upload-form"
+        className="stack"
+        onSubmit={submit}
+        noValidate
+        hidden={Boolean(sameFile)}
+      >
         {!tracking ? (
           <div
             className={`dropzone${files.length ? " dropzone-compact" : ""}${dragging ? " dragging" : ""}${fileError ? " invalid" : ""}`}
@@ -727,6 +764,9 @@ function UploadRow({
           {file.from ? `in ${file.from}` : null}
         </span>
         {note ? <span className="upload-row-note">{note}</span> : null}
+        {status?.state === "done" && (status.document as CreatedDocument).possible_duplicates?.length ? (
+          <DuplicateNote duplicates={(status.document as CreatedDocument).possible_duplicates!} />
+        ) : null}
       </span>
       {badge}
       {onRemove ? (

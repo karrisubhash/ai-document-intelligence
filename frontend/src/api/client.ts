@@ -24,6 +24,7 @@ import type {
   Collection,
   Conversation,
   ConversationSummary,
+  CreatedDocument,
   Dashboard,
   Department,
   DocumentContent,
@@ -496,7 +497,7 @@ export const api = {
     form.append("document_type", input.document_type);
     if (input.department) form.append("department", input.department);
     form.append("file", input.file);
-    return uploadWithProgress<DocumentDetail>("/api/v1/documents/", form, onProgress, options);
+    return uploadWithProgress<CreatedDocument>("/api/v1/documents/", form, onProgress, options);
   },
   uploadVersion: (id: number, file: File, onProgress: (fraction: number) => void) => {
     const form = new FormData();

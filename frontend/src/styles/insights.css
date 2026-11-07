@@ -1,0 +1,365 @@
+/*
+ * Document intelligence: the insights-first Overview, the library's
+ * thumbnails and live stage, and the duplicate notice. Built only from the
+ * :root tokens in styles.css, so both themes follow without overrides.
+ */
+
+/* --- Overview layout --------------------------------------------------- */
+
+.insights-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.insights-main,
+.insights-aside {
+  min-width: 0;
+}
+
+@media (max-width: 860px) {
+  .insights-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Brief ------------------------------------------------------------- */
+
+.brief-summary {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.brief-summary li {
+  position: relative;
+  padding-left: 18px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.brief-summary li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.62em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.brief-page {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.span-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--border-strong);
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.span-link:hover {
+  color: var(--accent-strong);
+  border-bottom-color: var(--accent);
+}
+
+.span-link:focus-visible {
+  outline: none;
+  border-radius: var(--radius-xs);
+  box-shadow: var(--ring);
+}
+
+.brief-pending {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.brief-pending-title {
+  margin: 0 0 2px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* --- Key points -------------------------------------------------------- */
+
+.key-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.key-points li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  line-height: 1.55;
+}
+
+.key-points .badge {
+  flex: none;
+  min-width: 92px;
+  justify-content: center;
+}
+
+/* --- Suggested questions ------------------------------------------------ */
+
+.question-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.question-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 7px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.question-chip:hover:not(:disabled) {
+  background: var(--accent-soft-hover);
+}
+
+.question-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.question-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.question-chip .icon {
+  flex: none;
+}
+
+/* --- Key facts and topics ----------------------------------------------- */
+
+.fact-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.fact-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.fact-chips,
+.topic-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact-chip,
+.topic-chip {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.fact-chip:hover,
+.topic-chip:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.fact-chip:focus-visible,
+.topic-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.fact-chip-deadline {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.fact-chip-kind {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--warning);
+}
+
+.fact-chip-text {
+  font-weight: 600;
+}
+
+.fact-chip-label {
+  color: var(--text-2);
+}
+
+.fact-chip-count {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.topic-chip {
+  border-radius: 999px;
+  color: var(--text-2);
+}
+
+/* --- Related documents --------------------------------------------------- */
+
+.related-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.related-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.related-title {
+  flex: 1 1 100%;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.related-title:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.related-meta {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* --- Details ------------------------------------------------------------- */
+
+.type-provenance {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+/* --- Library: thumbnails, text cards and the live stage ------------------- */
+
+.doc-thumb {
+  flex: none;
+  width: 34px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  object-fit: cover;
+  object-position: top;
+}
+
+/* A file with no page image (Word, text): a small page of "lines". */
+.doc-textcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 5px 5px;
+  overflow: hidden;
+}
+
+.doc-textcard span {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+
+.doc-textcard span:nth-child(2) {
+  width: 80%;
+}
+
+.doc-textcard span:nth-child(4) {
+  width: 60%;
+}
+
+.doc-textcard b {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-size: 7.5px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.type-auto {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.live-stage {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* --- Upload: same file already stored ----------------------------------- */
+
+.duplicate-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.duplicate-list li + li {
+  margin-top: 2px;
+}

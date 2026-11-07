@@ -60,7 +60,12 @@ export type Stage =
   | "LAYOUT_ANALYSIS"
   | "CLASSIFICATION"
   | "EXTRACTION"
-  | "INDEXING";
+  | "INDEXING"
+  /** Post-publish enrichment: the brief, related documents, thumbnail. */
+  | "INSIGHTS";
+
+/** Who decided a document's type: the upload default, the detector, a person. */
+export type TypeSource = "default" | "auto" | "user";
 
 export type FieldStatus = "FOUND" | "NOT_FOUND" | "INVALID" | "CONFLICTED";
 
@@ -102,6 +107,8 @@ export interface DocumentVersion {
   mime_type: string;
   checksum?: string;
   uploaded_by: number | null;
+  /** Detail and Versions only: the uploader's name, or "". */
+  uploaded_by_name?: string;
   created_at: string;
 }
 
@@ -109,11 +116,21 @@ export interface DocumentSummary {
   id: number;
   title: string;
   document_type: DocumentType;
+  /** Optional so older fixtures stay valid; the API always sends them. */
+  document_type_source?: TypeSource;
+  /** The detector's confidence when the source is "auto", else null. */
+  type_confidence?: number | null;
   department: string;
   owner: number | null;
   owner_username: string;
   status: DocumentStatus;
+  /** The stage an in-flight run is at; null once it has finished. */
+  current_stage?: Stage | null;
   current_version: DocumentVersion | null;
+  /** Pages of the live extraction pass; null before there is one. */
+  page_count?: number | null;
+  /** Whether GET .../thumbnail/ will answer with an image. */
+  has_thumbnail?: boolean;
   is_archived: boolean;
   archived_at: string | null;
   /** Whether the caller may edit, archive or delete it - a UI hint only. */
@@ -122,7 +139,33 @@ export interface DocumentSummary {
   updated_at: string;
 }
 
-export type DocumentDetail = DocumentSummary;
+export interface DocumentCounts {
+  tables: number;
+  figures: number;
+  /** FOUND fields of the newest extraction under the current type. */
+  fields_found: number;
+}
+
+export interface DocumentDetail extends DocumentSummary {
+  counts?: DocumentCounts;
+  /** Collections the caller can see that hold this document. */
+  collections?: { id: number; name: string }[];
+}
+
+/** A readable document holding the same file, named in an upload's response. */
+export interface DuplicateHint {
+  id: number;
+  title: string;
+  status: DocumentStatus;
+  is_archived: boolean;
+  /** The matching file is that document's current version, not an older one. */
+  is_current_version: boolean;
+}
+
+/** POST /documents/ - the new document, and what it may duplicate. */
+export interface CreatedDocument extends DocumentDetail {
+  possible_duplicates?: DuplicateHint[];
+}
 
 /** POST .../bulk-delete/ - ids sorted into what happened to each. */
 export interface BulkDeleteResult {
@@ -190,8 +233,16 @@ export interface ClassificationResult {
   id: number;
   model_name: string;
   model_version: string;
+  /**
+   * "document_type": the product's own type, from the type detector.
+   * "layout_class": a page-layout label (letter, memo...) - shown as a
+   * layout, never as the document's type.
+   */
+  taxonomy?: "document_type" | "layout_class";
   predicted_label: string;
   confidence: number;
+  /** The classifier declined to name a label; metadata.top_label is its guess. */
+  abstained?: boolean;
   metadata: Record<string, unknown>;
   created_at: string;
 }
