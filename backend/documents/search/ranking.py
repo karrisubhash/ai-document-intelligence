@@ -175,6 +175,7 @@ def rank(
             f"reranker {reranker.name} was unavailable; results are in "
             f"retrieval order, unfiltered"
         )
+        response.notices.append(service.notice("RERANKER_UNAVAILABLE"))
         response.hits = response.hits[:limit]
         return response
 
@@ -213,6 +214,9 @@ def rank(
 
     if below and not above:
         shown = len(response.hits)
+        response.notices.append(
+            service.notice("NO_CLOSE_MATCH", below_floor=len(below), shown=shown)
+        )
         response.notes.append(
             f"no passage is a close enough match: all {len(below)} scored below "
             f"the relevance floor (best {reranked[0].score:.3f}, floor "
