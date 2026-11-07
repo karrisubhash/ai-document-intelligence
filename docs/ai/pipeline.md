@@ -72,7 +72,7 @@ column labels; passages with instruction-like text are marked as data.
 |---|---|---|---|
 | Extractive (default) | *(empty)* | no | Quotes up to three sentences verbatim; cannot hallucinate; will not quote a table header alone or a flagged passage |
 | Claude | `…rag.claude.ClaudeAnswerer` | yes | Anthropic API or Bedrock (`RAG_ANSWERER_BACKEND`) |
-| OpenAI-compatible | `…rag.openai_compat.OpenAICompatibleAnswerer` | yes | Presets for Gemini, Groq, OpenRouter, Cerebras, Ollama; any `/chat/completions` server |
+| OpenAI-compatible | `…rag.openai_compat.OpenAICompatibleAnswerer` | yes | Presets for Gemini, Groq, Cerebras, OpenRouter, Mistral, GitHub Models, Ollama, OpenAI; any `/chat/completions` server. Calls go through the LLM gateway (`rag/gateway.py`): a chain of provider:model links (`RAG_ANSWERER_CHAIN`), a daily budget shared by every process, and a reserve kept for chat - see [llm-providers.md](llm-providers.md) |
 
 Generative answerers share one system prompt with the grounding checker (so the two cannot
 drift) and **fall back to extractive** on any failure (the OpenAI-compatible answerer sends a
@@ -82,10 +82,15 @@ missing key, rate limit, timeout, malformed response — with a note on the answ
 `adi_llm_fallbacks_total{answerer,reason}`. Keys are read from the environment only, never
 from Django settings, and never logged or stored.
 
-**Hosted answerers are tested with stub clients** in `tests_providers.py`, including
-through the full engine to prove a fabricated figure is still rejected. The only real calls
-were made in development, to the Gemini preset on Google's free tier with a developer's own
-key (2026-10-11); no deployment has called one and no evaluation has run through one.
+**Hosted answerers are tested with stub clients** in `tests_providers.py` and
+`tests_llm_gateway.py`, including through the full engine to prove a fabricated figure is
+still rejected. Real calls: the Gemini preset on Google's free tier, measured in development
+on 2026-10-11 and answering on the public deployment since; no other preset has been run
+against its live backend from this repository, and no evaluation has run through one.
+
+Every answer records which model actually wrote it and what the provider reported
+(`Message.metadata.llm`), and the chat payload names it for people (`model_display`) and
+says when the answer was quoted because no model could take it (`degraded`).
 
 ## Grounding
 

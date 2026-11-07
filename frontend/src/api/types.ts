@@ -353,6 +353,17 @@ export interface ChatResponse {
   message_id: number;
   /** "documents": grounded and cited; "general": general knowledge, uncited; "none": abstained. */
   source?: AnswerSource;
+  /** Who wrote it, for people: "Gemini 3.5 Flash", "Quoted from your documents"; "" when no answerer ran. */
+  model_display?: string;
+  /** What ran in a lesser mode for this answer. */
+  degraded?: Degraded;
+}
+
+/** `reason`: "capacity" (comes back by itself) or "unavailable" (a failure). */
+export interface Degraded {
+  answerer: boolean;
+  reranker: boolean;
+  reason: "capacity" | "unavailable" | null;
 }
 
 export type AnswerSource = "documents" | "general" | "none";
@@ -373,6 +384,9 @@ export interface MessageMetadata {
     borrowed_terms: string[];
   };
   timings?: Record<string, number>;
+  /** What the provider said about the answer (documents.rag.engine.llm_metadata). */
+  llm?: Record<string, unknown>;
+  degraded?: Degraded;
 }
 
 export interface ChatMessage {
@@ -391,6 +405,8 @@ export interface ChatMessage {
   duration_ms: number;
   metadata: MessageMetadata;
   created_at: string;
+  model_display?: string;
+  degraded?: Degraded | null;
 }
 
 export interface ConversationSummary {
@@ -591,6 +607,10 @@ export interface SystemStatus {
     answerer: { name: string; version: string; generative: boolean };
     chunking: { strategy: string; version: string; size: number; overlap: number };
     retrieval: Record<string, number | null>;
+    /** The model chain's live state (GET /api/v1/admin/ai/ returns the same). */
+    enabled?: boolean;
+    chain?: AILink[];
+    totals?: AITotals;
   };
   pipeline: Record<string, boolean | number | null>;
   debug: boolean;
@@ -612,4 +632,71 @@ export interface Collection {
   can_manage: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// --- The LLM gateway (System status → AI providers) ----------------------------
+
+export type AILinkState = "ready" | "cooling" | "exhausted_today" | "unconfigured";
+
+/** One provider:model link of the chain. Never a key or a URL; `key_env` is the variable's NAME. */
+export interface AILink {
+  id: string;
+  provider: string;
+  provider_display: string;
+  model: string;
+  label: string;
+  state: AILinkState;
+  cooling_until: string | null;
+  calls_today: number;
+  /** null: no daily limit is enforced for this link. */
+  daily_limit: number | null;
+  resets_at: string;
+  last_error_type: string | null;
+  last_error_status: number | null;
+  last_error_at: string | null;
+  last_success_at: string | null;
+  trains_on_input: boolean;
+  key_env: string;
+}
+
+export interface AITotals {
+  /** null when a usable link has no daily limit. */
+  capacity_left_today: number | null;
+  calls_today: number;
+  chat_reserve: number;
+  resets_at: string | null;
+  generative_available: boolean;
+  resumes_at: string | null;
+  answers_today?: {
+    generative: number;
+    quoted: number;
+    abstained: number;
+    quoted_ai_unavailable: number;
+    since: string;
+  };
+}
+
+export interface AIStatus {
+  checked_at: string;
+  enabled: boolean;
+  chain: AILink[];
+  totals: AITotals;
+}
+
+export interface AIProbeResult {
+  link: string;
+  ok: boolean;
+  status_code: number | null;
+  /** An exception class name, or "unconfigured" when the link has no key. */
+  error_type: string | null;
+  model: string;
+  latency_ms: number;
+  state: AILink;
+}
+
+export interface ChatCapabilities {
+  generative_available: boolean;
+  mode: "writing" | "quoting";
+  resumes_at: string | null;
+  general_knowledge: boolean;
 }

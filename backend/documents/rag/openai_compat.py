@@ -12,21 +12,21 @@ This module is that second answerer, and it is deliberately only one class.
 The OpenAI chat-completions request has become the shape almost every other
 provider also accepts, so the entire provider dimension collapses into
 three strings: a base_url, a model id, and the NAME of the environment
-variable holding the key. Gemini, Groq, OpenRouter, a local Ollama and
-Cerebras all answer the same `client.chat.completions.create(...)` call;
-what differs between them is where it is sent.
+variable holding the key. Gemini, Groq, OpenRouter, Mistral, GitHub Models, a
+local Ollama and Cerebras all answer the same
+`client.chat.completions.create(...)` call; what differs between them is
+where it is sent. Those strings live in `documents.rag.providers` as presets,
+because they are unforgiving - see the Gemini preset for the URL typo that
+reports itself as a missing model - and `RAG_ANSWERER_PROVIDER=groq` is then
+the whole configuration. An explicit RAG_ANSWERER_BASE_URL /
+RAG_ANSWERER_MODEL still overrides a preset, because vLLM, LM Studio and an
+internal gateway all speak this API too and none of them can be enumerated.
 
-WHY PRESETS RATHER THAN THREE FREEFORM SETTINGS. Because those strings are
-unforgiving, and they take their revenge in another component's error
-message. Gemini's compatibility endpoint is served only at
-`/v1beta/openai/` - trailing slash included - and answers 404 on anything
-else, while the SDK reports a 404 as a model problem. So the URL typo gets
-debugged as a model-access problem, in a different console, by someone with
-no reason to suspect the setting they typed. `PRESETS` holds the strings
-that are known to be right, and `RAG_ANSWERER_PROVIDER=groq` is then the
-whole configuration. An explicit RAG_ANSWERER_BASE_URL / RAG_ANSWERER_MODEL
-still overrides a preset, because vLLM, LM Studio and an internal gateway
-all speak this API too and none of them can be enumerated here.
+WHERE THE CALL GOES is the gateway's decision, not this class's
+(`documents.rag.gateway`): a chain of provider:model links, a shared budget
+that every process reads, cooldowns after a 429, and a reserve that keeps the
+last calls of the day for chat. This class builds the grounded request and
+judges the reply; the gateway finds a model to send it to.
 
 THE GUARDRAILS DO NOT MOVE, and they are not restated here. The system
 prompt is IMPORTED from `claude.py` rather than rewritten, because it is
@@ -47,17 +47,18 @@ which turns `choices[0]` into an IndexError several frames from the cause.
 Ollama ignores the API key but the SDK refuses to build a client without
 one. Each of those is handled where it bites, and named in a comment there.
 
-WHICH BACKEND TO POINT IT AT. The binding constraint for this workload is
-prompt SIZE, not request rate: a grounded-citation prompt is the system
-rules plus five to twenty retrieved passages, routinely five to twenty
-thousand tokens. That is what rules out the fast open-weight tiers - Groq's
-free tier caps its gpt-oss models at 8K tokens per minute, so one long RAG
-prompt is the entire minute - and it is why the default is Gemini Flash,
-which takes the prompt in a single request. The second consideration is
-that this is an instruction-following task rather than a knowledge one: a
+WHICH BACKEND TO POINT IT AT. A grounded prompt is the system rules plus at
+most RAG_MAX_PASSAGES passages inside RAG_CONTEXT_BUDGET characters - 8,000
+by default, so about two to three thousand tokens. Every preset takes that
+in one request; what binds on a free tier is how many requests a model will
+take a minute and a day (Gemini: 5 and 20), and on Groq's free gpt-oss tier
+its 8K tokens a minute, two or three questions. The default is Gemini Flash
+because this is an instruction-following task rather than a knowledge one: a
 weaker model here does not produce confidently wrong answers so much as
-answers that miss markers and get downgraded, so the pipeline stays safe
-and becomes useless.
+answers that miss markers and get downgraded, so the pipeline stays safe and
+becomes useless. Other providers are best added BEHIND it in
+RAG_ANSWERER_CHAIN, where they turn "AI writing is at capacity" into more
+answers a day.
 
 DATA USE IS A CONFIGURATION FACT, SO IT IS RECORDED LIKE ONE. Google's
 terms say that on unpaid tiers submitted content and the responses to it
@@ -65,9 +66,10 @@ are used to improve their products, and OpenRouter's free models may be
 trained on by whichever provider served them. For institutional records
 that may be disqualifying, and it is not something anyone discovers by
 reading the code. So the presets carry the flag, the client logs it once on
-construction, and every generated answer's metadata says which way it was
-set. The privacy-clean options both work here unchanged: attach billing to
-the Gemini key, or point at `ollama` and let nothing leave the machine.
+construction, every generated answer's metadata says which way it was set,
+and the System status screen shows it per link. The privacy-clean options
+both work here unchanged: attach billing to the Gemini key, or point at
+`ollama` and let nothing leave the machine.
 
 FAILURE FALLS BACK RATHER THAN 500s, exactly as in `claude.py`. A missing
 package, an unset key, an exhausted free-tier quota, a timeout and a
@@ -76,24 +78,21 @@ all of them degrade to the extractive answerer with `fell_back_from` set. A
 quietly degraded answer that does not say so is worse than a slow one - and
 on a free tier the 429 is not the exceptional case, it is Tuesday.
 
-NOT RUN AGAINST ANY LIVE BACKEND from this repository - there were no keys
-on the machine this was written on, and the `openai` package is not even
-installed in its virtualenv. The request shape is the one every provider's
-own quickstart shows, and the logic is written to be driven by a stubbed
-client the way `tests_claude_answerer.py` drives its sibling, but treat the
-first real call as the test.
+RUN LIVE through Gemini: the public deployment answers with this class, and
+the measurements recorded in the Gemini preset (per-minute and per-day
+quotas, which models answer, time to first token) were taken against it.
+The other presets have NOT been run against their live backends from this
+repository; their request shapes are the ones each provider documents, the
+logic is driven by stubbed clients in the tests, and the first real call to
+each is still the test.
 """
 
 import logging
-import os
-import re
-import threading
-import time
-from dataclasses import dataclass
 
 from django.conf import settings
 
-from . import streaming
+from . import budget, streaming
+from . import gateway as gateway_module
 
 # Shared with the Claude answerer on purpose: this prompt encodes the
 # citation discipline and the figure rule that documents.rag.grounding
@@ -101,160 +100,45 @@ from . import streaming
 # contract plus a bug waiting for the next edit. If it ever has to be
 # copied instead of imported, the two must be changed together.
 from .claude import SYSTEM
+from .gateway import (
+    TOKEN_LIMIT_FIELD,
+    Completion,
+    Gateway,
+    NoChoicesReturned,
+    OpenAICompatibleNotConfigured,
+    Trace,
+    links_from_settings,
+)
 from .llm import ABSTENTION_TEXT, ExtractiveAnswerer, LLMResponse, is_abstention
+
+# Re-exported: where these lived before the gateway existed, and where
+# callers and tests still import them from.
+from .providers import (  # noqa: F401
+    CEREBRAS,
+    DEFAULT_KEY_ENV,
+    DEFAULT_PROVIDER,
+    GEMINI,
+    GITHUB,
+    GROQ,
+    MISTRAL,
+    OLLAMA,
+    OPENAI,
+    OPENROUTER,
+    PRESETS,
+    Preset,
+)
 
 logger = logging.getLogger("adi.llm")
 
-GEMINI = "gemini"
-GROQ = "groq"
-OPENROUTER = "openrouter"
-OLLAMA = "ollama"
-CEREBRAS = "cerebras"
-
-
-@dataclass(frozen=True)
-class Preset:
-    """The three strings that identify a backend, plus its caveats."""
-
-    base_url: str
-    model: str
-    key_env: str
-
-    # For a server that requires a key it does not use. The SDK refuses to
-    # construct a client with an empty one, so "no auth" still needs a
-    # value to send.
-    placeholder_key: str = ""
-
-    # Whether this backend's free tier may use what we send it to train on.
-    # A property of the service rather than of any request, and it belongs
-    # in the answer's metadata either way.
-    trains_on_free_tier: bool = False
-
-    # Tried in order when the configured model is rate-limited, overloaded
-    # or retired. Free tiers meter each model separately, so the next model
-    # usually has its whole quota left.
-    fallback_models: tuple = ()
-
-    # Optional request parameters this backend is KNOWN to accept. Only
-    # per preset, never globally - see _request_kwargs for why.
-    request_extras: tuple = ()
-
-
-@dataclass
-class Completion:
-    """What one chat completion produced, streamed or not."""
-
-    text: str
-    finish_reason: str
-    usage: object = None
-    served_by: str = ""
-    streamed: bool = False
-    # The model the request named: in a fallback chain, the one that answered.
-    model: str = ""
-
-
-PRESETS = {
-    # The default. Flash takes a twenty-thousand-token grounded prompt in
-    # one request, which the fast open-weight free tiers cannot, and it is
-    # a frontier-lab instruction-tuned model - which is what the marker
-    # rule actually asks for.
-    #
-    # 3.5-flash rather than the newest Flash on purpose: Google stopped
-    # publishing per-model free quotas, and the newest line is reported at
-    # a daily request count that an evaluation run exhausts in seconds.
-    # Confirm the real number in AI Studio before sizing a batch job, and
-    # move this with RAG_ANSWERER_MODEL rather than with a code change.
-    #
-    # The trailing "/v1beta/openai/" is load-bearing - see the module
-    # docstring. Do not tidy it to "/v1/".
-    GEMINI: Preset(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        model="gemini-3.5-flash",
-        key_env="GEMINI_API_KEY",
-        trains_on_free_tier=True,
-        # Measured 2026-10-11 on a new free-tier key: 5 requests per minute
-        # PER MODEL. gemini-2.5-flash and -flash-lite answer 404 ("no longer
-        # available to new users"); the -lite 3.x models reject
-        # reasoning_effort "none" with a 400. These two accepted it, first
-        # streamed token 1.5 s and 5.8 s. Re-check before relying on them:
-        # Google rotates this catalogue.
-        # The free tier also caps each model at 20 requests PER DAY (measured
-        # 2026-10-11: GenerateRequestsPerDayPerProjectPerModel-FreeTier), so
-        # every model in the chain adds a day's allowance of its own.
-        # gemini-3.8-flash answered 503 at times that day; a 503 benches a
-        # model for 30 s rather than removing it.
-        # No -lite model belongs here while request_extras sends
-        # reasoning_effort "none": its 400 is not a model-specific failure,
-        # so it ENDS the chain - and since the cooling models sort last, it
-        # was the model tried once the others were rate-limited, so every
-        # question then fell back to quoting passages.
-        fallback_models=(
-            "gemini-3-flash-preview",
-            "gemini-3.7-flash",
-            "gemini-3.8-flash",
-        ),
-        # Gemini 3 Flash "thinks" by default, and its hidden reasoning is
-        # billed against max_tokens: at 200 tokens even "say hello" came
-        # back cut off (finish_reason "length"). "none" also halved the
-        # time to the first streamed word (3.4 s -> 1.6 s). This is
-        # extraction over supplied passages, which needs no deliberation.
-        request_extras=(("reasoning_effort", "none"),),
-    ),
-    # Very fast, and the wrong shape for this workload on the free tier:
-    # gpt-oss is capped at 8K tokens per minute there, which a single long
-    # retrieval prompt spends in one request. Useful for short questions
-    # over a small context, or with a paid tier behind it.
-    #
-    # The llama-3.x ids are deliberately not the default: they are absent
-    # from the free-tier table and one of them is already deprecated in
-    # favour of this model.
-    GROQ: Preset(
-        base_url="https://api.groq.com/openai/v1",
-        model="openai/gpt-oss-120b",
-        key_env="GROQ_API_KEY",
-    ),
-    # A portability check rather than a production path: the same call,
-    # many upstreams. The default is the free-model ROUTER rather than a
-    # pinned ":free" id, because that catalogue rotates every few months
-    # and a hard-coded id becomes a 404 without anyone touching this file.
-    # The router picks per request, so `served_by` in the response
-    # metadata is the only record of what actually answered.
-    OPENROUTER: Preset(
-        base_url="https://openrouter.ai/api/v1",
-        model="openrouter/free",
-        key_env="OPENROUTER_API_KEY",
-        trains_on_free_tier=True,
-    ),
-    # The privacy answer: nothing leaves the machine, no key, no quota, at
-    # the cost of local hardware and a weaker model than Gemini Flash. The
-    # ":20b" is part of the model id, not a tier marker - it looks like
-    # OpenRouter's ":free" suffix and has nothing to do with it, so do not
-    # write suffix-parsing that spans the two.
-    #
-    # The hostname has no dot in it, which some HTTP middleware treats as
-    # a typo and some upgrades to HTTPS. Neither is correct here.
-    OLLAMA: Preset(
-        base_url="http://localhost:11434/v1/",
-        model="gpt-oss:20b",
-        key_env="OLLAMA_API_KEY",
-        placeholder_key="ollama",
-    ),
-    # A roomy per-minute token budget and very few requests per minute.
-    # Set RAG_ANSWERER_RETRIES low here: at a 60 second timeout, the SDK's
-    # own retries are enough to spend the minute's whole request allowance
-    # on one question.
-    CEREBRAS: Preset(
-        base_url="https://api.cerebras.ai/v1",
-        model="gpt-oss-120b",
-        key_env="CEREBRAS_API_KEY",
-    ),
-}
-
-DEFAULT_PROVIDER = GEMINI
-
-# Where the key comes from when a custom base_url is configured with no
-# preset behind it. It names an environment variable; it never holds one.
-DEFAULT_KEY_ENV = "RAG_ANSWERER_API_KEY"
+__all__ = [
+    "Completion",
+    "NoChoicesReturned",
+    "OpenAICompatibleAnswerer",
+    "OpenAICompatibleNotConfigured",
+    "PRESETS",
+    "Preset",
+    "reset_cooldowns",
+]
 
 # This is an extraction task. The answer has to repeat figures from the
 # passages exactly and cite them, and sampling variety buys nothing any
@@ -268,207 +152,104 @@ DEFAULT_TEMPERATURE = 0.0
 # backends are not one vendor - the thinnest free models top out at 8,192
 # output tokens, and a request above a server's own ceiling is a 400,
 # which would fall back to extractive for a reason that has nothing to do
-# with the question asked.
+# with the question asked. A preset with a lower ceiling (GitHub Models:
+# 4,000) is clamped to it per link.
 MAX_TOKENS = 4096
 
-# `max_completion_tokens` is the newer first-party spelling, but these
-# compatibility layers were built against `max_tokens` and not all of them
-# accept the new one. Kept deliberately.
-TOKEN_LIMIT_FIELD = "max_tokens"
+GEMINI_HOST = gateway_module.GEMINI_HOST
+GEMINI_PATH = gateway_module.GEMINI_PATH
 
-GEMINI_HOST = "generativelanguage.googleapis.com"
-GEMINI_PATH = "/v1beta/openai/"
+# The bench lengths and the 429 parsing live with the shared budget now.
+DEFAULT_COOLDOWN_SECONDS = budget.DEFAULT_COOLDOWN_SECONDS
+DAILY_COOLDOWN_SECONDS = budget.DAILY_COOLDOWN_SECONDS
+OVERLOAD_COOLDOWN_SECONDS = budget.OVERLOAD_COOLDOWN_SECONDS
+_cooldown_seconds = budget._cooldown_seconds
+_retry_after = budget._retry_after
+_without_credentials = gateway_module.without_credentials
 
 
-class OpenAICompatibleNotConfigured(RuntimeError):
-    """The SDK is missing, or there is no usable base_url, model or key."""
-
-
-class NoChoicesReturned(RuntimeError):
-    """A 200 with no `choices` - a provider failure wearing a success.
-
-    OpenRouter answers some upstream failures with HTTP 200 and a body
-    containing only an `error` object. The SDK does not raise on that, so
-    without this the first symptom is an IndexError inside an answerer,
-    which sends whoever reads the traceback hunting for a bug in our code.
-    """
+def reset_cooldowns() -> None:
+    """For tests: forget every remembered 429, exhaustion mark and count."""
+    budget.reset()
 
 
 class OpenAICompatibleAnswerer:
     """Answers with any OpenAI-compatible model, over the passages
     retrieval already authorized."""
 
-    name = "openai-compatible"
+    name = gateway_module.NAME
     generative = True
 
     def __init__(self):
-        named = (getattr(settings, "RAG_ANSWERER_PROVIDER", "") or "").strip().lower()
-        base_url = (getattr(settings, "RAG_ANSWERER_BASE_URL", "") or "").strip()
+        # Refuses an unknown provider or a custom endpoint with no model
+        # (OpenAICompatibleNotConfigured), exactly as before chains: a typo
+        # must not send documents to a service nobody chose.
+        self.gateway = Gateway(links_from_settings())
+        primary = self.gateway.primary
 
-        # A base URL with no provider name is an endpoint with no preset.
-        # Defaulting the name to Gemini there handed the custom endpoint
-        # Gemini's key variable (so GEMINI_API_KEY, if exported, was sent to
-        # it as the bearer token), Gemini's "trains on free-tier input" flag
-        # and a "gemini/..." version string.
-        if base_url and not named:
-            self.provider = "custom"
-            preset = None
-        else:
-            self.provider = named or DEFAULT_PROVIDER
-            preset = PRESETS.get(self.provider)
-
-        model = (getattr(settings, "RAG_ANSWERER_MODEL", "") or "").strip()
-        key_env = (getattr(settings, "RAG_ANSWERER_KEY_ENV", "") or "").strip()
-
-        if preset is None and not base_url:
-            # Refused rather than guessed at. A typo'd provider name
-            # falling back to the default would send institutional
-            # documents to a service nobody chose, and would do it
-            # silently.
-            raise OpenAICompatibleNotConfigured(
-                f"Unknown RAG_ANSWERER_PROVIDER {self.provider!r}. Use one of "
-                f"{', '.join(sorted(PRESETS))}, or set RAG_ANSWERER_BASE_URL "
-                "and RAG_ANSWERER_MODEL for a server not listed here."
-            )
-
-        self.base_url = base_url or preset.base_url
-        self.model = model or (preset.model if preset else "")
-
-        if not self.model:
-            raise OpenAICompatibleNotConfigured(
-                "RAG_ANSWERER_BASE_URL is set but RAG_ANSWERER_MODEL is not. "
-                "A custom endpoint has no default model to fall back to."
-            )
-
-        # The NAME of the variable, never its contents. See _api_key.
-        self.key_env = key_env or (preset.key_env if preset else DEFAULT_KEY_ENV)
-        self._placeholder_key = preset.placeholder_key if preset else ""
-
-        # A custom endpoint is assumed not to train on what it is sent -
-        # it is usually someone's own server - but an operator pointing at
-        # a third party can say otherwise rather than having the answer
-        # metadata claim something untrue.
-        self.trains_on_free_tier = bool(
-            getattr(settings, "RAG_ANSWERER_PROVIDER_TRAINS_ON_INPUT", False)
-        ) or bool(preset and preset.trains_on_free_tier)
+        # The first link, under the names this class has always had.
+        self.provider = primary.provider
+        self.base_url = primary.base_url
+        self.model = primary.model
+        self.key_env = primary.key_env
+        self._placeholder_key = primary.placeholder_key
+        self.trains_on_free_tier = primary.trains_on_input
+        self.request_extras = dict(primary.request_extras)
+        # The provider is part of the version, not decoration: the same
+        # model id is served by more than one of these backends, at
+        # different quantisations and different context limits, and two
+        # answers recorded under one version string are not comparable.
+        # An answer records version_for() its completion instead, which names
+        # the link that actually answered.
+        self.version = primary.version
+        # Every link after the first, in the order they are tried.
+        self.fallback_models = tuple(link.model for link in self.gateway.links[1:])
 
         temperature = getattr(settings, "RAG_ANSWERER_TEMPERATURE", None)
         self.temperature = (
             DEFAULT_TEMPERATURE if temperature in (None, "") else float(temperature)
         )
 
-        # The provider is part of the version, not decoration: the same
-        # model id is served by more than one of these backends, at
-        # different quantisations and different context limits, and two
-        # answers recorded under one version string are not comparable.
-        # An answer records version_for() its completion instead, which names
-        # the fallback model when one answered.
-        self.version = f"{self.provider}/{self.model}"
-
-        # RAG_ANSWERER_FALLBACK_MODELS overrides the preset's chain; "none"
-        # turns it off. A chain only applies to the preset's own default
-        # model: an operator who pinned RAG_ANSWERER_MODEL chose that model.
-        configured = (
-            getattr(settings, "RAG_ANSWERER_FALLBACK_MODELS", "") or ""
-        ).strip()
-        if configured.lower() == "none":
-            chain = ()
-        elif configured:
-            chain = tuple(m.strip() for m in configured.split(",") if m.strip())
-        else:
-            chain = preset.fallback_models if (preset and not model) else ()
-        self.fallback_models = tuple(m for m in chain if m != self.model)
-
-        self.request_extras = dict(preset.request_extras) if preset else {}
-        effort = (getattr(settings, "RAG_ANSWERER_REASONING_EFFORT", "") or "").strip()
-        if effort.lower() == "default":
-            self.request_extras.pop("reasoning_effort", None)
-        elif effort:
-            self.request_extras["reasoning_effort"] = effort
-
-        _warn_if_base_url_looks_wrong(self.base_url)
-
         # The extractive answerer is the fallback path, not a second
         # configuration to maintain: it needs nothing to work.
         self._fallback = ExtractiveAnswerer()
-        self._client = None
 
     # --- client ----------------------------------------------------------
 
+    @property
+    def _client(self):
+        """A client injected for every link - how tests drive this class."""
+        return self.gateway.client_override
+
+    @_client.setter
+    def _client(self, client):
+        self.gateway.client_override = client
+
     def _api_key(self) -> str:
-        """The key, from the environment and nowhere else.
-
-        Never read from Django settings, never logged, and never placed in
-        response metadata. Settings get dumped whole by `diffsettings` and
-        by more than one debug page; metadata is stored on the answer and
-        rendered back over the API. A key that lives only in os.environ
-        cannot leak through either of those.
-        """
-        key = os.environ.get(self.key_env, "").strip()
-        if key:
-            return key
-
-        if self._placeholder_key:
-            # Ollama documents its key as "required but ignored", and the
-            # SDK refuses to construct a client without one. The literal
-            # placeholder is the documented way through, not a workaround.
-            return self._placeholder_key
-
-        raise OpenAICompatibleNotConfigured(
-            f"No API key for provider {self.provider!r}. Set {self.key_env} in "
-            "the environment - it is read from there only, never from Django "
-            "settings."
-        )
+        """The first link's key, from the environment and nowhere else
+        (see gateway.Link.api_key)."""
+        return self.gateway.primary.api_key()
 
     def _get_client(self):
-        if self._client is not None:
-            return self._client
+        """Build every configured link's client; return the first.
 
-        # Our own configuration is checked BEFORE the dependency, for the
-        # reason the Claude answerer gives: both can be missing at once,
-        # and "install the SDK" is the less useful of the two messages
-        # when the real problem is a key nobody exported.
-        api_key = self._api_key()
-
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise OpenAICompatibleNotConfigured(
-                "The openai SDK is not installed. "
-                "pip install -r backend/requirements-llm.txt"
-            ) from exc
-
-        timeout = float(getattr(settings, "RAG_ANSWERER_TIMEOUT", 60.0) or 60.0)
-        retries = int(getattr(settings, "RAG_ANSWERER_RETRIES", 2) or 0)
-
-        if self.trains_on_free_tier:
-            # Once per client, at warning level, because the people who
-            # need to see this read logs rather than this module - and
-            # because it is a property of the deployment, not of any one
-            # question. Every answer carries the same fact in its metadata.
-            logger.warning(
-                "llm.provider_may_train_on_content",
-                extra={
-                    "provider": self.provider,
-                    "model": self.model,
-                    "reason": "this backend's free tier may use submitted "
-                    "content and responses to improve its products; use a "
-                    "paid tier, or the local ollama preset, for documents "
-                    "that must not be used that way",
-                },
-            )
-
-        # base_url and api_key are ALWAYS passed explicitly. Omitted, the
-        # SDK reads OPENAI_BASE_URL and OPENAI_API_KEY from the
-        # environment, so one stale line in a compose file would redirect
-        # every question to a different company with no error anywhere.
-        self._client = OpenAI(
-            base_url=self.base_url,
-            api_key=api_key,
-            timeout=timeout,
-            max_retries=retries,
-        )
-        return self._client
+        Called at worker start-up (documents.processing.warmup) so the SDK
+        import and client construction do not land on the first question.
+        Building a client sends no request.
+        """
+        first, error = None, None
+        for link in self.gateway.links:
+            if not self.gateway.configured(link):
+                continue
+            try:
+                client = self.gateway.client_for(link)
+            except OpenAICompatibleNotConfigured as exc:
+                error = error or exc
+                continue
+            first = first or client
+        if first is None:
+            raise error or self.gateway._not_configured()
+        return first
 
     # --- answering -------------------------------------------------------
 
@@ -481,8 +262,11 @@ class OpenAICompatibleAnswerer:
                 question=question, context=context, prompt=prompt
             )
 
+        trace = Trace()
         try:
-            return self._generate(question=question, context=context, prompt=prompt)
+            return self._generate(
+                question=question, context=context, prompt=prompt, trace=trace
+            )
         except Exception as exc:
             # Deliberately broad at the gateway boundary: a missing
             # package, a revoked key, an exhausted free-tier quota, a
@@ -493,12 +277,16 @@ class OpenAICompatibleAnswerer:
             # A stream that broke part-way is withdrawn: what it showed was
             # never checked, and the quoted answer replaces it.
             streaming.reset()
+            capacity = gateway_module.is_capacity(exc)
+            retry_at = getattr(exc, "retry_at", None)
             logger.warning(
                 "llm.fallback",
                 extra={
                     "provider": self.provider,
                     "model": self.model,
                     "error": type(exc).__name__,
+                    "capacity": capacity,
+                    "tried": trace.tried,
                     # The provider's own "come back in N seconds", when it
                     # sent one. On a free tier the 429 is the likeliest
                     # single cause of a fallback, and this is what
@@ -514,10 +302,27 @@ class OpenAICompatibleAnswerer:
                 "fell_back_from": self.name,
                 "fallback_provider": self.provider,
                 "fallback_reason": type(exc).__name__,
+                # "capacity" comes back by itself (a cooldown ends, the
+                # quota day rolls over); "error" needs someone to look.
+                "fallback_kind": "capacity" if capacity else "error",
+                "fallback_retry_at": retry_at.isoformat() if retry_at else None,
+                "attempts": list(trace.attempts),
             }
+            response.fell_back_from = self.version
+            # The question and its passages reached every link tried, even
+            # the ones that then failed.
+            response.may_train_on_input = any(
+                link.trains_on_input
+                for link in self.gateway.links
+                if link.version in trace.tried
+            )
             return response
 
     def _request_kwargs(self, prompt: str) -> dict:
+        """The request for the first link; see _request_for."""
+        return self._request_for(self.gateway.primary, prompt)
+
+    def _request_for(self, link, prompt: str) -> dict:
         """The smallest request every one of these backends accepts.
 
         Nothing optional is sent. RAG_ANSWERER_EFFORT is not forwarded,
@@ -529,7 +334,7 @@ class OpenAICompatibleAnswerer:
         not offering the knob.
         """
         return {
-            "model": self.model,
+            "model": link.model,
             "messages": [
                 {"role": "system", "content": SYSTEM},
                 # Passage markers live in the rendered prompt text, never
@@ -539,16 +344,26 @@ class OpenAICompatibleAnswerer:
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
-            TOKEN_LIMIT_FIELD: MAX_TOKENS,
-            # Preset-specific parameters known to be accepted (Preset).
-            **self.request_extras,
+            TOKEN_LIMIT_FIELD: link.token_cap(MAX_TOKENS),
+            # Preset-specific parameters known to be accepted (Preset), for
+            # THIS link's provider only.
+            **dict(link.request_extras),
         }
 
-    def _generate(self, *, question: str, context, prompt: str) -> LLMResponse:
-        # No `from openai import OpenAI` here: _get_client owns that, so a
+    def _generate(
+        self, *, question: str, context, prompt: str, trace: Trace | None = None
+    ) -> LLMResponse:
+        # No `from openai import OpenAI` here: the gateway owns that, so a
         # caller that injected its own client - which the tests do - never
         # needs the package installed at all.
-        result = self.complete(self._request_kwargs(prompt))
+        result = self.gateway.run(
+            lambda link: self._request_for(link, prompt),
+            purpose=gateway_module.current_purpose(),
+            on_delta=streaming.emit if streaming.active() else None,
+            on_reset=streaming.reset,
+            trace=trace,
+        )
+        link = result.link
         finish_reason = result.finish_reason
 
         # Read defensively. Every backend in PRESETS reports usage on a
@@ -557,8 +372,6 @@ class OpenAICompatibleAnswerer:
         # number into the cost reporting, which is worse than a zero that
         # is visibly a zero. A streamed completion reports it only if the
         # server volunteers it in the last chunk.
-        usage = result.usage
-
         if finish_reason == "content_filter":
             # Institutional documents are dull, but a disciplinary
             # circular or a safety incident report is exactly the kind of
@@ -566,7 +379,7 @@ class OpenAICompatibleAnswerer:
             # is the honest reply to that; it is not an error.
             logger.warning(
                 "llm.refused",
-                extra={"provider": self.provider, "model": self.model},
+                extra={"provider": link.provider, "model": link.model},
             )
             return self._abstained(
                 prompt,
@@ -587,9 +400,9 @@ class OpenAICompatibleAnswerer:
             logger.warning(
                 "llm.truncated",
                 extra={
-                    "provider": self.provider,
-                    "model": self.model,
-                    "max_tokens": MAX_TOKENS,
+                    "provider": link.provider,
+                    "model": link.model,
+                    "max_tokens": link.token_cap(MAX_TOKENS),
                 },
             )
             return self._abstained(
@@ -605,156 +418,58 @@ class OpenAICompatibleAnswerer:
                 prompt, reason="the model returned no text", completion=result
             )
 
-        metadata = {
-            "provider": self.provider,
-            # Credentials stripped: this dict is stored on the answer and
-            # served back over the API, and an internal gateway's base_url
-            # can carry `user:password@` in it.
-            "base_url": _without_credentials(self.base_url),
-            "model": self.model,
-            "temperature": self.temperature,
-            "finish_reason": finish_reason,
-            # Which model actually served it, which is not always the one
-            # requested: a free-model router picks per request, and some
-            # gateways substitute without saying so anywhere else.
-            "served_by": result.served_by,
-            "streamed": result.streamed,
-            "provider_may_train_on_input": self.trains_on_free_tier,
-        }
-
-        # OpenRouter prices every response and reports it on the usage
-        # block. Recorded when present rather than assumed, because no
-        # other backend here sends it.
-        cost = getattr(usage, "cost", None)
-        if cost is not None:
-            metadata["cost"] = cost
-
-        return LLMResponse(
+        response = gateway_module.response_from(
+            result,
             text=text,
-            abstained=is_abstention(text),
-            cited_markers=_markers(text),
-            model_name=self.name,
-            model_version=self.version_for(result),
-            generative=True,
+            name=self.name,
             prompt_characters=len(prompt),
-            completion_characters=len(text),
-            prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-            completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
-            metadata=metadata,
+            metadata={
+                # Credentials stripped: this dict is stored on the answer and
+                # served back over the API, and an internal gateway's base_url
+                # can carry `user:password@` in it.
+                "base_url": _without_credentials(link.base_url),
+                "temperature": self.temperature,
+                "purpose": gateway_module.current_purpose(),
+            },
         )
+        response.abstained = is_abstention(text)
+        response.cited_markers = _markers(text)
+        return response
 
-    def version_for(self, completion: "Completion") -> str:
+    def version_for(self, completion: Completion) -> str:
         """The version to record for an answer this completion produced."""
+        if completion.link is not None:
+            return completion.link.version
         return f"{self.provider}/{completion.model or self.model}"
 
-    def complete(self, request: dict) -> "Completion":
+    def complete(self, request: dict) -> Completion:
         """One chat completion, streamed through documents.rag.streaming
         when a sink is installed and returned whole either way.
 
-        `request` is a full chat.completions.create() payload. Shared by the
-        grounded answer and the general-knowledge reply (documents.rag.general)
-        so both get the same client, key handling and quirk handling.
+        `request` is a full chat.completions.create() payload. Naming the
+        first link's model sends it down the whole chain, each link getting
+        its own model and request extras; naming any other model sends it
+        to that model alone, on the first link's endpoint. New code calls
+        `self.gateway.complete(messages, purpose=...)` instead, which builds
+        the request per link itself.
         """
-        # No `from openai import OpenAI` here: _get_client owns that, so a
-        # caller that injected its own client - which the tests do - never
-        # needs the package installed at all.
-        client = self._get_client()
-        models = [request["model"]]
-        if request["model"] == self.model:
-            models += list(self.fallback_models)
-            # A model that answered 429 a moment ago will answer 429 again:
-            # try it last, not first. Never skipped outright - if every model
-            # is cooling, the original order stands.
-            models.sort(
-                key=lambda m: _cooling_until(self.base_url, m) > time.monotonic()
+        options = {
+            "purpose": gateway_module.current_purpose(),
+            "on_delta": streaming.emit if streaming.active() else None,
+            "on_reset": streaming.reset,
+        }
+        if request.get("model") == self.model:
+            return self.gateway.run(
+                lambda link: self.gateway.adapt(request, link), **options
             )
-
-        for index, model in enumerate(models):
-            last = index == len(models) - 1
-            try:
-                # The SDK's own retries honour Retry-After - 14 s on a
-                # free-tier 429 - so they are kept only for the LAST model.
-                # Before that, the next model is the faster retry.
-                attempt_client = client if last else _without_retries(client)
-                return self._complete_once(attempt_client, {**request, "model": model})
-            except Exception as exc:
-                if _status(exc) in (429, 503):
-                    _cool(self.base_url, model, exc)
-                if last or _status(exc) not in MODEL_SPECIFIC_FAILURES:
-                    raise
-                logger.warning(
-                    "llm.model_unavailable",
-                    extra={
-                        "provider": self.provider,
-                        "model": model,
-                        "status": _status(exc),
-                        "next_model": models[index + 1],
-                        "retry_after": _retry_after(exc),
-                    },
-                )
-
-    def _complete_once(self, client, request: dict) -> "Completion":
-        if not streaming.active():
-            completion = client.chat.completions.create(**request)
-            choices = getattr(completion, "choices", None)
-            if not choices:
-                self._no_choices(completion)
-            choice = choices[0]
-            message = getattr(choice, "message", None)
-            return Completion(
-                # Typed `str | None`, and genuinely None when the model
-                # emitted only tool calls or was cut off by a filter.
-                text=getattr(message, "content", None) or "",
-                finish_reason=getattr(choice, "finish_reason", "") or "",
-                usage=getattr(completion, "usage", None),
-                served_by=getattr(completion, "model", "") or request["model"],
-                model=request["model"],
-            )
-
-        # Streamed. No `stream_options`: some of these servers 400 on a
-        # parameter they do not implement (see _request_kwargs), and usage
-        # is worth less than an answer that arrives at all.
-        parts, finish_reason, usage, served_by, last = [], "", None, "", None
-        for chunk in client.chat.completions.create(**request, stream=True):
-            last = chunk
-            usage = getattr(chunk, "usage", None) or usage
-            served_by = getattr(chunk, "model", "") or served_by
-            choices = getattr(chunk, "choices", None)
-            if not choices:
-                continue
-            delta = getattr(choices[0], "delta", None)
-            piece = getattr(delta, "content", None) or ""
-            if piece:
-                parts.append(piece)
-                streaming.emit(piece)
-            finish_reason = getattr(choices[0], "finish_reason", None) or finish_reason
-        if not parts and not finish_reason:
-            # The streamed form of OpenRouter's HTTP 200 with an `error`
-            # body and no choices.
-            self._no_choices(last)
-        return Completion(
-            text="".join(parts),
-            finish_reason=finish_reason,
-            usage=usage,
-            served_by=served_by or request["model"],
-            streamed=True,
-            model=request["model"],
-        )
-
-    def _no_choices(self, completion):
-        error = _embedded_error(completion)
-        logger.warning(
-            "llm.no_choices",
-            extra={"provider": self.provider, "error": error},
-        )
-        raise NoChoicesReturned(
-            f"{self.provider} returned a success with no choices ({error})"
-        )
+        pinned = gateway_module.pinned(self.gateway.primary, request["model"])
+        return self.gateway.run(lambda link: dict(request), pin=pinned, **options)
 
     def _abstained(
-        self, prompt: str, *, reason: str, completion: "Completion"
+        self, prompt: str, *, reason: str, completion: Completion
     ) -> LLMResponse:
         usage = completion.usage
+        link = completion.link
         return LLMResponse(
             text=ABSTENTION_TEXT,
             abstained=True,
@@ -769,147 +484,17 @@ class OpenAICompatibleAnswerer:
             # counted only on success, and a zero here would undo that.
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            model=completion.model,
+            provider=link.provider if link else self.provider,
+            finish_reason=completion.finish_reason,
+            fell_back_from=completion.fell_back_from,
+            may_train_on_input=bool(link and link.trains_on_input),
             metadata={
                 "reason": reason,
-                "provider": self.provider,
-                "model": self.model,
+                "provider": link.provider if link else self.provider,
+                "model": completion.model or self.model,
             },
         )
-
-
-# Failures of one MODEL rather than of the account or the request: rate
-# limited (429), retired (404), overloaded (503) or erroring (500/502/504).
-# A bad key (401/403) or a bad request (400) fails every model alike.
-MODEL_SPECIFIC_FAILURES = frozenset({404, 429, 500, 502, 503, 504})
-
-
-# Rate-limited models, remembered across calls and threads: (base_url,
-# model) -> time.monotonic() deadline. Without it every question paid a
-# doomed 429 on the throttled model before switching (seen live: 3 of 7
-# calls in one session).
-_cooling = {}
-_cooling_lock = threading.Lock()
-DEFAULT_COOLDOWN_SECONDS = 60.0
-DAILY_COOLDOWN_SECONDS = 3600.0
-OVERLOAD_COOLDOWN_SECONDS = 30.0
-_RETRY_IN = re.compile(r"retry in ([0-9]+(?:\.[0-9]+)?)\s*s", re.I)
-
-
-def _cooldown_seconds(exc) -> float:
-    """How long a 429 should bench its model. Never raises.
-
-    Gemini sends no Retry-After header; it puts "Please retry in 14.5s" and
-    a quota id in the body. A per-DAY quota will not lift in a minute.
-    """
-    try:
-        if _status(exc) == 503:
-            # Overloaded, not rate-limited: usually seconds, so a short bench.
-            return OVERLOAD_COOLDOWN_SECONDS
-        text = str(exc)
-        if "PerDay" in text:
-            return DAILY_COOLDOWN_SECONDS
-        match = _RETRY_IN.search(text)
-        if match:
-            return max(1.0, float(match.group(1)))
-        header = _retry_after(exc)
-        if header:
-            # Seconds, or an HTTP date (RFC 9110) - which float() refuses.
-            return max(1.0, float(header))
-    except (TypeError, ValueError):
-        pass
-    return DEFAULT_COOLDOWN_SECONDS
-
-
-def _cool(base_url, model, exc) -> None:
-    with _cooling_lock:
-        _cooling[(base_url, model)] = time.monotonic() + _cooldown_seconds(exc)
-
-
-def _cooling_until(base_url, model) -> float:
-    with _cooling_lock:
-        return _cooling.get((base_url, model), 0.0)
-
-
-def reset_cooldowns() -> None:
-    """For tests: forget every remembered 429."""
-    with _cooling_lock:
-        _cooling.clear()
-
-
-def _status(exc) -> int | None:
-    return getattr(exc, "status_code", None)
-
-
-def _without_retries(client):
-    """The same client with SDK retries off; stubs without with_options pass through."""
-    with_options = getattr(client, "with_options", None)
-    return with_options(max_retries=0) if with_options else client
-
-
-def _warn_if_base_url_looks_wrong(base_url: str) -> None:
-    """Name the one base_url mistake that reports itself as another fault.
-
-    Gemini's compatibility endpoint is served only at `/v1beta/openai/`,
-    trailing slash included. Every other path on that host answers 404,
-    and the SDK surfaces a 404 as a model that does not exist - so the URL
-    typo gets investigated as a model-access problem, in a console that
-    will say the access is fine.
-    """
-    if GEMINI_HOST not in base_url or base_url.endswith(GEMINI_PATH):
-        return
-
-    logger.warning(
-        "llm.suspect_base_url",
-        extra={
-            # Stripped for the reason the answer metadata strips it: an
-            # internal gateway's URL can carry `user:password@`, and the
-            # formatter does not redact a field with this name.
-            "base_url": _without_credentials(base_url),
-            "expected_suffix": GEMINI_PATH,
-            "reason": "Gemini's OpenAI-compatible API answers 404 on any "
-            "other path, and a 404 reads as a model that does not exist",
-        },
-    )
-
-
-def _without_credentials(url: str) -> str:
-    """The URL with any `user:password@` userinfo removed."""
-    from urllib.parse import urlsplit, urlunsplit
-
-    parts = urlsplit(url)
-    if "@" not in parts.netloc:
-        return url
-    host = parts.netloc.rsplit("@", 1)[1]
-    return urlunsplit(parts._replace(netloc=host))
-
-
-def _embedded_error(completion) -> str:
-    """The error type from a 200 that carried an error instead of an answer.
-
-    The normalized type or code only, never the upstream's free-text
-    message: that message is written by whichever provider a router
-    happened to pick, differs between them for the same fault, and is
-    attacker-adjacent text to be logging verbatim. The type is the part
-    that is actionable.
-    """
-    extra = getattr(completion, "model_extra", None) or {}
-    error = extra.get("error") if isinstance(extra, dict) else None
-    if not isinstance(error, dict):
-        return "no error object in the body either"
-
-    metadata = error.get("metadata")
-    kind = metadata.get("error_type") if isinstance(metadata, dict) else None
-    return str(kind or error.get("code") or "unspecified")
-
-
-def _retry_after(exc) -> str:
-    """The provider's Retry-After header, when the failure carried one."""
-    response = getattr(exc, "response", None)
-    headers = getattr(response, "headers", None)
-    getter = getattr(headers, "get", None)
-    if getter is None:
-        return ""
-    return str(getter("retry-after", "") or "")
 
 
 def _markers(text: str) -> tuple:

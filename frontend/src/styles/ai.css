@@ -1,0 +1,189 @@
+/* System status → AI providers (pages/admin/AIProvidersCard.tsx). Tokens only,
+   so both themes follow styles.css. */
+
+.ai-today {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.ai-links {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.ai-link {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) 160px auto;
+  gap: 4px 14px;
+  align-items: start;
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+.ai-link + .ai-link {
+  border-top: 1px solid var(--border);
+}
+
+.ai-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--success-mark);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+
+.ai-link-cooling .ai-dot {
+  background: var(--warning-mark);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+
+.ai-link-exhausted_today .ai-dot {
+  background: var(--danger-mark);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+.ai-link-unconfigured .ai-dot {
+  background: var(--border-strong);
+  box-shadow: 0 0 0 3px var(--muted-soft);
+}
+
+.ai-link-unconfigured .ai-link-name {
+  color: var(--text-2);
+}
+
+.ai-link-main {
+  min-width: 0;
+}
+
+.ai-link-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.ai-link-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ai-link-id {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.ai-link-detail,
+.ai-link-error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.ai-link-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--warning);
+}
+
+.ai-link-usage {
+  display: grid;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.ai-link-usage .meter {
+  width: 100%;
+}
+
+.ai-link-exhausted_today .meter-fill {
+  background: var(--danger-mark);
+}
+
+.ai-link-count {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-link-test {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.ai-probe {
+  max-width: 220px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.ai-probe-ok {
+  color: var(--success);
+}
+
+.ai-probe-failed {
+  color: var(--danger);
+}
+
+.ai-empty,
+.ai-footnote {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.ai-footnote {
+  margin-top: 10px;
+}
+
+@media (max-width: 860px) {
+  .ai-link {
+    grid-template-columns: 12px minmax(0, 1fr) auto;
+  }
+
+  .ai-link-usage {
+    grid-column: 2 / 3;
+  }
+
+  .ai-link-test {
+    grid-column: 3 / 4;
+    grid-row: 1 / 2;
+  }
+}
+
+@media (max-width: 560px) {
+  .ai-link {
+    grid-template-columns: 12px minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .ai-link-usage,
+  .ai-link-test {
+    grid-column: 2 / 3;
+    grid-row: auto;
+  }
+
+  .ai-link-test {
+    justify-items: start;
+  }
+
+  .ai-probe {
+    text-align: left;
+  }
+}

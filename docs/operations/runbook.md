@@ -119,6 +119,22 @@ python manage.py warm_models      # download (first time) and load the configure
 
 Run after a deploy that changes a model, then set `HF_HUB_OFFLINE=1`.
 
+## AI providers
+
+**System status → AI providers** shows every model in the chain: Ready, Cooling down (rate
+limited; tried again after the time shown), Used up today (resets at the time shown) or No
+API key. The summary line is the calls left today; when it reaches zero, answers are
+quoted from the documents (still cited) until the earliest reset.
+
+- *Everything is "Used up today" by mid-afternoon:* add a second provider's free key and
+  name it in `RAG_ANSWERER_CHAIN` ([ai/llm-providers.md](../ai/llm-providers.md)).
+- *A link shows errors:* press **Test** - one request, counted against its allowance. A
+  401/403 is the key; a 404 the model id (providers retire models); a 429 the quota.
+- *Answers stopped being written but the panel says Ready:* check the `adi.llm` log for
+  `llm.fallback` and `llm.model_unavailable`, which name the error class per link.
+- *`llm.budget_cache_unavailable` in the log:* Redis is unreachable; answers continue on
+  per-process state until it returns.
+
 ## Backups and restore
 
 ```bash

@@ -141,6 +141,44 @@ class RagAnswer:
     # one that ran.
     reranker_degraded: bool = False
     answerer_fell_back: bool = False
+    # What the model's provider told us about this answer (llm_metadata):
+    # which provider and model wrote it, what it fell back from, tokens,
+    # finish reason, whether what was sent may be trained on. Empty when no
+    # answerer ran, or the configured one never calls a model.
+    llm: dict = field(default_factory=dict)
+
+
+def llm_metadata(response) -> dict:
+    """The provider facts on one answerer response, as stored on a message.
+
+    Numbers, model ids and exception class names only - never the provider's
+    error text, which can echo what was sent.
+    """
+    meta = response.metadata or {}
+    fell_back = bool(meta.get("fell_back_from"))
+    if not (response.generative or fell_back):
+        return {}
+    details = {
+        "provider": getattr(response, "provider", "") or "",
+        "model": getattr(response, "model", "") or "",
+        "served_by": meta.get("served_by", ""),
+        "fell_back_from": getattr(response, "fell_back_from", "") or "",
+        "finish_reason": getattr(response, "finish_reason", "") or "",
+        "prompt_tokens": response.prompt_tokens,
+        "completion_tokens": response.completion_tokens,
+        "may_train_on_input": bool(getattr(response, "may_train_on_input", False)),
+        "purpose": meta.get("purpose", ""),
+    }
+    if "cost" in meta:
+        details["cost"] = meta["cost"]
+    if fell_back:
+        # The passages were quoted because no model answered: why, and
+        # whether it comes back by itself ("capacity") or needs someone.
+        details["fallback_reason"] = meta.get("fallback_reason", "")
+        details["fallback_kind"] = meta.get("fallback_kind", "error")
+        details["fallback_retry_at"] = meta.get("fallback_retry_at")
+        details["attempts"] = list(meta.get("attempts") or [])
+    return details
 
 
 @functools.cache
@@ -488,6 +526,7 @@ def _ask(
         "reranker_degraded": degraded,
         "answerer_fell_back": bool(fell_back_from),
         "timings": timings,
+        "llm": llm_metadata(response),
     }
 
     if response.abstained:

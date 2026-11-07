@@ -18,6 +18,7 @@ design rationale; these pages are the working reference.
 | | [operations/performance.md](operations/performance.md) | Measured ingestion throughput, latency, query plans and resource use at 3,000 documents |
 | Security | [security/model.md](security/model.md) | Identity, authorization, sessions, uploads, AI security, audit, known gaps |
 | AI | [ai/pipeline.md](ai/pipeline.md) | Retrieval, reranking, answering, grounding, providers, follow-ups |
+| | [ai/llm-providers.md](ai/llm-providers.md) | The model chain, free API keys per provider, daily limits, purposes and the chat reserve |
 | Evaluation | [evaluation/README.md](evaluation/README.md) | Datasets, metrics, the regression gate, measured results |
 | Data | [data/datasets.md](data/datasets.md) | Provenance and intended use of every dataset in the repository |
 | Troubleshooting | [troubleshooting/common-issues.md](troubleshooting/common-issues.md) | Symptoms, causes and fixes seen in practice |
