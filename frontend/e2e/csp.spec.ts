@@ -34,6 +34,20 @@ test("no screen triggers a Content-Security-Policy violation", async ({ page }) 
   const policy = response?.headers()["content-security-policy"] ?? "";
   test.skip(!policy, "this stack does not send a Content-Security-Policy");
 
+  // The signed-out screens first - "/" (the landing page: its animated
+  // preview, inline SVG and icons) is already loaded - since signed in,
+  // /login and /signup only redirect home.
+  await page.waitForLoadState("networkidle");
+  for (const path of ["/login", "/signup", "/favicon.svg", "/manifest.webmanifest"]) {
+    const screen = await page.goto(path);
+    expect(screen?.status(), `${path} is not served`).toBe(200);
+    if (!path.includes(".")) {
+      expect(screen?.headers()["content-security-policy"], `${path} did not return the app shell`).toBe(policy);
+      await page.waitForLoadState("networkidle");
+    }
+  }
+  await page.goto("/");
+
   await page.getByLabel("Username").fill("admin");
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();

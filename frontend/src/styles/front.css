@@ -228,7 +228,9 @@
   text-decoration: none;
 }
 
-.front-cta-signin {
+/* Two classes: styles.css loads after this file, and its .btn sets display.
+   Beside the form on a wide screen, this link would only repeat it. */
+.front-ctas .front-cta-signin {
   display: none;
 }
 
@@ -1137,7 +1139,7 @@
     gap: 32px;
   }
 
-  .front-cta-signin {
+  .front-ctas .front-cta-signin {
     display: inline-flex;
   }
 
