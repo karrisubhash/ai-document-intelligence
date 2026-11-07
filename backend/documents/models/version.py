@@ -62,6 +62,11 @@ class DocumentVersion(models.Model):
                 name="unique_document_version_number",
             )
         ]
+        indexes = [
+            # The exact-duplicate hint on upload looks a new file's SHA-256
+            # up among every stored version.
+            models.Index(fields=["checksum"], name="version_checksum_idx"),
+        ]
 
     def __str__(self):
         return f"{self.document.title} v{self.version_number}"

@@ -15,6 +15,12 @@ from .evaluation import (
 from .events import ProcessingEvent
 from .extraction import ExtractedField, ExtractionResult
 from .figure import DocumentFigure
+from .insight import (
+    DocumentCentroid,
+    DocumentEntity,
+    DocumentInsight,
+    DocumentThumbnail,
+)
 from .processing import ProcessingJob
 from .table import DocumentTable
 from .version import DocumentVersion
@@ -30,6 +36,10 @@ __all__ = [
     "DocumentChunkEmbedding",
     "DocumentTable",
     "DocumentFigure",
+    "DocumentInsight",
+    "DocumentEntity",
+    "DocumentCentroid",
+    "DocumentThumbnail",
     "ExtractionResult",
     "ExtractedField",
     "ProcessingJob",

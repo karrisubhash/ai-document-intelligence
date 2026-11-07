@@ -31,7 +31,7 @@ from django.db import transaction
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
-from .models import DocumentVersion
+from .models import DocumentThumbnail, DocumentVersion
 
 logger = logging.getLogger("adi.storage")
 
@@ -39,7 +39,22 @@ logger = logging.getLogger("adi.storage")
 @receiver(post_delete, sender=DocumentVersion)
 def delete_stored_file(sender, instance, **kwargs):
     """Remove the uploaded artifact once its version row is really gone."""
-    stored = instance.file
+    remove_after_commit(instance.file)
+
+
+@receiver(post_delete, sender=DocumentThumbnail)
+def delete_thumbnail_file(sender, instance, **kwargs):
+    """A thumbnail is a derived picture of the document - it goes with it.
+
+    Left behind, it would be the one rendering of a deleted document still
+    on disk, which is exactly the kind of remainder this module exists to
+    prevent.
+    """
+    remove_after_commit(instance.file)
+
+
+def remove_after_commit(stored) -> None:
+    """Delete a stored file once the surrounding transaction commits."""
     if not stored:
         return
 
