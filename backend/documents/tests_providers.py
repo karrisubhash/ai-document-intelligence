@@ -35,7 +35,7 @@ from documents.processing.embedding.local import (
     LocalEmbeddingProvider,
     LocalEmbeddingUnavailable,
 )
-from documents.rag import engine
+from documents.rag import engine, reranking
 from documents.rag.bedrock_rerank import BedrockReranker
 from documents.rag.claude import SYSTEM
 from documents.rag.llm import ABSTENTION_TEXT, LLMResponse
@@ -797,6 +797,222 @@ class LocalCrossEncoderTests(SimpleTestCase):
         )
         self.assertEqual(len(ranked), 1)
         self.assertIn("reranker_degraded", ranked[0].signals)
+
+    def test_a_passage_retrieved_twice_is_scored_once(self):
+        """The same file uploaded twice retrieves identical chunks side by
+        side. A forward pass is the whole cost of reranking, and the copy's
+        score is already known; it still gets that score and its place."""
+        model = FakeCrossEncoder([0.9, 0.2])
+        ranked = self.reranker(model).rerank(
+            "q",
+            hits(
+                (chunk(1, "fines are two rupees a day"), 0.9),
+                (chunk(2, "borrowing limit"), 0.8),
+                (chunk(3, "fines are two rupees a day "), 0.7),
+            ),
+        )
+
+        self.assertEqual(
+            model.pairs,
+            [("q", "fines are two rupees a day"), ("q", "borrowing limit")],
+        )
+        self.assertEqual([r.chunk.id for r in ranked], [1, 3, 2])
+        self.assertEqual([r.score for r in ranked], [0.9, 0.9, 0.2])
+        self.assertTrue(all(r.signals["scored"] for r in ranked))
+
+
+class ScoringCrossEncoder:
+    """Scores a pair by its passage, and records every pair it was given."""
+
+    def __init__(self, scores):
+        self.scores = scores
+        self.calls = []
+
+    def predict(self, pairs, **kwargs):
+        pairs = list(pairs)
+        self.calls.append(pairs)
+        return FakeEncoded([self.scores[text] for _, text in pairs])
+
+
+# The size is pinned: the class must not depend on what a developer's .env says.
+@override_settings(RAG_RERANKER_LOCAL_CACHE_SIZE=4096)
+class RerankScoreCacheTests(SimpleTestCase):
+    """The forward pass is the whole cost of reranking, and 7 of the 19
+    questions asked on the development stack repeated an earlier one."""
+
+    CANDIDATES = (
+        (chunk(1, "fines are two rupees a day"), 0.9),
+        (chunk(2, "borrowing limit"), 0.8),
+    )
+
+    def reranker(self, model):
+        reranker = LocalCrossEncoderReranker()
+        reranker._model = model
+        return reranker
+
+    def rerank(self, reranker, query, candidates, user=1):
+        with reranking.cache_scope(user):
+            return reranker.rerank(query, hits(*candidates))
+
+    def ranking(self, ranked):
+        return [(r.chunk.id, r.score, r.signals["scored"]) for r in ranked]
+
+    def test_a_question_asked_again_is_not_scored_again(self):
+        model = ScoringCrossEncoder(
+            {"fines are two rupees a day": 0.9, "borrowing limit": 0.2}
+        )
+        reranker = self.reranker(model)
+
+        first = self.rerank(reranker, "library fines", self.CANDIDATES)
+        again = self.rerank(reranker, "library fines", self.CANDIDATES)
+
+        self.assertEqual(len(model.calls), 1)
+        self.assertEqual(self.ranking(again), self.ranking(first))
+
+    def test_only_what_this_question_has_not_seen_is_scored(self):
+        model = ScoringCrossEncoder(
+            {"fines are two rupees a day": 0.9, "borrowing limit": 0.2, "new": 0.5}
+        )
+        reranker = self.reranker(model)
+        self.rerank(reranker, "library fines", self.CANDIDATES)
+
+        mixed = self.rerank(
+            reranker, "library fines", (*self.CANDIDATES, (chunk(3, "new"), 0.1))
+        )
+        self.rerank(reranker, "a different question", self.CANDIDATES)
+
+        self.assertEqual(model.calls[1], [("library fines", "new")])
+        # Remembered and fresh scores each land on their own passage.
+        self.assertEqual(
+            self.ranking(mixed), [(1, 0.9, True), (3, 0.5, True), (2, 0.2, True)]
+        )
+        self.assertEqual(
+            model.calls[2],
+            [
+                ("a different question", "fines are two rupees a day"),
+                ("a different question", "borrowing limit"),
+            ],
+        )
+
+    def test_one_users_scores_never_answer_another(self):
+        """Shared, a remembered score would answer user B seconds faster
+        because user A asked the same question first - a visible signal."""
+        model = ScoringCrossEncoder(
+            {"fines are two rupees a day": 0.9, "borrowing limit": 0.2}
+        )
+        reranker = self.reranker(model)
+
+        for user in (1, 2, 1):
+            self.rerank(reranker, "library fines", self.CANDIDATES, user=user)
+
+        self.assertEqual(len(model.calls), 2)
+
+    def test_nothing_is_remembered_for_a_caller_that_names_no_user(self):
+        model = ScoringCrossEncoder(
+            {"fines are two rupees a day": 0.9, "borrowing limit": 0.2}
+        )
+        reranker = self.reranker(model)
+
+        for _ in range(2):
+            reranker.rerank("library fines", hits(*self.CANDIDATES))
+
+        self.assertEqual(len(model.calls), 2)
+
+    def test_the_engine_reuses_scores_for_the_asking_user_only(self):
+        from documents.rag.llm import ExtractiveAnswerer
+
+        model = ScoringCrossEncoder({PASSAGE.strip(): 0.9})
+        found = hits((chunk(1, PASSAGE), 1.0))
+        with (
+            mock.patch.object(
+                engine.search_service, "search", return_value=FakeSearchResponse(found)
+            ),
+            mock.patch.object(
+                engine, "get_reranker", return_value=self.reranker(model)
+            ),
+            mock.patch.object(
+                engine, "get_answerer", return_value=ExtractiveAnswerer()
+            ),
+            mock.patch.object(engine, "_figure_hints", return_value=[]),
+        ):
+            asha, ravi = SimpleNamespace(pk=1), SimpleNamespace(pk=2)
+            for user in (asha, asha, ravi):
+                rag.ask(user, "What is the minimum attendance for the examination?")
+
+        self.assertEqual(len(model.calls), 2)
+
+    def test_repaired_scores_are_not_remembered(self):
+        """Logits mean a misconfigured model, flagged in every signal; a
+        remembered score would reach a later answer without the flag."""
+        model = ScoringCrossEncoder(
+            {"fines are two rupees a day": 4.0, "borrowing limit": -4.0}
+        )
+        reranker = self.reranker(model)
+
+        self.rerank(reranker, "q", self.CANDIDATES)
+        again = self.rerank(reranker, "q", self.CANDIDATES)
+
+        self.assertEqual(len(model.calls), 2)
+        self.assertTrue(all("activation_repaired" in r.signals for r in again))
+
+    def test_a_model_found_to_emit_logits_is_scored_again_on_one_scale(self):
+        """A logit that happens to fall inside [0, 1] is remembered as it
+        came. When the model then shows it emits logits, that remembered
+        value must not be ranked against sigmoided ones."""
+        model = ScoringCrossEncoder({"in range": 0.4, "out of range": 3.0})
+        reranker = self.reranker(model)
+        self.rerank(reranker, "q", ((chunk(1, "in range"), 1.0),))
+
+        ranked = self.rerank(
+            reranker,
+            "q",
+            ((chunk(1, "in range"), 1.0), (chunk(2, "out of range"), 0.5)),
+        )
+        self.rerank(reranker, "q", ((chunk(1, "in range"), 1.0),))
+
+        self.assertEqual(
+            [(r.chunk.id, r.score) for r in ranked], [(2, 0.952574), (1, 0.598688)]
+        )
+        self.assertTrue(all("activation_repaired" in r.signals for r in ranked))
+        self.assertEqual(model.calls[2], [("q", "in range"), ("q", "out of range")])
+        # ...and nothing more is remembered from this model.
+        self.assertEqual(len(model.calls), 4)
+
+    def test_another_model_remembers_nothing_of_the_first(self):
+        reranker = self.reranker(
+            ScoringCrossEncoder(
+                {"fines are two rupees a day": 0.9, "borrowing limit": 0.2}
+            )
+        )
+        self.rerank(reranker, "q", self.CANDIDATES)
+
+        replacement = ScoringCrossEncoder(
+            {"fines are two rupees a day": 0.1, "borrowing limit": 0.7}
+        )
+        reranker._model = replacement
+        ranked = self.rerank(reranker, "q", self.CANDIDATES)
+
+        self.assertEqual(len(replacement.calls), 1)
+        self.assertEqual([r.chunk.id for r in ranked], [2, 1])
+
+    def test_the_cache_is_bounded_and_zero_turns_it_off(self):
+        texts = {"a": 0.1, "b": 0.2, "c": 0.3}
+        with override_settings(RAG_RERANKER_LOCAL_CACHE_SIZE=2):
+            model = ScoringCrossEncoder(texts)
+            reranker = self.reranker(model)
+        for text in ("a", "b", "a", "c", "a"):
+            self.rerank(reranker, "q", ((chunk(1, text), 1.0),))
+        # Least recently USED goes first: "a" was used again, so "c" pushed
+        # out "b" and "a" was still held. Oldest-in-first-out would have
+        # dropped "a" and scored it a second time.
+        self.assertEqual([call[0][1] for call in model.calls], ["a", "b", "c"])
+
+        with override_settings(RAG_RERANKER_LOCAL_CACHE_SIZE=0):
+            model = ScoringCrossEncoder(texts)
+            reranker = self.reranker(model)
+        for _ in range(2):
+            self.rerank(reranker, "q", ((chunk(1, "a"), 1.0),))
+        self.assertEqual(len(model.calls), 2)
 
 
 class AbstentionRecognitionTests(SimpleTestCase):

@@ -668,6 +668,10 @@ RAG_RERANKER_RETRIES = int(os.getenv("RAG_RERANKER_RETRIES", "3"))
 RAG_RERANKER_LOCAL_MODEL = os.getenv("RAG_RERANKER_LOCAL_MODEL", "")
 RAG_RERANKER_LOCAL_BATCH_SIZE = int(os.getenv("RAG_RERANKER_LOCAL_BATCH_SIZE", "16"))
 RAG_RERANKER_LOCAL_DEVICE = os.getenv("RAG_RERANKER_LOCAL_DEVICE", "cpu")
+# Query/passage pairs whose score each process remembers, per user, so a
+# question the same user asks again of the same worker skips the forward
+# pass. 0 turns it off.
+RAG_RERANKER_LOCAL_CACHE_SIZE = int(os.getenv("RAG_RERANKER_LOCAL_CACHE_SIZE", "4096"))
 
 # --- Generative answering over any OpenAI-compatible endpoint ------------
 # One provider, every free tier. Groq, Google Gemini's compatibility

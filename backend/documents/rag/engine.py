@@ -26,7 +26,7 @@ from documents.observability import telemetry, tracing
 from documents.search import service as search_service
 
 from . import context as context_builder
-from . import grounding, streaming
+from . import grounding, reranking, streaming
 from .llm import ABSTENTION_TEXT
 
 # How many retrieved candidates are handed to the reranker. Larger than the
@@ -371,7 +371,10 @@ def _ask(
     # --- Rerank -----------------------------------------------------------
     reranker = get_reranker()
     stage_started = time.monotonic()
-    reranked = reranker.rerank(question, retrieval.hits)
+    # A score remembered while reranking serves only this user's later
+    # questions; see reranking.cache_scope.
+    with reranking.cache_scope(getattr(user, "pk", None)):
+        reranked = reranker.rerank(question, retrieval.hits)
     timings["rerank"] = _elapsed_ms(stage_started)
 
     # Notes that describe how THIS answer was produced, as opposed to what

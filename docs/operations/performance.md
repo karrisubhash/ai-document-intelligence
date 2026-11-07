@@ -1,9 +1,10 @@
 # Performance
 
 What was measured, on what, and what was not. Every number on this page is
-**measured** on the test bed below, 30 September – 5 October 2026, unless it is
-labelled **estimated**. One machine, one run each: treat the numbers as sizing
-evidence for this code on modest hardware, not as capacity guarantees.
+**measured** unless it is labelled **estimated**: on the test bed below, 30 September –
+5 October 2026, except where a section states its own date and setup. One machine, one
+run each: treat the numbers as sizing evidence for this code on modest hardware, not as
+capacity guarantees.
 
 ## Test bed
 
@@ -90,7 +91,9 @@ on CPU, which is about 0.65 s per pair. Options, in order of effect:
   evaluation benchmark it reranks several times faster and retrieves better. It
   answers slightly fewer questions; see [evaluation](../evaluation/README.md#calibration).
 - Add a GPU.
-- Lower `RAG_RETRIEVAL_DEPTH`. This has not been measured.
+- Lower `RAG_RETRIEVAL_DEPTH`. Its effect on what answers are built from has been
+  measured since, though not its time saving; see
+  [chat latency](#chat-latency-on-the-development-stack).
 
 Eight of the ten chat questions abstained. They were generic questions over a corpus
 of unrelated business documents, so that is expected. It is not a quality measurement.
@@ -168,6 +171,105 @@ consequences, both measured:
 
 At this corpus size neither half dominates: the two callers' search times are the same.
 
+## Chat latency on the development stack
+
+Measured 17–20 October 2026 on the same laptop, on the development database: 1,730
+documents with 7,564 searchable chunks, one of them a PDF of **2.26 million characters**
+holding 3,392 of those chunks. The configuration was the pilot one: bge-small embeddings,
+the MiniLM cross-encoder, and Gemini answering through the OpenAI-compatible answerer. Other
+workloads shared the CPU throughout, so read the absolute numbers as slow-case figures and
+the comparisons as the result. The before/after comparisons ran old and new code
+alternately on the same questions, and the reranker variants were interleaved likewise.
+
+**Where the time went.** Each stored chat answer records its per-stage timings; 14 of the
+49 on the development database do. Of the rest, 32 predate the field and 3 were small talk,
+which skips retrieval. Retrieval took
+80–180 ms on 12 October. The large PDF was uploaded at 12:18 on the 13th, and from 12:39
+retrieval took 1.0–2.3 s that day, and 3.4 and 9.4 s on the 17th. (Three answers on
+11 October, before the upload, took 0.4–2.7 s.) Each retrieved candidate was fetched with
+its version row, and the version row carries `extracted_text`: the whole document's text.
+A question answered from that PDF retrieves up to 100 candidates (50 lexical, 50 vector),
+and 58 to 100 of them came from the PDF, each carrying a copy of all 2.26 million
+characters: by calculation (**estimated**), **131–226 MB** moved out of Postgres per
+question. Reranking took 0.8–5.7 s. Generation (Gemini) took
+1.2–36.5 s, which is network and provider time.
+
+**What changed** (branch `chat-latency`):
+
+- Candidates no longer load `extracted_text` or `search_vector`. Both are loaded if
+  anything asks for them, so no result can change.
+- Once authorization has found something to search, the query is embedded on its own
+  thread alongside the lexical query instead of after it.
+- The cross-encoder scores each distinct passage once. The same file uploaded twice
+  retrieves identical chunks side by side; on the development database, 150 of the 7,564
+  searchable chunks repeat another chunk's text.
+- Each process remembers the scores the cross-encoder computed, by user, query and
+  passage (`RAG_RERANKER_LOCAL_CACHE_SIZE`, 4,096 pairs; `0` turns it off), so a question a
+  user asks again of the same worker skips the forward pass. 7 of the 19 questions asked on
+  the development stack from 10 to 17 October repeated an earlier one. Never across users:
+  a remembered score makes an answer seconds faster, and that difference would tell one
+  user what another had asked.
+- A chat turn reads the conversation history once, as role and content. Follow-up
+  resolution used to read it whole, citations included, on every question, and the
+  general-knowledge reply read it again whenever it answered.
+
+**Measured, chat path without persistence** (retrieval, rerank, context, answer,
+grounding; the extractive answerer so no provider time is mixed in). Three rounds, five
+questions of each kind per round:
+
+| Questions | Code | Retrieval p50 | Rerank p50 | Total p50 | Total p95 |
+|---|---|---|---|---|---|
+| Answered from the 2.26 M-character PDF | before | 8,769 ms | 8,315 ms | 17.4 s | 21.1 s |
+| | after | **803 ms** | 7,269 ms | **8.9 s** | 13.8 s |
+| Answered from ordinary documents | before | 1,405 ms | 6,110 ms | 8.1 s | 10.2 s |
+| | after | **610 ms** | 5,008 ms | **6.3 s** | 8.5 s |
+
+All ten questions got the same answer before and after: the same abstentions and the same
+cited chunks. With the retrieval queries alone, interleaved: lexical 2,256 → 228 ms and
+vector 2,554 → 224 ms for questions answered from the large PDF, 961 → 185 ms and
+203 → 164 ms for the rest. (The rerank score cache came later and is not in this table;
+every question here was asked once per process.)
+
+**A question asked again** by the same user, of the same process, with the score cache
+(measured 23 October; five questions, each asked twice; the extractive answerer, as in
+the table above): reranking took 3.2–4.7 s the first time and 0 ms the second, and the
+whole answer 3.6–5.1 s, then 0.24–0.55 s. All five answers were identical both times. A
+generative answerer's own time is not saved, and each gunicorn worker process keeps its
+own cache, so a repeat that reaches another worker is reranked again.
+
+**The reranker is now the cost, and it is arithmetic.** Under load, 20 MiniLM pairs took
+2.3 s (median over 14 questions), of which tokenizing took 41 ms; the rest is the forward
+pass. **Estimated** by counting operations: 20 pairs of about 250 tokens are about
+106 GFLOP, which is of the order of a second on this 4-core CPU even when it is idle.
+Measured and not adopted (each against 2.3 s for the configuration in use, or 2.5 s in the
+ONNX run):
+
+| Tried | Result |
+|---|---|
+| int8 dynamic quantization (torch) | No faster on this CPU (2.6 s), and it flipped 1 of 280 relevance-floor decisions |
+| 8 torch threads instead of 4 | Slower (3.5 s) |
+| Batch size 32 instead of 16 | Slower (2.6 s) |
+| `max_length` 256 | No faster (3.1 s), and scores changed |
+| ONNX Runtime 1.31, the model's published fp32 graph | 17% faster (2.0 s against 2.5 s), with scores within 1.2e-6 of torch's and the same ranking on all 13 questions: not worth a new dependency and a second inference path. The O3-optimized graph was slower (2.7 s); the int8 graph changed the ranking of every question. sentence-transformers' own `[onnx]` extra did not install into this image (pip refused it, reporting conflicting dependencies without naming the package) |
+| Fresh planner statistics (`ANALYZE`, inside a rolled-back transaction) | Similar plans and no faster (lexical 63 → 70 ms, vector 126 → 146 ms). Note: `documents_document.archived_at` had no statistics at all on the dev database, so the planner estimated 9 live documents where there were 1,729; most likely the column was added by a migration after the table was last analyzed |
+| Driving the exact vector query from the embeddings table | Same nested-loop plan and identical results (183 ms against 188 ms) |
+| A warm-up inference at worker start | The first-call penalty was within the noise (316 ms against 246 ms for two pairs; the embedder's first call was faster than its second) |
+
+**Lowering `RAG_RETRIEVAL_DEPTH` would change what answers are built from.** Rerank time
+should fall roughly in proportion to the depth (**estimated**: one forward pass per
+passage; not measured), but on 30 questions, 20 of which reached the context, the passages
+the answer was built from often sat deep in retrieval's fused order:
+
+| Depth | Answers whose context would change | Used passages that sat below the depth |
+|---|---|---|
+| 8 | 7 of 20 | 17 of 89 |
+| 10 | 6 of 20 | 12 of 89 |
+| 12 | 3 of 20 | 7 of 89 |
+| 15 | 3 of 20 | 4 of 89 |
+
+The default stays at 20. A deployment that needs answers faster than its CPU can rerank
+20 passages should add a GPU, or accept that trade knowingly.
+
 ## Resource use
 
 Measured during ingestion (`docker stats`):
@@ -188,8 +290,10 @@ concurrency avoids oversubscription; the effect has not been measured.
   Throughput under many simultaneous users is unknown.
 - **OCR-heavy corpora.** Scanned PDFs at scale were not tested; the measured corpus
   is text.
-- **Hosted providers.** Bedrock, Anthropic and OpenAI-compatible latency: none was
-  ever called.
+- **Hosted providers.** Bedrock and Anthropic were never called. The OpenAI-compatible
+  answerer was called only in development, on Gemini's free tier with a developer's key:
+  its generation times are known only from the answers stored then (1.2–36.5 s; see
+  [chat latency](#chat-latency-on-the-development-stack)), and none was benchmarked.
 - **Restore time at scale.** The restore drill restored a 157 KB dump; see the
   [runbook](runbook.md).
 - **Larger corpora.** Nothing beyond 3,003 documents, and no HNSW query path.

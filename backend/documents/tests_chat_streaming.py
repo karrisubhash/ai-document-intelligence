@@ -5,7 +5,9 @@ import time
 from types import SimpleNamespace
 from unittest import mock
 
+from django.db import connection
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -181,6 +183,41 @@ class GeneralKnowledgeChatTests(TestCase):
                 },
                 format="json",
             )
+        messages = answerer._client.calls[-1]["messages"]
+        self.assertIn("my name is Asha", [m["content"] for m in messages])
+
+    @override_settings(**GENERAL_ON)
+    def test_the_history_is_read_once_and_without_its_citations(self):
+        """Follow-up resolution and the general reply read only who said
+        what. Follow-up resolution loaded every earlier turn whole - an
+        answer's citations hold the full text of every passage it cited - on
+        every question, and the general reply loaded it all again."""
+        answerer = stub_answerer()
+        with mock.patch("documents.rag.general.get_answerer", return_value=answerer):
+            first = self.ask("my name is Asha")
+            with CaptureQueriesContext(connection) as queries:
+                second = self.client.post(
+                    CHAT,
+                    {
+                        "question": "what is my name?",
+                        "conversation_id": first["conversation_id"],
+                    },
+                    format="json",
+                )
+
+        # The second turn reached the general reply, which reads the history.
+        self.assertEqual(second.data["source"], "general")
+        self.assertEqual(len(answerer._client.calls), 2)
+
+        reads = [
+            query["sql"]
+            for query in queries.captured_queries
+            if query["sql"].startswith("SELECT")
+            and 'FROM "documents_message"' in query["sql"]
+        ]
+        self.assertEqual(len(reads), 1, reads)
+        self.assertNotIn('"citations"', reads[0])
+        # ...and both readers still got the earlier turn.
         messages = answerer._client.calls[-1]["messages"]
         self.assertIn("my name is Asha", [m["content"] for m in messages])
 
