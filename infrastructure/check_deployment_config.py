@@ -292,8 +292,12 @@ def check_small(config):
         if not (logging.get("options") or {}).get("max-size"):
             failures.append(f"{name}: its logs are not rotated (logging max-size).")
     for name in ("prometheus", "grafana"):
-        if name in services and "monitoring" not in (services[name].get("profiles") or []):
-            failures.append(f"{name}: runs by default; it belongs behind --profile monitoring.")
+        if name in services and "monitoring" not in (
+            services[name].get("profiles") or []
+        ):
+            failures.append(
+                f"{name}: runs by default; it belongs behind --profile monitoring."
+            )
     return failures
 
 
@@ -312,7 +316,9 @@ def main():
         sys.exit(1)
 
     named = " + ".join(extra_files)
-    print(f"Production configuration check passed{f' (with {named})' if named else ''}:")
+    print(
+        f"Production configuration check passed{f' (with {named})' if named else ''}:"
+    )
     print("  - no source bind mount reaches the application containers")
     print("  - only nginx is published to the host, on 80 and 443")
     print("  - every application service has the deployment's settings, DEBUG off")
