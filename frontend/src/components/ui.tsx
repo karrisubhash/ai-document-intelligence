@@ -944,45 +944,158 @@ interface Toast {
   id: number;
   tone: Tone;
   message: string;
+  /** Changes when the same message is raised again: its time starts over. */
+  stamp: number;
 }
+
+/**
+ * How long a toast stays, in ms; null until dismissed. An error stays until
+ * the person closes it (WCAG 2.2.1): it may need reading twice, or acting
+ * on, and a timer cannot know how long that takes.
+ */
+const TOAST_DURATION: Record<Tone, number | null> = {
+  success: 5000,
+  info: 5000,
+  neutral: 5000,
+  muted: 5000,
+  warning: 8000,
+  danger: null,
+};
+
+/** More than this and the oldest one that would time out anyway goes first. */
+const MAX_TOASTS = 5;
 
 const ToastContext = createContext<(message: string, tone?: Tone) => void>(() => undefined);
 
+function ToastItem({
+  toast,
+  paused,
+  onDismiss,
+  onClose,
+}: {
+  toast: Toast;
+  paused: boolean;
+  /** Its time is up. */
+  onDismiss: (id: number) => void;
+  /** Closed by the person. */
+  onClose: (id: number) => void;
+}) {
+  const duration = TOAST_DURATION[toast.tone];
+  const remaining = useRef(duration ?? 0);
+  const stamp = useRef(toast.stamp);
+
+  // Counts down only while nothing holds it: a pause keeps what is left,
+  // so a toast read under the pointer does not vanish the moment it leaves.
+  useEffect(() => {
+    if (duration === null) return;
+    if (stamp.current !== toast.stamp) {
+      stamp.current = toast.stamp;
+      remaining.current = duration;
+    }
+    if (paused) return;
+    const started = Date.now();
+    const timer = window.setTimeout(() => onDismiss(toast.id), Math.max(0, remaining.current));
+    return () => {
+      window.clearTimeout(timer);
+      remaining.current -= Date.now() - started;
+    };
+  }, [duration, paused, toast.id, toast.stamp, onDismiss]);
+
+  return (
+    <div className={`toast toast-${toast.tone}`} role="status">
+      <Icon name={ALERT_ICON[toast.tone]} size={18} className="toast-icon" />
+      <span className="toast-message">{toast.message}</span>
+      <button
+        type="button"
+        className="toast-close"
+        aria-label="Dismiss notification"
+        onClick={() => onClose(toast.id)}
+      >
+        <Icon name="x" size={14} />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Toasts: short confirmations and errors in a corner. Their timers stop
+ * while the pointer is over them, while focus is inside them (a keyboard
+ * user tabbing to Dismiss), and while the tab is hidden - a toast raised in
+ * a background tab is still there when the person comes back.
+ */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [hidden, setHidden] = useState(
+    () => typeof document !== "undefined" && document.visibilityState === "hidden",
+  );
   const next = useRef(1);
 
-  const dismiss = useCallback(
-    (id: number) => setToasts((current) => current.filter((toast) => toast.id !== id)),
-    [],
-  );
+  useEffect(() => {
+    const onVisibility = () => setHidden(document.visibilityState === "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
-  const push = useCallback(
-    (message: string, tone: Tone = "success") => {
-      const id = next.current++;
-      setToasts((current) => [...current, { id, tone, message }]);
-      window.setTimeout(() => dismiss(id), tone === "danger" ? 8000 : 4500);
-    },
-    [dismiss],
-  );
+  const dismiss = useCallback((id: number) => {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }, []);
+
+  // Nothing left to hold the timers with: a dismissed last toast must not
+  // leave the region "hovered" for the next one.
+  useEffect(() => {
+    if (!toasts.length) {
+      setHovered(false);
+      setFocused(false);
+    }
+  }, [toasts.length]);
+
+  const push = useCallback((message: string, tone: Tone = "success") => {
+    const stamp = next.current++;
+    setToasts((current) => {
+      // The same message again (a retry that failed the same way) restarts
+      // the one on screen instead of stacking a copy above it.
+      const same = current.find((toast) => toast.message === message && toast.tone === tone);
+      if (same) return current.map((toast) => (toast === same ? { ...toast, stamp } : toast));
+      let list = [...current, { id: stamp, tone, message, stamp }];
+      while (list.length > MAX_TOASTS) {
+        const oldest = list.find((toast) => TOAST_DURATION[toast.tone] !== null) ?? list[0];
+        list = list.filter((toast) => toast !== oldest);
+      }
+      return list;
+    });
+  }, []);
+
+  const paused = hovered || focused || hidden;
 
   return (
     <ToastContext.Provider value={push}>
       {children}
-      <div className="toasts" aria-live="polite" aria-relevant="additions">
+      <div
+        className="toasts"
+        aria-live="polite"
+        aria-relevant="additions"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setFocused(true)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+        }}
+      >
         {toasts.map((toast) => (
-          <div key={toast.id} className={`toast toast-${toast.tone}`} role="status">
-            <Icon name={ALERT_ICON[toast.tone]} size={18} className="toast-icon" />
-            <span className="toast-message">{toast.message}</span>
-            <button
-              type="button"
-              className="toast-close"
-              aria-label="Dismiss notification"
-              onClick={() => dismiss(toast.id)}
-            >
-              <Icon name="x" size={14} />
-            </button>
-          </div>
+          <ToastItem
+            key={toast.id}
+            toast={toast}
+            paused={paused}
+            onDismiss={dismiss}
+            onClose={(id) => {
+              // The focused Dismiss button goes with its toast, and a removed
+              // element reports no blur: the others must not stay paused.
+              setFocused(false);
+              dismiss(id);
+            }}
+          />
         ))}
       </div>
     </ToastContext.Provider>
