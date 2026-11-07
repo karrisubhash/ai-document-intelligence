@@ -9,7 +9,7 @@ from documents.models import (
 
 
 class EvaluationDatasetSerializer(serializers.ModelSerializer):
-    cases = serializers.IntegerField(source="cases.count", read_only=True)
+    cases = serializers.SerializerMethodField()
 
     class Meta:
         model = EvaluationDataset
@@ -23,6 +23,12 @@ class EvaluationDatasetSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+    def get_cases(self, dataset) -> int:
+        # Annotated by evaluation_api.views.visible_runs; counted here only
+        # for a dataset that arrived some other way.
+        count = getattr(dataset, "case_count", None)
+        return dataset.cases.count() if count is None else count
 
 
 class EvaluationRunSerializer(serializers.ModelSerializer):

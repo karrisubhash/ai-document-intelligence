@@ -1,3 +1,4 @@
+from django.db.models import Count, Prefetch
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import ListAPIView, RetrieveAPIView
@@ -5,11 +6,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import IsAdministrator
 from documents import authorization
 from documents.evaluation import compare_runs
 from documents.models import (
     Conversation,
     EvaluationCaseResult,
+    EvaluationDataset,
     EvaluationRun,
     Feedback,
     Message,
@@ -29,9 +32,21 @@ def visible_runs(user):
     Scoped by the dataset's department, the same boundary documents use. A
     benchmark leaks the corpus it was built from through its questions and
     expected answers, so it is not public within the platform just because
-    it happens to be a metric.
+    it happens to be a metric - and the views below admit administrators
+    only: a department's benchmark is its administrator's quality tool, not
+    something every student in the department should be able to read the
+    answers to.
+
+    Each run's dataset arrives with its number of cases, counted in the one
+    query that fetches the datasets: counted per row by the serializer, a
+    page of 50 runs was 50 more queries.
     """
-    queryset = EvaluationRun.objects.select_related("dataset")
+    queryset = EvaluationRun.objects.prefetch_related(
+        Prefetch(
+            "dataset",
+            queryset=EvaluationDataset.objects.annotate(case_count=Count("cases")),
+        )
+    )
 
     if authorization.is_system_admin(user):
         return queryset
@@ -46,7 +61,7 @@ def visible_runs(user):
 
 class EvaluationRunListView(ListAPIView):
     serializer_class = EvaluationRunSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get_queryset(self):
         return visible_runs(self.request.user)
@@ -54,7 +69,7 @@ class EvaluationRunListView(ListAPIView):
 
 class EvaluationRunDetailView(RetrieveAPIView):
     serializer_class = EvaluationRunSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get_queryset(self):
         return visible_runs(self.request.user)
@@ -64,7 +79,7 @@ class EvaluationRunResultsView(ListAPIView):
     """Per-case results, so a bad aggregate can be traced to its cause."""
 
     serializer_class = EvaluationCaseResultSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get_queryset(self):
         run = get_object_or_404(visible_runs(self.request.user), pk=self.kwargs["pk"])
@@ -74,7 +89,7 @@ class EvaluationRunResultsView(ListAPIView):
 class EvaluationCompareView(APIView):
     """Regression check between two runs (spec section 19.2)."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get(self, request, pk, other_pk):
         runs = visible_runs(request.user)
