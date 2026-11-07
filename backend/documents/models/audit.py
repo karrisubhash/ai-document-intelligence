@@ -39,6 +39,12 @@ class AuditLog(models.Model):
         DEPARTMENT_CREATE = "DEPARTMENT_CREATE", "Department create"
         DEPARTMENT_UPDATE = "DEPARTMENT_UPDATE", "Department update"
         JOB_RETRY = "JOB_RETRY", "Processing job retry"
+        # The front door. A demo visitor's arrival is a LOGIN (method
+        # "demo"); deleting expired guests is recorded once per sweep, and
+        # loading the sample library once per request, beside the
+        # DOCUMENT_CREATE row each sample gets like any upload.
+        GUEST_PURGE = "GUEST_PURGE", "Demo guests purge"
+        SAMPLES_LOAD = "SAMPLES_LOAD", "Sample documents load"
 
     class Result(models.TextChoices):
         ALLOWED = "ALLOWED", "Allowed"

@@ -148,6 +148,21 @@ REST_FRAMEWORK = {
         # address, so this has to cover a class signing up together, with
         # their mistakes; the queue itself is capped by SIGNUP_MAX_PENDING.
         "signup": os.getenv("THROTTLE_SIGNUP", "100/hour"),
+        # The one-click demo (accounts.demo, accounts.throttling). Demo
+        # starts per address, and from every address together - the bound a
+        # botnet cannot split. A guest costs nothing to get, so what guests
+        # spend is bounded per guest AND for all guests together; members
+        # are never counted against these, so a busy demo cannot slow them.
+        "demo": os.getenv("THROTTLE_DEMO", "10/hour"),
+        "demo_global": os.getenv("THROTTLE_DEMO_GLOBAL", "60/hour"),
+        "guest_chat": os.getenv("THROTTLE_GUEST_CHAT", "20/hour"),
+        "guest_chat_burst": os.getenv("THROTTLE_GUEST_CHAT_BURST", "5/minute"),
+        "guest_chat_global": os.getenv("THROTTLE_GUEST_CHAT_GLOBAL", "120/hour"),
+        "guest_search": os.getenv("THROTTLE_GUEST_SEARCH", "60/hour"),
+        "guest_search_global": os.getenv("THROTTLE_GUEST_SEARCH_GLOBAL", "600/hour"),
+        # Loading the sample library (POST /api/v1/admin/samples/): each
+        # request writes a dozen files and queues their processing.
+        "samples": os.getenv("THROTTLE_SAMPLES", "10/hour"),
         # Writes bytes and queues worker time.
         "upload": os.getenv("THROTTLE_UPLOAD", "60/hour"),
         # Runs two retrievers, a fusion pass and - with a cross-encoder
@@ -186,6 +201,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # After authentication, which it reads: demo guests are refused every
+    # request that would change something, outside a short allowlist.
+    "accounts.middleware.GuestReadOnlyMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -269,6 +287,25 @@ SIGNUP_EMAIL_DOMAINS = [
     for domain in os.getenv("SIGNUP_EMAIL_DOMAINS", "").split(",")
     if domain.strip()
 ]
+
+# The one-click demo (accounts.demo). Off by default.
+#
+# On, the landing page offers "Try the live demo": every visitor who takes
+# it gets an account of their own in DEMO_DEPARTMENT - an unguessable name,
+# no password, an ordinary session - that can read, search and ask, and
+# change nothing (accounts.middleware.GuestReadOnlyMiddleware, whatever the
+# browser sends). The offer appears only once that department holds a
+# document ready to read: fill it first with `manage.py seed_demo`.
+DEMO_ENABLED = os.getenv("DEMO_ENABLED", "False").lower() == "true"
+DEMO_DEPARTMENT = os.getenv("DEMO_DEPARTMENT", "Demo").strip() or "Demo"
+# Guests older than this are deleted, with their conversations, by
+# `manage.py purge_demo_guests` (schedule it) and, a few at a time, whenever
+# a new guest arrives. A guest's session ends no later than this either.
+DEMO_GUEST_TTL_HOURS = max(1, int(os.getenv("DEMO_GUEST_TTL_HOURS", "24")))
+# A ceiling on guest accounts existing at once, across every visitor - the
+# bound on what the demo can add to the database between sweeps. Reaching it
+# makes the demo say it is full until expired guests are swept.
+DEMO_MAX_GUESTS = int(os.getenv("DEMO_MAX_GUESTS", "200"))
 
 # True only under `manage.py test`. Named rather than repeated so every
 # place the suite needs different behaviour is greppable, and so that none

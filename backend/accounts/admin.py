@@ -10,11 +10,16 @@ User = get_user_model()
 class UserProfileInline(admin.StackedInline):
     model = UserProfile
     can_delete = False
+    # Set only by accounts.demo when it makes a guest. Ticking it here would
+    # make a member read-only; unticking it would leave an anonymous,
+    # passwordless account outside the guest guard and the purge.
+    readonly_fields = ("is_guest",)
 
 
 class ProfileAwareUserAdmin(UserAdmin):
     inlines = [UserProfileInline]
-    list_display = UserAdmin.list_display + ("role", "department")
+    list_display = UserAdmin.list_display + ("role", "department", "is_guest")
+    list_filter = UserAdmin.list_filter + ("profile__is_guest",)
 
     def get_inlines(self, request, obj):
         # Not on the add page. Saving the new user creates its profile (the
@@ -31,6 +36,10 @@ class ProfileAwareUserAdmin(UserAdmin):
     @admin.display(description="Department")
     def department(self, user):
         return getattr(user.profile, "department", "")
+
+    @admin.display(description="Demo guest", boolean=True)
+    def is_guest(self, user):
+        return getattr(user.profile, "is_guest", False)
 
 
 admin.site.unregister(User)

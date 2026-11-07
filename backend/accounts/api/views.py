@@ -19,7 +19,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts import permissions
+from accounts import demo, permissions
 from accounts.authentication import issue_token
 from accounts.models import Department, SignupRequest, UserProfile
 from accounts.services import (
@@ -33,6 +33,7 @@ from accounts.services import (
     revoke_api_tokens,
     unapproved_signup,
 )
+from accounts.throttling import DemoGlobalRateThrottle, DemoRateThrottle
 from documents.api.serializers import BULK_DELETE_LIMIT
 from documents.audit import record_event
 from documents.models import AuditLog
@@ -349,6 +350,77 @@ class SignupView(APIView):
         return Response({"status": signup.status}, status=status.HTTP_201_CREATED)
 
 
+class DemoFullError(exceptions.APIException):
+    """DEMO_MAX_GUESTS guests exist. A 429 like the throttles: try later."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_detail = (
+        "The demo is full right now. Try again in a little while, or request an "
+        "account."
+    )
+    default_code = "demo_full"
+
+
+class DemoView(APIView):
+    """The one-click demo (accounts.demo). GET says whether it is offered;
+    POST starts one.
+
+    POST makes a fresh guest account in DEMO_DEPARTMENT, signs it in with an
+    ordinary session and answers exactly what a sign-in answers, so the
+    interface proceeds as if someone had signed in. The guest can read,
+    search and ask, and change nothing (GuestReadOnlyMiddleware). With the
+    demo off - or with nothing in its department ready to read yet - both
+    methods say so: GET with "enabled": false, POST with a 404.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get_throttles(self):
+        # GET is read on every visit to the landing page, to decide whether
+        # to show the button - throttled, a campus behind one NAT would stop
+        # seeing it (as for SignupView). It is two small queries.
+        if self.request.method == "POST":
+            return [DemoRateThrottle(), DemoGlobalRateThrottle()]
+        return []
+
+    def check_throttles(self, request):
+        # Ahead of the throttles, as in SignupView: a request refused by
+        # CSRF or because the demo is off must not spend the budget.
+        if request.method == "POST":
+            # A forged demo start would sign the victim's browser out of
+            # their own account and into an anonymous one - the forged-login
+            # trick, used to make them ask their questions somewhere else.
+            _enforce_csrf(request)
+            if not demo.is_available():
+                raise exceptions.NotFound("The demo is not available here.")
+        super().check_throttles(request)
+
+    def get(self, request):
+        return Response({"enabled": demo.is_available()})
+
+    def post(self, request):
+        try:
+            guest = demo.create_guest()
+        except demo.DemoUnavailable as exc:
+            raise exceptions.NotFound("The demo is not available here.") from exc
+        except demo.DemoFull as exc:
+            raise DemoFullError() from exc
+
+        # No password was checked, so the backend is named; login() rotates
+        # the session key as for any sign-in, and replaces whatever session
+        # the browser held.
+        login(
+            request._request,
+            guest,
+            backend="django.contrib.auth.backends.ModelBackend",
+        )
+        # Never outlives the account, which is deleted once it expires.
+        request.session.set_expiry(demo.session_seconds())
+        _audit_login(guest, method="demo")
+        return Response(MeSerializer(guest).data, status=status.HTTP_201_CREATED)
+
+
 class DepartmentListView(APIView):
     """Active departments, for any signed-in user's filters and forms."""
 
@@ -509,7 +581,10 @@ class DepartmentAdminViewSet(
         from documents.models import Document
 
         member_counts = (
+            # Demo guests are visitors, not members: the demo department's
+            # head count is its real people.
             UserProfile.objects.exclude(department="")
+            .exclude(is_guest=True)
             .values("department")
             .annotate(total=Count("id"))
         )

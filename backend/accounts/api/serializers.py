@@ -5,7 +5,7 @@ from django.contrib.auth.validators import ASCIIUsernameValidator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from accounts import permissions
+from accounts import demo, permissions
 from accounts.models import Department, SignupRequest, UserProfile
 from accounts.services import (
     UnknownDepartment,
@@ -65,6 +65,10 @@ class MeSerializer(serializers.Serializer):
             "view_system_status": system,
             "upload_to_any_department": system,
             "create_collections": can_create_collection(user),
+            # A one-click demo visitor: the interface shows the demo banner
+            # and leaves out what the guest guard would refuse (uploading,
+            # editing, deleting, password and token changes).
+            "is_guest": demo.is_guest(user),
         }
 
 
@@ -189,6 +193,8 @@ class AdminUserSerializer(serializers.ModelSerializer):
             # Renaming changes what the audit trail's past rows appear to
             # say about who did what, and the username is the login.
             raise serializers.ValidationError("Usernames cannot be changed.")
+        if self.instance is None and demo.username_reserved(value):
+            raise serializers.ValidationError(USERNAME_RESERVED)
         return value
 
     def validate(self, attrs):
@@ -308,6 +314,11 @@ class SetPasswordSerializer(serializers.Serializer):
 # --- Self-service sign-up -----------------------------------------------------
 
 USERNAME_UNAVAILABLE = "This username is taken. Choose another."
+# Demo guests are named "guest-…" (accounts.demo). A member with such a name
+# would look like an anonymous visitor in every listing and audit row.
+USERNAME_RESERVED = (
+    "Usernames beginning “guest-” are kept for demo visitors. Choose another."
+)
 
 # What an applicant may ask to be. Administrative roles are granted, never
 # requested: offering them would only put a "make me an administrator"
@@ -366,6 +377,8 @@ class SignupSerializer(serializers.Serializer):
             ASCIIUsernameValidator()(value)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages)) from exc
+        if demo.username_reserved(value):
+            raise serializers.ValidationError(USERNAME_RESERVED)
         # The same answer whether an account or a waiting request holds the
         # name: which of the two it is is nobody else's business.
         if username_unavailable(value):

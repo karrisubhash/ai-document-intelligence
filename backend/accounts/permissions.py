@@ -47,6 +47,12 @@ def is_administrator(user) -> bool:
 
 
 def administrable_users(actor, queryset):
+    # Demo guests are nobody's to administer, a system administrator's
+    # included: they are anonymous and expire within a day, and giving one
+    # a password or a role would turn a read-only visitor into an account
+    # someone can sign into, or one that reads administration screens.
+    # Hidden here, the user screens neither list them nor answer for them.
+    queryset = queryset.exclude(profile__is_guest=True)
     if is_system_admin(actor):
         return queryset
     if is_department_admin(actor):
@@ -87,6 +93,9 @@ def can_administer(actor, target) -> bool:
     with a staff account carrying Django model permissions.
     """
     if target.is_superuser and not actor.is_superuser:
+        return False
+    if get_profile(target).is_guest:
+        # See administrable_users.
         return False
     if is_system_admin(actor):
         return True

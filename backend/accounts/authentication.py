@@ -65,4 +65,15 @@ class ExpiringTokenAuthentication(TokenAuthentication):
         if is_expired(token):
             token.delete()
             raise exceptions.AuthenticationFailed("Token has expired.")
+        # A demo guest has no password, so no token can be ISSUED to one;
+        # one made by hand in a shell is refused too. The session the demo
+        # endpoint sets must stay a guest's only credential, because that is
+        # what accounts.middleware.GuestReadOnlyMiddleware reads.
+        from .demo import is_guest
+
+        if is_guest(user):
+            token.delete()
+            raise exceptions.AuthenticationFailed(
+                "Demo accounts cannot use API tokens."
+            )
         return user, token
