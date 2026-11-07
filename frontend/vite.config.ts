@@ -18,6 +18,10 @@ import react from "@vitejs/plugin-react";
 // /admin/users to Django's admin. Django's admin is at /django-admin/.
 const PROXIED = ["/api", "/health", "/ready", "/django-admin", "/static"];
 
+// React, its DOM renderer, the router and React's scheduler (either path
+// separator: builds run on Windows too).
+const VENDOR = /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/;
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");
   const target = env.VITE_PROXY_TARGET || "http://localhost:8000";
@@ -44,15 +48,20 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       sourcemap: false,
-      // One vendor chunk: the app is small, and a stable vendor hash means
-      // a deploy that changes only application code re-downloads only it.
       rollupOptions: {
         output: {
+          // The framework in one "vendor" chunk: every screen needs it, and a
+          // stable hash means a deploy that changes only application code
+          // re-downloads only that. Nothing else is forced in: a library
+          // imported only by a lazy screen (a PDF renderer, a chart kit)
+          // stays in that screen's chunk instead of loading with every page,
+          // which "everything under node_modules" did.
+          //
           // By path, not by package name: the object form only matches a
           // package's entry module, so react-dom/client landed in the app
           // chunk and every deploy re-downloaded React.
           manualChunks(id) {
-            return id.includes("node_modules") ? "vendor" : undefined;
+            return VENDOR.test(id) ? "vendor" : undefined;
           },
         },
       },

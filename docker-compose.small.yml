@@ -1,0 +1,126 @@
+# Small-server profile: 2 vCPU / 8 GB, CPU only (the size of the live
+# server), on top of the production overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.small.yml up -d
+#
+#   ... --profile monitoring up -d     to run Prometheus and Grafana too
+#
+# The production overlay's defaults suit a bigger box: three gunicorn
+# workers each warming the local models, an index worker of six processes
+# (2.3 GiB idle, docs/release/staging-runbook.md), monitoring always on.
+# The live server corrected that by hand in its .env; this file is that
+# correction, written down and reviewed. Every number below can still be
+# overridden from .env (the ${NAME:-default} form), so an operator tunes
+# without editing it.
+#
+# What it sets, and why (docs/deployment/production.md#small-server-profile):
+#   backend       gunicorn 2 workers x 4 threads. Two processes keep the
+#                 models' memory to two copies; four threads each give 8
+#                 request slots, and a streamed chat answer holds one for
+#                 its whole length.
+#   worker        ingest concurrency 1: OCR is CPU-bound, and two OCR
+#                 processes would take both cores from searches and answers.
+#   worker-index  concurrency 1: bulk re-embedding is rare and can wait.
+#   torch         EMBEDDING_LOCAL_THREADS=1 per process: torch otherwise
+#                 starts a thread per HOST core in every process and the
+#                 processes fight over two cores.
+#   tesseract     OMP_THREAD_LIMIT=1 in the ingest worker, for the same
+#                 reason: one OCR page at a time, on one core.
+#   memory        a ceiling per service, so one runaway (a 500-page scan)
+#                 is OOM-killed and restarted alone instead of taking the
+#                 database with it. Measured use is far below each one.
+#   logs          json-file rotation, 10 MB x 3 per container - the live
+#                 server set this in /etc/docker/daemon.json.
+#   monitoring    Prometheus and Grafana only with --profile monitoring:
+#                 together they want ~0.5 GB that a small box needs more.
+#                 (GRAFANA_PASSWORD is still required to parse the
+#                 production overlay.)
+#
+# python infrastructure/check_deployment_config.py docker-compose.small.yml
+# checks this file merges into the same production stack, plus its limits.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  db:
+    mem_limit: 1g
+    logging: *logging
+
+  redis:
+    mem_limit: 512m
+    logging: *logging
+
+  migrate:
+    mem_limit: 1g
+    logging: *logging
+
+  backend:
+    # The production overlay's command, with this box's sizes.
+    command: >
+      sh -c "python manage.py collectstatic --noinput &&
+      exec gunicorn config.wsgi:application
+      --config gunicorn.conf.py
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-2}
+      --threads ${GUNICORN_THREADS:-4}
+      --timeout ${GUNICORN_TIMEOUT:-120}
+      --graceful-timeout 30
+      --access-logfile -
+      --error-logfile -"
+    environment:
+      EMBEDDING_LOCAL_THREADS: ${EMBEDDING_LOCAL_THREADS:-1}
+    mem_limit: 2560m
+    logging: *logging
+
+  worker:
+    command: >
+      celery -A config worker
+      --loglevel=INFO
+      --queues=ingest
+      --concurrency=${CELERY_CONCURRENCY:-1}
+      --max-tasks-per-child=100
+    environment:
+      EMBEDDING_LOCAL_THREADS: ${EMBEDDING_LOCAL_THREADS:-1}
+      OMP_THREAD_LIMIT: "1"
+    mem_limit: 2g
+    # At most one and a half cores, so a long OCR run always leaves room
+    # for the web requests.
+    cpus: 1.5
+    logging: *logging
+
+  worker-index:
+    command: >
+      celery -A config worker
+      --loglevel=INFO
+      --queues=index
+      --concurrency=${CELERY_INDEX_CONCURRENCY:-1}
+      --max-tasks-per-child=200
+    environment:
+      EMBEDDING_LOCAL_THREADS: ${EMBEDDING_LOCAL_THREADS:-1}
+    mem_limit: 1536m
+    cpus: 1.0
+    logging: *logging
+
+  nginx:
+    mem_limit: 256m
+    logging: *logging
+
+  certbot:
+    mem_limit: 128m
+    logging: *logging
+
+  prometheus:
+    profiles: ["monitoring"]
+    mem_limit: 512m
+    logging: *logging
+
+  grafana:
+    profiles: ["monitoring"]
+    mem_limit: 256m
+    logging: *logging

@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import { usePolling, useResource } from "../api/hooks";
 import type { DashboardDocument } from "../api/types";
 import { useMe } from "../auth/AuthContext";
-import { FileTypeIcon, Icon, type IconName } from "../components/icons";
+import { FileTypeIcon, Icon } from "../components/icons";
 import UploadDialog from "../components/UploadDialog";
 import {
   Alert,
@@ -15,6 +15,7 @@ import {
   ErrorState,
   PageHeader,
   Skeleton,
+  StatTile,
   StatusBadge,
   useDocumentTitle,
 } from "../components/ui";
@@ -50,31 +51,19 @@ function DocumentRows({ rows }: { rows: DashboardDocument[] }) {
   );
 }
 
-function Stat({
-  label,
-  value,
-  caption,
-  icon,
-  tone,
-}: {
-  label: string;
-  value: number | undefined;
-  caption: string;
-  icon: IconName;
-  tone: "neutral" | "success" | "info" | "danger";
-}) {
-  return (
-    <div className="stat">
-      <div className="stat-head">
-        <span className="stat-label">{label}</span>
-        <span className={`stat-icon stat-icon-${tone}`} aria-hidden="true">
-          <Icon name={icon} />
-        </span>
-      </div>
-      <span className="stat-value">{value === undefined ? "—" : value.toLocaleString()}</span>
-      <span className="stat-caption">{caption}</span>
-    </div>
-  );
+/**
+ * What this person can see, in the words of authorization.visible_documents:
+ * a system administrator sees every department; anyone else their own
+ * department's documents and their own uploads.
+ */
+function scopeLine(me: { is_superuser: boolean; role: string | null; department: string }) {
+  if (me.is_superuser || me.role === "SYSTEM_ADMIN") {
+    return "You can see every document, in every department.";
+  }
+  if (me.department) {
+    return `You can see documents from ${me.department} and any you uploaded yourself.`;
+  }
+  return "You can see the documents you uploaded yourself. Ask an administrator to assign you a department.";
 }
 
 export default function DashboardPage() {
@@ -93,8 +82,9 @@ export default function DashboardPage() {
   const total = data?.documents.total ?? 0;
   const ready = counts.COMPLETED ?? 0;
   const failed = (counts.FAILED ?? 0) + (counts.QUARANTINED ?? 0);
-  // Until the counts arrive, a caption must not claim anything about them.
-  const pending = dashboard.error ? "Unavailable" : "Loading…";
+  // Until the counts arrive, a caption must not claim anything about them:
+  // the tiles show skeletons, and if the call failed, say so.
+  const pending = dashboard.error ? "Unavailable" : "";
 
   const ask = (event: FormEvent) => {
     event.preventDefault();
@@ -112,11 +102,7 @@ export default function DashboardPage() {
           </>
         }
         title={`Welcome, ${displayName(me)}`}
-        description={
-          me.department
-            ? `You can see documents from ${me.department} and any you uploaded yourself.`
-            : "You can see the documents you uploaded yourself. Ask an administrator to assign you a department."
-        }
+        description={scopeLine(me)}
         actions={
           <Button variant="primary" icon="upload" onClick={() => setUploading(true)}>
             Upload document
@@ -150,6 +136,7 @@ export default function DashboardPage() {
         <div className="ask-box">
           <input
             id="dashboard-question"
+            data-primary-search=""
             className="ask-box-input"
             placeholder="Ask a question about your documents…"
             value={question}
@@ -187,14 +174,16 @@ export default function DashboardPage() {
       ) : null}
 
       <section className="stats" aria-label="Document summary">
-        <Stat
+        <StatTile
+          loading={!data && !dashboard.error}
           label="Documents"
           value={data ? total : undefined}
           caption={data ? "In your library" : pending}
           icon="files"
           tone="neutral"
         />
-        <Stat
+        <StatTile
+          loading={!data && !dashboard.error}
           label="Ready"
           value={data ? ready : undefined}
           caption={
@@ -207,14 +196,16 @@ export default function DashboardPage() {
           icon="check-circle"
           tone="success"
         />
-        <Stat
+        <StatTile
+          loading={!data && !dashboard.error}
           label="Processing"
           value={data ? inFlight : undefined}
           caption={!data ? pending : inFlight ? "Updates automatically" : "Nothing in the queue"}
           icon="activity"
           tone="info"
         />
-        <Stat
+        <StatTile
+          loading={!data && !dashboard.error}
           label="Failed"
           value={data ? failed : undefined}
           caption={!data ? pending : failed ? "Open one to see why" : "Nothing needs attention"}

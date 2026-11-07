@@ -11,6 +11,7 @@ design rationale; these pages are the working reference.
 | Spec traceability | [architecture/spec-traceability.md](architecture/spec-traceability.md) | Every FR/NFR of the specification mapped to code and tests; adaptations and role mapping |
 | Development | [development/setup.md](development/setup.md) | Running the stack locally |
 | | [development/testing.md](development/testing.md) | The four test layers and how to run each, including the browser suite |
+| | [development/design-system.md](development/design-system.md) | Frontend foundations: design tokens, the data cache, error boundaries, toasts, shortcuts, bundle size |
 | API | [api/reference.md](api/reference.md) | Every endpoint, who may call it, and what it returns |
 | | [api/analytics.md](api/analytics.md) | Analytics, the feedback review queue and the dashboard's activity block: exact shapes, scope, privacy |
 | Deployment | [deployment/production.md](deployment/production.md) | The production stack, TLS, images, first boot, configuration |

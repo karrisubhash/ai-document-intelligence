@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, type ReactNode } from "react";
+import { Suspense, useRef, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import type { Capabilities } from "./api/types";
@@ -6,23 +6,27 @@ import { useAuth } from "./auth/AuthContext";
 import { BrandMark } from "./components/icons";
 import Layout from "./components/Layout";
 import { Button, EmptyState, Spinner } from "./components/ui";
+// React.lazy, plus one guarded reload when a chunk is gone after a deploy.
+import { lazy } from "./lib/lazy";
 import LoginPage from "./pages/LoginPage";
 
 // Split by area: someone who only searches never downloads the admin
 // screens, and the first paint after sign-in waits on one chunk, not six.
-const DashboardPage = lazy(() => import("./pages/DashboardPage"));
-const DocumentsPage = lazy(() => import("./pages/DocumentsPage"));
+// The second argument is the sidebar path that prefetches the screen when
+// pointed at (lib/lazy.ts prefetchRoute).
+const DashboardPage = lazy(() => import("./pages/DashboardPage"), "/");
+const DocumentsPage = lazy(() => import("./pages/DocumentsPage"), "/documents");
 const DocumentDetailPage = lazy(() => import("./pages/DocumentDetailPage"));
-const SearchPage = lazy(() => import("./pages/SearchPage"));
-const ChatPage = lazy(() => import("./pages/ChatPage"));
-const CollectionsPage = lazy(() => import("./pages/CollectionsPage"));
-const AccountPage = lazy(() => import("./pages/AccountPage"));
-const UsersPage = lazy(() => import("./pages/admin/UsersPage"));
-const DepartmentsPage = lazy(() => import("./pages/admin/DepartmentsPage"));
-const AuditPage = lazy(() => import("./pages/admin/AuditPage"));
-const ProcessingPage = lazy(() => import("./pages/admin/ProcessingPage"));
-const SystemPage = lazy(() => import("./pages/admin/SystemPage"));
-const AnalyticsPage = lazy(() => import("./pages/admin/AnalyticsPage"));
+const SearchPage = lazy(() => import("./pages/SearchPage"), "/search");
+const ChatPage = lazy(() => import("./pages/ChatPage"), "/ask");
+const CollectionsPage = lazy(() => import("./pages/CollectionsPage"), "/collections");
+const AccountPage = lazy(() => import("./pages/AccountPage"), "/account");
+const UsersPage = lazy(() => import("./pages/admin/UsersPage"), "/admin/users");
+const DepartmentsPage = lazy(() => import("./pages/admin/DepartmentsPage"), "/admin/departments");
+const AuditPage = lazy(() => import("./pages/admin/AuditPage"), "/admin/audit");
+const ProcessingPage = lazy(() => import("./pages/admin/ProcessingPage"), "/admin/processing");
+const SystemPage = lazy(() => import("./pages/admin/SystemPage"), "/admin/system");
+const AnalyticsPage = lazy(() => import("./pages/admin/AnalyticsPage"), "/admin/analytics");
 
 /**
  * Hides a screen from someone who cannot use it. A convenience only: every

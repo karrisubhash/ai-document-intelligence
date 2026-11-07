@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "./api/client";
 import type { ChatResponse, DocumentSummary, Me, Paginated } from "./api/types";
@@ -158,6 +158,32 @@ describe("menu button", () => {
 });
 
 describe("theme preference", () => {
+  // jsdom has no matchMedia: a stand-in for the operating system's setting,
+  // installed once (lib/theme.ts starts watching it on first use).
+  let systemDark = false;
+  const systemListeners = new Set<() => void>();
+  const originalMatchMedia = window.matchMedia;
+  const setSystem = (theme: "light" | "dark") => {
+    systemDark = theme === "dark";
+    systemListeners.forEach((listener) => listener());
+  };
+
+  beforeAll(() => {
+    window.matchMedia = ((query: string) => ({
+      media: query,
+      get matches() {
+        return query.includes("dark") ? systemDark : !systemDark;
+      },
+      addEventListener: (_type: string, listener: () => void) => systemListeners.add(listener),
+      removeEventListener: (_type: string, listener: () => void) => systemListeners.delete(listener),
+    })) as unknown as typeof window.matchMedia;
+  });
+
+  afterAll(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  beforeEach(() => setSystem("light"));
   afterEach(() => setTheme("system"));
 
   function Probe() {
@@ -170,9 +196,44 @@ describe("theme preference", () => {
     expect(window.document.documentElement).toHaveAttribute("data-theme", "dark");
     expect(window.localStorage.getItem("adi-theme")).toBe("dark");
 
+    // <html> always names the theme on screen: under System, the OS's.
     act(() => setTheme("system"));
-    expect(window.document.documentElement).not.toHaveAttribute("data-theme");
+    expect(window.document.documentElement).toHaveAttribute("data-theme", "light");
     expect(window.localStorage.getItem("adi-theme")).toBeNull();
+  });
+
+  it("follows the operating system live under System, and only then", () => {
+    act(() => setTheme("system"));
+    act(() => setSystem("dark"));
+    expect(window.document.documentElement).toHaveAttribute("data-theme", "dark");
+    act(() => setSystem("light"));
+    expect(window.document.documentElement).toHaveAttribute("data-theme", "light");
+
+    act(() => setTheme("light"));
+    act(() => setSystem("dark"));
+    expect(window.document.documentElement).toHaveAttribute("data-theme", "light");
+  });
+
+  it("paints the browser chrome in the chosen theme, not the system's", () => {
+    const metas = ["(prefers-color-scheme: light)", "(prefers-color-scheme: dark)"].map((media) => {
+      const meta = window.document.createElement("meta");
+      meta.name = "theme-color";
+      meta.media = media;
+      window.document.head.appendChild(meta);
+      return meta;
+    });
+    try {
+      // A light system, a dark choice: a phone's address bar goes dark too.
+      act(() => setTheme("dark"));
+      expect(metas.map((meta) => meta.content)).toEqual(["#0e0e10", "#0e0e10"]);
+      act(() => setTheme("light"));
+      expect(metas.map((meta) => meta.content)).toEqual(["#f6f7f9", "#f6f7f9"]);
+      act(() => setTheme("system"));
+      act(() => setSystem("dark"));
+      expect(metas.map((meta) => meta.content)).toEqual(["#0e0e10", "#0e0e10"]);
+    } finally {
+      metas.forEach((meta) => meta.remove());
+    }
   });
 
   it("follows a choice made in another tab", () => {
