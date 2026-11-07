@@ -3,6 +3,8 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 
+import { invalidateResources } from "../api/cache";
+
 // findBy*/waitFor give up after 1 s by default. On a loaded machine the
 // first render of a page with mocked API calls took longer: the chat and
 // collections tests failed at 1.2-1.7 s while other suites shared the CPU,
@@ -11,6 +13,8 @@ configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();
+  // What one test loaded is never what the next test's screens remember.
+  invalidateResources();
   document.cookie = "csrftoken=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
 });
 

@@ -49,6 +49,7 @@ import type {
   SourcePassage,
   SystemStatus,
 } from "./types";
+import { invalidateResources, shareInflight, tagRequest } from "./cache";
 
 /** Empty in the browser (same origin). Settable for tests. */
 export const API_BASE_URL = (
@@ -189,9 +190,35 @@ interface RequestOptions {
   signal?: AbortSignal;
   /** Skip the global 401 handler - for the call that checks the session. */
   quiet?: boolean;
+  /**
+   * False for a POST that only reads (search): it leaves cached results
+   * alone. Every other unsafe request invalidates them (api/cache.ts).
+   */
+  mutates?: boolean;
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/**
+ * One API call. A GET's promise is tagged with its path, which is what
+ * useResource keys its stale-while-revalidate cache on, and identical GETs
+ * in flight at the same moment share one request; a change invalidates
+ * that cache once the server has answered (api/cache.ts).
+ */
+export function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { method = "GET", signal, quiet = false, mutates = true } = options;
+  if (method === "GET") {
+    // Not shared when the caller can abort it: one caller's abort would
+    // fail the other's request.
+    if (signal) return tagRequest(send<T>(path, options), path);
+    return tagRequest(
+      shareInflight(quiet ? `${path}#quiet` : path, () => send<T>(path, options)),
+      path,
+    );
+  }
+  if (!UNSAFE.has(method) || !mutates) return send<T>(path, options);
+  return send<T>(path, options, true);
+}
+
+async function send<T>(path: string, options: RequestOptions, changes = false): Promise<T> {
   const { method = "GET", body, signal, quiet = false } = options;
   const headers: Record<string, string> = { Accept: "application/json" };
 
@@ -223,6 +250,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (caught instanceof DOMException && caught.name === "AbortError") throw caught;
     throw new ApiError(0, describe(0, null), null);
   }
+
+  // The server answered a change - whatever the status, it may have acted
+  // on part of it - or says the session is gone: nothing cached is current.
+  if (changes || response.status === 401) invalidateResources();
 
   if (response.status === 204) return undefined as T;
 
@@ -291,6 +322,10 @@ export async function streamChat(
     throw new ApiError(0, describe(0, null), null);
   }
 
+  // A turn creates its conversation and saves its messages: cached lists
+  // are stale once the server has taken it, and again when it ends.
+  invalidateResources();
+
   if (!response.ok || !response.body) {
     // Validation, throttling and ownership are checked before streaming
     // starts, so these arrive as ordinary JSON errors.
@@ -313,34 +348,38 @@ export async function streamChat(
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += value;
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      boundary = buffer.indexOf("\n\n");
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
 
-      let event = "message";
-      const data: string[] = [];
-      for (const line of block.split("\n")) {
-        if (line.startsWith("event: ")) event = line.slice(7);
-        else if (line.startsWith("data: ")) data.push(line.slice(6));
-      }
-      if (!data.length) continue; // a keep-alive comment
+        let event = "message";
+        const data: string[] = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event: ")) event = line.slice(7);
+          else if (line.startsWith("data: ")) data.push(line.slice(6));
+        }
+        if (!data.length) continue; // a keep-alive comment
 
-      const payload = JSON.parse(data.join("\n"));
-      if (event === "delta") handlers.onDelta?.(payload.text);
-      else if (event === "reset") handlers.onReset?.(payload.source);
-      else if (event === "done") return payload as ChatResponse;
-      else if (event === "error") {
-        throw new ApiError(500, payload.detail ?? describe(500, null), payload);
+        const payload = JSON.parse(data.join("\n"));
+        if (event === "delta") handlers.onDelta?.(payload.text);
+        else if (event === "reset") handlers.onReset?.(payload.source);
+        else if (event === "done") return payload as ChatResponse;
+        else if (event === "error") {
+          throw new ApiError(500, payload.detail ?? describe(500, null), payload);
+        }
       }
     }
+    throw new ApiError(0, "The answer stopped before it was complete. Please try again.", null);
+  } finally {
+    invalidateResources();
   }
-  throw new ApiError(0, "The answer stopped before it was complete. Please try again.", null);
 }
 
 function query(params: Record<string, string | number | boolean | undefined | null>) {
@@ -426,6 +465,8 @@ export function uploadWithProgress<T>(
         xhr.onabort = () => reject(new DOMException("The upload was stopped.", "AbortError"));
         signal?.addEventListener("abort", () => xhr.abort(), { once: true });
         xhr.onload = () => {
+          // An upload answered: cached lists no longer show everything.
+          invalidateResources();
           let parsed: unknown = xhr.responseText;
           try {
             parsed = JSON.parse(xhr.responseText);
@@ -585,17 +626,25 @@ export const api = {
    * Every page, not just the first: the Collections page and the pickers in
    * Search and Ask list them all, and a system administrator sees every
    * department's. Page one alone silently dropped the 51st onwards.
+   * Tagged with a key of its own for the cache (api/cache.ts): its result
+   * is every page, not the response to any one request.
    */
-  collections: async (): Promise<Paginated<Collection>> => {
-    const first = await request<Paginated<Collection>>("/api/v1/collections/");
-    const results = [...first.results];
-    for (let page = 2, next = first.next; next; page += 1) {
-      const more = await request<Paginated<Collection>>(`/api/v1/collections/${query({ page })}`);
-      results.push(...more.results);
-      next = more.next;
-    }
-    return { ...first, results, next: null };
-  },
+  collections: (): Promise<Paginated<Collection>> =>
+    tagRequest(
+      (async () => {
+        const first = await request<Paginated<Collection>>("/api/v1/collections/");
+        const results = [...first.results];
+        for (let page = 2, next = first.next; next; page += 1) {
+          const more = await request<Paginated<Collection>>(
+            `/api/v1/collections/${query({ page })}`,
+          );
+          results.push(...more.results);
+          next = more.next;
+        }
+        return { ...first, results, next: null };
+      })(),
+      "/api/v1/collections/#all",
+    ),
   createCollection: (body: { name: string; description?: string; department?: string }) =>
     request<Collection>("/api/v1/collections/", { method: "POST", body }),
   deleteCollection: (id: number) =>
@@ -612,7 +661,7 @@ export const api = {
       body: { document_ids: documentIds },
     }),
   search: (input: SearchInput) =>
-    request<SearchResponse>("/api/v1/search/", { method: "POST", body: input }),
+    request<SearchResponse>("/api/v1/search/", { method: "POST", body: input, mutates: false }),
   chat: (input: ChatInput) =>
     request<ChatResponse>("/api/v1/chat/", { method: "POST", body: input }),
   chatStream: (input: ChatInput, handlers?: StreamHandlers, signal?: AbortSignal) =>
