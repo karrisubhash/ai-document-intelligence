@@ -40,6 +40,8 @@ export interface AnswerView {
   semantic: boolean;
   timings: Record<string, number>;
   source: AnswerSource;
+  /** The reader's earlier rating, so a reopened answer stays rated. */
+  myFeedback?: FeedbackRating | null;
 }
 
 export function fromResponse(response: ChatResponse): AnswerView {
@@ -73,6 +75,7 @@ export function fromMessage(message: ChatMessage): AnswerView {
   const meta = message.metadata ?? {};
   const unanswered = meta.unanswered ?? [];
   return {
+    myFeedback: message.my_feedback?.rating ?? null,
     id: message.id,
     text: message.content,
     abstained: message.abstained,
@@ -200,9 +203,9 @@ const RATINGS: [FeedbackRating, string, IconName][] = [
   ["INCORRECT", "Incorrect", "flag"],
 ];
 
-function Feedback({ messageId }: { messageId: number }) {
+function Feedback({ messageId, initial = null }: { messageId: number; initial?: FeedbackRating | null }) {
   const toast = useToast();
-  const [rated, setRated] = useState<FeedbackRating | null>(null);
+  const [rated, setRated] = useState<FeedbackRating | null>(initial);
   const [pending, setPending] = useState(false);
 
   const rate = async (rating: FeedbackRating) => {
@@ -372,7 +375,7 @@ export function Answer({
           <Icon name="clock" size={13} />
           {formatDuration(answer.durationMs)}
         </span>
-        {answer.id ? <Feedback messageId={answer.id} /> : null}
+        {answer.id ? <Feedback messageId={answer.id} initial={answer.myFeedback ?? null} /> : null}
       </div>
       <details className="answer-details">
         <summary>
