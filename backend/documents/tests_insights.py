@@ -383,3 +383,42 @@ class EnrichmentTests(IngestionTestCase):
         self.assertEqual(
             ExtractionResult.objects.filter(document_content=content).count(), 2
         )
+
+
+@override_settings(DOCUMENT_INSIGHTS_ENABLED=True)
+class BuildInsightsCommandTests(IngestionTestCase):
+    def setUp(self):
+        super().setUp()
+        response = self.upload("c.txt", CIRCULAR.encode(), "text/plain")
+        self.document = Document.objects.get(pk=response.data["id"])
+        DocumentInsight.objects.all().delete()
+
+    def call(self, *args):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("build_insights", *args, stdout=out)
+        return out.getvalue()
+
+    def test_missing_briefs_are_built(self):
+        output = self.call("--missing", "--sync")
+        self.assertIn("Enriched 1 inline", output)
+        self.assertEqual(DocumentInsight.objects.count(), 1)
+        # Nothing is missing any more.
+        self.assertIn("Selected : 0", self.call("--missing", "--dry-run"))
+
+    def test_a_dry_run_builds_nothing(self):
+        self.assertIn("Selected : 1", self.call("--all", "--dry-run"))
+        self.assertFalse(DocumentInsight.objects.exists())
+
+    def test_one_document(self):
+        self.call("--document", str(self.document.pk), "--sync")
+        self.assertEqual(DocumentInsight.objects.count(), 1)
+
+    def test_an_unknown_document_is_an_error(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            self.call("--document", "999999", "--sync")

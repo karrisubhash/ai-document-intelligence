@@ -51,6 +51,7 @@ export const STAGE_LABEL: Record<Stage, string> = {
   CLASSIFICATION: "Classification",
   EXTRACTION: "Field extraction",
   INDEXING: "Indexing",
+  INSIGHTS: "Brief and insights",
 };
 
 export const EVENT_TONE: Record<string, Tone> = {
