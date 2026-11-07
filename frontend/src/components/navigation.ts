@@ -24,6 +24,14 @@ export const PRIMARY: NavItem[] = [
  */
 export function adminItems(can: (capability: keyof Capabilities) => boolean): NavItem[] {
   const items: NavItem[] = [];
+  if (can("view_operations")) {
+    items.push({
+      to: "/admin/analytics",
+      label: "Analytics",
+      icon: "chart-column",
+      keywords: "insights charts trends metrics quality feedback usage statistics benchmark",
+    });
+  }
   if (can("administer_users")) {
     items.push({
       to: "/admin/users",

@@ -22,6 +22,7 @@ const DepartmentsPage = lazy(() => import("./pages/admin/DepartmentsPage"));
 const AuditPage = lazy(() => import("./pages/admin/AuditPage"));
 const ProcessingPage = lazy(() => import("./pages/admin/ProcessingPage"));
 const SystemPage = lazy(() => import("./pages/admin/SystemPage"));
+const AnalyticsPage = lazy(() => import("./pages/admin/AnalyticsPage"));
 
 /**
  * Hides a screen from someone who cannot use it. A convenience only: every
@@ -139,6 +140,14 @@ export default function App() {
           <Route path="/ask/:conversationId" element={<ChatRoute />} />
           <Route path="/collections" element={<CollectionsPage />} />
           <Route path="/account" element={<AccountPage />} />
+          <Route
+            path="/admin/analytics"
+            element={
+              <Requires capability={["view_operations"]}>
+                <AnalyticsPage />
+              </Requires>
+            }
+          />
           <Route
             path="/admin/users"
             element={
