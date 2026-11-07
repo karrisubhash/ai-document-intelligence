@@ -14,6 +14,11 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY frontend/ ./
+# The site's public address, for the link-preview tags in index.html
+# (og:image must be absolute for most previews). Empty keeps them relative.
+#   docker build --build-arg VITE_PUBLIC_URL=https://docs.example.edu ...
+ARG VITE_PUBLIC_URL=
+ENV VITE_PUBLIC_URL=$VITE_PUBLIC_URL
 # Typecheck and unit tests gate the build: an image that fails either is
 # not an artifact anyone should be able to deploy.
 RUN npm run typecheck && npm test && npx vite build

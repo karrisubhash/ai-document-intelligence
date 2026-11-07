@@ -1,0 +1,8 @@
+# The landing page is public; everything behind it needs an account, and the
+# API and the operators' admin are no business of a crawler's.
+User-agent: *
+Disallow: /api/
+Disallow: /django-admin/
+Disallow: /health/
+Disallow: /ready/
+Disallow: /metrics
