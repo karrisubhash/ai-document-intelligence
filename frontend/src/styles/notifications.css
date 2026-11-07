@@ -1,0 +1,340 @@
+/* Notifications: the bell in the top bar and the attention badges in the
+   sidebar. Colours come from the :root tokens in styles.css, so both themes
+   follow without a dark block of their own. */
+
+/* --- The bell ------------------------------------------------------------ */
+
+.bell {
+  position: relative;
+  flex: none;
+}
+
+.bell-button {
+  position: relative;
+}
+
+.bell-button.has-unread {
+  color: var(--text);
+}
+
+.bell-count {
+  position: absolute;
+  top: 3px;
+  right: 1px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  display: inline-grid;
+  place-items: center;
+  border: 2px solid var(--bg);
+  border-radius: 999px;
+  background: var(--danger-solid);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.bell-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 45;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(560px, calc(100vh - var(--topbar) - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  animation: menu-in 0.12s var(--ease);
+}
+
+/* Focus lands on the panel when it opens; the rows show their own ring. */
+.bell-panel:focus {
+  outline: none;
+}
+
+.bell-panel-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 52px;
+  padding: 8px 10px 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.bell-panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bell-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.bell-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+}
+
+.bell-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+
+.bell-item:hover {
+  background: var(--surface-3);
+}
+
+.bell-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.bell-item.unread {
+  background: var(--accent-soft);
+}
+
+.bell-item.unread:hover {
+  background: var(--accent-soft-hover);
+}
+
+.bell-item-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.bell-tone-success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.bell-tone-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.bell-tone-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.bell-tone-info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.bell-tone-brand {
+  background: var(--brand-gradient);
+  color: #fff;
+}
+
+.bell-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bell-item-title {
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.bell-item.unread .bell-item-title {
+  font-weight: 600;
+}
+
+/* Plain text from the server: its line breaks are kept, its length clamped. */
+.bell-item-body {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.bell-item-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.bell-item-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.bell-empty,
+.bell-loading,
+.bell-problem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.bell-problem p {
+  margin: 0;
+}
+
+.bell-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.bell-empty-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bell-empty-text {
+  max-width: 280px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.bell-more {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 10px;
+}
+
+.bell-inline-error {
+  margin: 0 16px 12px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+/* Phones: the panel spans the screen under the top bar. */
+@media (max-width: 560px) {
+  .bell-panel {
+    position: fixed;
+    top: calc(var(--topbar) + 6px);
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: calc(100vh - var(--topbar) - 16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bell-panel {
+    animation: none;
+  }
+}
+
+/* --- Attention badges in the sidebar --------------------------------------- */
+
+.nav-badge {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.nav-badge-signups {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.nav-link.active .nav-badge-signups {
+  background: var(--surface);
+}
+
+/* The collapsed rail has no room for a number: a dot on the icon. */
+@media (min-width: 861px) {
+  .app.nav-collapsed .nav-link {
+    position: relative;
+  }
+
+  .app.nav-collapsed .nav-badge {
+    position: absolute;
+    top: 7px;
+    left: calc(50% + 5px);
+    min-width: 0;
+    width: 9px;
+    height: 9px;
+    padding: 0;
+    border: 2px solid var(--sidebar);
+    font-size: 0;
+    background: var(--danger);
+  }
+
+  .app.nav-collapsed .nav-badge-signups {
+    background: var(--accent);
+  }
+}
+
+@media (forced-colors: active) {
+  .bell-count,
+  .nav-badge,
+  .bell-item-dot {
+    border: 1px solid CanvasText;
+  }
+}
