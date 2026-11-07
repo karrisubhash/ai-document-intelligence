@@ -48,7 +48,7 @@ already in progress, an archived document). **429** is a rate limit.
 | POST | `/api/auth/signup/` | anyone | `{username, email, first_name, last_name?, password, department?, role?, note?}` files a request - it creates no account. **201** `{status: "PENDING"}`. CSRF enforced; password validated and stored only as a hash; the username is NFKC-normalised, must be ASCII, and is refused (**400**, one message either way) when an account or a waiting request holds it, case-insensitively; the email's domain is lower-cased and must match the allowlist if one is set (subdomains count); `role` is FACULTY, STAFF or STUDENT. **403** when turned off; **429** with `SIGNUP_MAX_PENDING` requests waiting (`code` `signup_queue_full`), or past `THROTTLE_SIGNUP` (100/hour per address - counting attempts that pass CSRF, the switch and the queue check, failed ones included). Audited (`SIGNUP_REQUEST`) |
 | GET | `/api/auth/me/` | signed in | Profile, role, department and `capabilities` |
 | GET | `/api/departments/` | signed in | Active departments `{id, name, code}` |
-| GET | `/api/dashboard/` | signed in | Counts and lists over the caller's visible documents; `pending_signup_requests` - how many requests this administrator reviews - is null for non-administrators |
+| GET | `/api/dashboard/` | signed in | Counts and lists over the caller's visible documents; `pending_signup_requests` - how many requests this administrator reviews - is null for non-administrators; `activity` - uploads by week, the caller's questions by day, the library by type and department, and for administrators an `org` week of headline numbers (cached 60 s; shape in [analytics.md](analytics.md#dashboard-activity)) |
 
 Signing in (session or token) with the exact username and the password of a request that
 is still waiting, or was declined, is **403** `{detail, code}` with `code` `signup_pending`
@@ -92,10 +92,10 @@ the caller is refused.
 | POST | `/api/chat/` | `{question, conversation_id?, document_type?, department?, document_id?, collection_id?}` → answer, citations, abstention reason, grounding, retrieval counts, model, plan, `timings`, notes, `resolved_question` for follow-ups, and `source`: `documents` (grounded, cited), `general` (general knowledge, uncited; only with `CHAT_GENERAL_KNOWLEDGE`) or `none` (abstained) |
 | POST | `/api/chat/stream/` | Same request and the same turn, as Server-Sent Events: `delta {text}` while the model writes (provisional), `reset {}` (discard what was shown), then `done {…the /chat/ payload}` (authoritative) or `error {detail}`. Validation, throttling and conversation ownership fail as ordinary JSON 4xx before streaming starts. Extractive answers send only `done` |
 | GET | `/api/chat/conversations/` | The caller's conversations, newest first |
-| GET · PATCH · DELETE | `/api/chat/conversations/{id}/` | Owner only; PATCH `{title}` |
+| GET · PATCH · DELETE | `/api/chat/conversations/{id}/` | Owner only; PATCH `{title}`. Each message carries `my_feedback`: `{rating, comment}` the owner gave it, or null |
 | POST | `/api/chat/conversations/bulk-delete/` | Owner only. JSON `{"ids": [...]}` (≤100) or `{"all": true, "as_of"?}` (the caller's conversations, ≤100 per request, with `remaining` and `as_of` as for documents). Unknown keys are **400**. **200** `{deleted, not_found}`; another user's id is `not_found` |
 | POST | `/api/messages/{id}/feedback/` | `{rating: HELPFUL \| NOT_HELPFUL \| INCORRECT, comment?}`; owner of the conversation only |
-| GET | `/api/evaluations/…` | Evaluation runs and per-case results, scoped by dataset department |
+| GET | `/api/evaluations/…` | **Administrators only** (a department admin: their department's datasets). Evaluation runs (each dataset with its `cases` count), per-case results, compare |
 
 The question text is never written to the audit log; only that a search or question
 happened, and counts.
@@ -137,6 +137,8 @@ change their own role or deactivate themselves.
 | GET | `/api/admin/jobs/` | admins, scoped | `status`, `error_code`, `stalled=true` |
 | POST | `/api/admin/jobs/{id}/retry/` | admins, scoped | **409** if a run is active; **400** for a superseded version |
 | GET | `/api/admin/system/` | system admins | Dependency health, queue depths, counts, AI configuration — names only, never secrets |
+| GET | `/api/admin/analytics/?range=7d\|30d\|90d[&fresh=1]` | admins, scoped | Daily aggregates over answers, feedback, processing, uploads, storage and the audit log; cached per scope and range (`ANALYTICS_CACHE_SECONDS`); `fresh=1` recomputes, throttled (`THROTTLE_ANALYTICS_REFRESH`, 60/hour). Never question or search text. Shape in [analytics.md](analytics.md) |
+| GET | `/api/admin/feedback/` | admins, scoped | The rated-answers review queue, newest first: `rating` (one or comma-separated), `since`, `page`. Never who rated; the question for system admins on flags only. Shape in [analytics.md](analytics.md#feedback-review-queue) |
 
 ## Operational
 
