@@ -283,6 +283,19 @@ const PATHS = {
       <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
     </>
   ),
+  keyboard: (
+    <>
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+      <path d="M6 9h.01" />
+      <path d="M10 9h.01" />
+      <path d="M14 9h.01" />
+      <path d="M18 9h.01" />
+      <path d="M6 13h.01" />
+      <path d="M18 13h.01" />
+      <path d="M10 13h4" />
+      <path d="M7 16h10" />
+    </>
+  ),
   "alert-triangle": (
     <>
       <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />

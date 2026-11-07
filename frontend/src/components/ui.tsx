@@ -1153,6 +1153,68 @@ export function plural(count: number, word: string) {
   return count === 1 ? word : `${word}s`;
 }
 
+// --- Figures ---------------------------------------------------------------------------
+
+/**
+ * One headline figure: a label, the number, and a line saying what it
+ * means. Until the number arrives it shows a skeleton the size of the
+ * figure - the tile neither claims anything nor jumps when it lands. A
+ * value of undefined that is NOT loading (the call failed) shows a dash, so
+ * no number is ever invented.
+ */
+export function StatTile({
+  label,
+  value,
+  caption,
+  icon,
+  tone = "neutral",
+  loading,
+}: {
+  label: string;
+  value: number | string | null | undefined;
+  caption?: ReactNode;
+  icon?: IconName;
+  tone?: "neutral" | "success" | "info" | "warning" | "danger";
+  /** Defaults to "the value has not arrived". */
+  loading?: boolean;
+}) {
+  const waiting = loading ?? value === undefined;
+  const shown =
+    value === undefined || value === null
+      ? "—"
+      : typeof value === "number"
+        ? value.toLocaleString()
+        : value;
+  return (
+    <div className="stat" aria-busy={waiting || undefined}>
+      <div className="stat-head">
+        <span className="stat-label">{label}</span>
+        {icon ? (
+          <span className={`stat-icon stat-icon-${tone}`} aria-hidden="true">
+            <Icon name={icon} />
+          </span>
+        ) : null}
+      </div>
+      {waiting ? (
+        <>
+          <span className="stat-value stat-value-loading" aria-hidden="true">
+            <span className="skeleton-line" />
+          </span>
+          <span className="stat-caption stat-caption-loading" aria-hidden="true">
+            <span className="skeleton-line" />
+          </span>
+          <span className="visually-hidden">Loading</span>
+        </>
+      ) : (
+        <>
+          <span className="stat-value">{shown}</span>
+          {caption ? <span className="stat-caption">{caption}</span> : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 // --- Misc ------------------------------------------------------------------------------
 
 export function Meter({ value, label }: { value: number; label: string }) {

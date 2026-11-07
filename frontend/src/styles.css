@@ -2581,6 +2581,60 @@ a.table-title:hover {
   gap: 4px;
 }
 
+/* Keyboard shortcuts (components/ShortcutsDialog.tsx) */
+
+.shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6) var(--space-8);
+}
+
+.shortcuts-title {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.shortcuts-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.shortcuts-row:last-child {
+  border-bottom: 0;
+}
+
+.shortcuts-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.shortcuts-row dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+@media (max-width: 560px) {
+  .shortcuts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* A confirmation: what it does beside an icon in the action's tone. */
 .confirm {
   display: flex;
@@ -3482,16 +3536,41 @@ a.table-title:hover {
 }
 
 .stat-value {
-  font-size: 30px;
-  font-weight: 650;
-  line-height: 1.1;
-  letter-spacing: -0.025em;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
 .stat-caption {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--text-3);
+}
+
+/* Loading: skeletons that take exactly the figure's and the caption's
+   line boxes, so nothing moves when the numbers land. */
+.stat-value-loading,
+.stat-caption-loading {
+  display: flex;
+  align-items: center;
+  height: calc(1em * var(--leading-tight));
+}
+
+.stat-caption-loading {
+  height: calc(1em * var(--leading-normal));
+}
+
+.stat-value-loading .skeleton-line {
+  width: 42%;
+  height: 0.8em;
+  border-radius: var(--radius-sm);
+}
+
+.stat-caption-loading .skeleton-line {
+  width: 64%;
+  height: 0.75em;
 }
 
 .dash-grid {

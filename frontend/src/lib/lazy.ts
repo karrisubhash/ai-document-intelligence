@@ -99,10 +99,40 @@ export async function recoverFromChunkError(error: unknown): Promise<never> {
   throw error;
 }
 
+/** Loads that a link can start early, by the path of the screen they serve. */
+const prefetchers = new Map<string, () => void>();
+
+/**
+ * Starts loading the code of the screen at `path`, if a lazy screen was
+ * registered for it, so following the link does not wait for the chunk.
+ * Hovering or focusing a sidebar link calls it. Failures are ignored here:
+ * the real navigation reports them.
+ */
+export function prefetchRoute(path: string): void {
+  prefetchers.get(path)?.();
+}
+
 // `any` exactly as React.lazy's own signature has it: a page of any props.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function lazy<T extends ComponentType<any>>(
   load: () => Promise<{ default: T }>,
+  /** The path the screen is served at, so a link to it can prefetch it. */
+  path?: string,
 ): LazyExoticComponent<T> {
-  return reactLazy(() => load().catch(recoverFromChunkError));
+  // One load, shared by a prefetch and the render that follows it. A failed
+  // one is forgotten, so the render tries again (and recovers if it must).
+  let started: Promise<{ default: T }> | null = null;
+  const loadOnce = () => {
+    started ??= load().catch((error: unknown) => {
+      started = null;
+      throw error;
+    });
+    return started;
+  };
+  if (path) {
+    prefetchers.set(path, () => {
+      loadOnce().catch(() => undefined);
+    });
+  }
+  return reactLazy(() => loadOnce().catch(recoverFromChunkError));
 }
