@@ -4,6 +4,11 @@
 Run from the repository root:
 
     python infrastructure/check_deployment_config.py
+    python infrastructure/check_deployment_config.py docker-compose.small.yml
+
+The second form merges a further overlay on top and checks the same
+guarantees still hold, plus, for the small-server profile, its memory
+ceilings, log rotation and opt-in monitoring.
 
 Exists because of a bug class that has now bitten this project twice, and
 that no unit test can catch: **Compose MERGES sequences across files.**
@@ -60,17 +65,33 @@ PLACEHOLDERS = {
     "NGINX_SERVER_NAME": "example.invalid",
 }
 
-COMPOSE = [
-    "docker",
-    "compose",
-    "-f",
-    "docker-compose.yml",
-    "-f",
-    "docker-compose.prod.yml",
-    "config",
-    "--format",
-    "json",
-]
+BASE_FILES = ["docker-compose.yml", "docker-compose.prod.yml"]
+
+
+def compose_command(extra_files=()):
+    """`docker compose config` over the production files plus any overlay
+    named on the command line (e.g. docker-compose.small.yml), every
+    profile included, so a service behind one is checked too."""
+    files = []
+    for name in [*BASE_FILES, *extra_files]:
+        files += ["-f", name]
+    return ["docker", "compose", *files, "--profile", "*", "config", "--format", "json"]
+
+
+# The small-server profile's promise (docker-compose.small.yml): a memory
+# ceiling and rotated logs on every long-running service.
+SMALL_OVERLAY = "docker-compose.small.yml"
+LONG_RUNNING = (
+    "db",
+    "redis",
+    "backend",
+    "worker",
+    "worker-index",
+    "nginx",
+    "certbot",
+    "prometheus",
+    "grafana",
+)
 
 # Services that run application code from the image.
 CODE_SERVICES = ("backend", "worker", "worker-index", "migrate")
@@ -83,7 +104,7 @@ EDGE_SERVICE = "nginx"
 EDGE_PORTS = {"80", "443"}
 
 
-def load_config():
+def load_config(extra_files=()):
     # The real environment wins where it is already set, so an operator
     # checking their own stack checks their own values.
     environment = {**PLACEHOLDERS, **os.environ}
@@ -97,7 +118,10 @@ def load_config():
         shutil.copyfile(".env.example", ".env")
     try:
         result = subprocess.run(
-            COMPOSE, capture_output=True, text=True, env=environment
+            compose_command(extra_files),
+            capture_output=True,
+            text=True,
+            env=environment,
         )
     finally:
         if created:
@@ -249,8 +273,37 @@ def check(config):
     return failures
 
 
+def check_small(config):
+    """What docker-compose.small.yml promises on top of the production
+    checks: a memory ceiling and rotated logs on every long-running
+    service, and monitoring only on request."""
+    failures = []
+    services = config.get("services", {})
+    for name in LONG_RUNNING:
+        service = services.get(name)
+        if service is None:
+            continue
+        if not service.get("mem_limit"):
+            failures.append(
+                f"{name}: has no mem_limit; on a small server one runaway service "
+                f"must be killed alone, not take the host's memory."
+            )
+        logging = service.get("logging") or {}
+        if not (logging.get("options") or {}).get("max-size"):
+            failures.append(f"{name}: its logs are not rotated (logging max-size).")
+    for name in ("prometheus", "grafana"):
+        if name in services and "monitoring" not in (services[name].get("profiles") or []):
+            failures.append(f"{name}: runs by default; it belongs behind --profile monitoring.")
+    return failures
+
+
 def main():
-    failures = check(load_config())
+    extra_files = sys.argv[1:]
+    config = load_config(extra_files)
+    failures = check(config)
+    small = SMALL_OVERLAY in extra_files
+    if small:
+        failures += check_small(config)
 
     if failures:
         print("Production configuration check FAILED:\n", file=sys.stderr)
@@ -258,13 +311,17 @@ def main():
             print(f"  - {failure}", file=sys.stderr)
         sys.exit(1)
 
-    print("Production configuration check passed:")
+    named = " + ".join(extra_files)
+    print(f"Production configuration check passed{f' (with {named})' if named else ''}:")
     print("  - no source bind mount reaches the application containers")
     print("  - only nginx is published to the host, on 80 and 443")
     print("  - every application service has the deployment's settings, DEBUG off")
     print("  - application containers run as the unprivileged user")
     print("  - their tmpfs mounts stay writable after a restart")
     print("  - the edge is built with the frontend")
+    if small:
+        print("  - every long-running service has a memory ceiling and rotated logs")
+        print("  - Prometheus and Grafana run only with --profile monitoring")
 
 
 if __name__ == "__main__":
