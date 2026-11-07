@@ -81,6 +81,10 @@ class ChatView(APIView):
         """
         created = not data.get("conversation_id")
         conversation = self._conversation(request, data.get("conversation_id"))
+        # Regenerate, or Edit & resend: the turn this one replaces. Removed
+        # once the new turn is saved, and left out of the context the new
+        # answer is built from - it is the question being taken back.
+        replaced = self._replaced_turn(conversation, data.get("replaces"))
 
         try:
             # Read once, and only what follow-up resolution and the general
@@ -89,9 +93,13 @@ class ChatView(APIView):
             # resolution used to fetch all of that, for every turn, on every
             # question, and the general reply fetched it again whenever it
             # answered.
-            history = list(
-                conversation.messages.order_by("created_at").only("role", "content")
-            )
+            history = [
+                message
+                for message in conversation.messages.order_by("created_at").only(
+                    "role", "content"
+                )
+                if message.id not in replaced
+            ]
 
             # A follow-up is resolved against the caller's own earlier turns
             # before retrieval sees it. "What about MECH?" carries one
@@ -153,9 +161,11 @@ class ChatView(APIView):
                     answer.model_version = reply.model_version
                     answer.llm = llm_metadata(reply)
                     source = "general"
-        except Exception:
+        except BaseException:
             # Created for this question, which was never answered: left in
             # place it was an empty "Untitled conversation" in the list.
+            # BaseException, so a turn the reader stopped
+            # (streaming.Cancelled) is cleaned up too.
             if created:
                 conversation.delete()
             raise
@@ -218,6 +228,10 @@ class ChatView(APIView):
                     "degraded": degraded,
                 },
             )
+            if replaced:
+                # In the same transaction as the turn that replaces it: the
+                # conversation never shows both, or neither.
+                Message.objects.filter(id__in=replaced).delete()
             # touch() so the conversation sorts by recency.
             update_fields = ["updated_at"]
             if not conversation.title:
@@ -297,6 +311,30 @@ class ChatView(APIView):
             "degraded": degraded,
         }
 
+    def _replaced_turn(self, conversation, message_id) -> list:
+        """Ids of the answer `message_id` and the question before it.
+
+        Only an answer in this conversation, which is the caller's own: any
+        other id is a 404, as for a conversation that is not theirs.
+        """
+        if not message_id:
+            return []
+        answer = get_object_or_404(
+            Message,
+            id=message_id,
+            conversation=conversation,
+            role=Message.Role.ASSISTANT,
+        )
+        question = (
+            conversation.messages.filter(
+                role=Message.Role.USER, created_at__lte=answer.created_at
+            )
+            .exclude(id=answer.id)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        return [answer.id] + ([question.id] if question else [])
+
     def _conversation(self, request, conversation_id):
         if conversation_id:
             # Scoped to the caller: a conversation holds answers produced
@@ -351,22 +389,40 @@ class ChatStreamView(ChatView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         if data.get("conversation_id"):
-            self._conversation(request, data["conversation_id"])  # 404 now
+            conversation = self._conversation(
+                request, data["conversation_id"]
+            )  # 404 now
+            self._replaced_turn(conversation, data.get("replaces"))  # 404 now too
 
         events = queue.Queue()
+        # Set when the reader goes away - the browser's Stop, a closed tab -
+        # which the server learns when a write to the connection fails and
+        # the response generator is closed (_events). The turn's next
+        # streaming call then raises streaming.Cancelled: no more words are
+        # generated, so no more free-tier quota is spent, and nothing is
+        # saved - the reader never saw an answer to keep.
+        cancelled = threading.Event()
 
-        def sink(event, text):
+        def sink(event, payload):
+            if cancelled.is_set():
+                raise streaming.Cancelled()
             if event == "delta":
-                events.put((event, {"text": text}))
-            else:
+                events.put((event, {"text": payload}))
+            elif event == "reset":
                 # `reset` may name the source of the answer that follows, so
                 # a general-knowledge reply is labelled while it streams.
-                events.put((event, {"source": text} if text else {}))
+                events.put((event, {"source": payload} if payload else {}))
+            else:
+                # status {stage} and sources {sources}: progress, additive.
+                events.put((event, payload))
 
         def work():
             try:
                 with streaming.capture(sink):
                     events.put(("done", self.handle(request, data)))
+            except streaming.Cancelled:
+                logger.info("chat.stream_cancelled")
+                telemetry.chat_stream_cancelled()
             except Exception:
                 logger.exception("chat.stream_failed")
                 telemetry.chat_stream_failed()
@@ -389,13 +445,16 @@ class ChatStreamView(ChatView):
         # (and ObservabilityMiddleware resets it on this thread anyway once
         # the response is returned). The sink is set inside the copy.
         context = contextvars.copy_context()
-        threading.Thread(
+        worker = threading.Thread(
             target=context.run, args=(work,), name="chat-stream", daemon=True
-        ).start()
+        )
+        worker.start()
 
         response = StreamingHttpResponse(
-            self._events(events), content_type="text/event-stream"
+            self._events(events, cancelled), content_type="text/event-stream"
         )
+        # For tests, which wait for the turn to finish after disconnecting.
+        response.worker = worker
         response["Cache-Control"] = "no-cache"
         # nginx buffers proxied responses by default, which would hold every
         # delta until the answer was complete. This turns it off for this
@@ -403,7 +462,16 @@ class ChatStreamView(ChatView):
         response["X-Accel-Buffering"] = "no"
         return response
 
-    def _events(self, events):
+    def _events(self, events, cancelled=None):
+        try:
+            yield from self._relay(events)
+        finally:
+            # The server closes this generator when the connection is gone
+            # (or when the turn has ended, when this changes nothing).
+            if cancelled is not None:
+                cancelled.set()
+
+    def _relay(self, events):
         while True:
             try:
                 item = events.get(timeout=self.KEEPALIVE_SECONDS)

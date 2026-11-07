@@ -243,8 +243,11 @@ class ChatStreamEndpointTests(TransactionTestCase):
 
     def test_extractive_answer_arrives_as_one_done_event(self):
         events = self.stream({"question": "hi"})
-        self.assertEqual([name for name, _ in events], ["done"])
-        self.assertEqual(events[0][1]["source"], "none")
+        # Progress events (`status`, `sources`) are additive; an answerer
+        # that cannot stream still sends no text before `done`.
+        answer_events = [name for name, _ in events if name != "status"]
+        self.assertEqual(answer_events, ["done"])
+        self.assertEqual(events[-1][1]["source"], "none")
         self.assertEqual(Message.objects.count(), 2)
 
     @override_settings(**GENERAL_ON)
@@ -509,7 +512,12 @@ class WithdrawnDraftTests(TestCase):
             mock.patch.object(engine.search_service, "search", return_value=found),
             mock.patch.object(engine, "get_answerer", return_value=answerer),
             mock.patch.object(engine, "_figure_hints", return_value=[]),
-            streaming.capture(lambda event, text: events.append(event)),
+            # Text events only: progress (status, sources) is additive.
+            streaming.capture(
+                lambda event, payload: (
+                    event in ("delta", "reset") and events.append(event)
+                )
+            ),
         ):
             answer = engine.ask(
                 None, "What is the minimum attendance for the examination?"

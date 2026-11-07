@@ -28,6 +28,21 @@ class ChatRequestSerializer(serializers.Serializer):
     collection_id = serializers.IntegerField(
         required=False, allow_null=True, min_value=1
     )
+    # Regenerate / Edit & resend: the id of the ANSWER this turn replaces, in
+    # the same conversation. Its question and it are removed once the new
+    # turn is saved. Counted by the chat throttles like any other question.
+    replaces = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+
+    def validate(self, data):
+        if data.get("replaces") and not data.get("conversation_id"):
+            raise serializers.ValidationError(
+                {
+                    "replaces": [
+                        "Only a turn of an existing conversation can be replaced."
+                    ]
+                }
+            )
+        return data
 
 
 def _feedback_of_owner(messages):

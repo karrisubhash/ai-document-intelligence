@@ -116,6 +116,12 @@ def chat_stream_failed():
 
 
 @_safe
+def chat_stream_cancelled():
+    """A streamed answer the reader stopped (or walked away from)."""
+    metrics.chat_stream_cancellations.inc()
+
+
+@_safe
 def rag_answered(answer):
     """One RagAnswer, reported. Takes the object so callers cannot forget a
     field, and reads only numbers and fixed vocabularies off it."""

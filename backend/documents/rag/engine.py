@@ -384,6 +384,9 @@ def _ask(
     timings = {}
 
     # --- Retrieve (permission filter runs inside, before similarity) ------
+    # Progress for a streaming reader (documents.rag.streaming); a no-op
+    # anywhere else.
+    streaming.status(streaming.RETRIEVING)
     stage_started = time.monotonic()
     retrieval = search_service.search(
         user,
@@ -407,6 +410,7 @@ def _ask(
         )
 
     # --- Rerank -----------------------------------------------------------
+    streaming.status(streaming.RANKING)
     reranker = get_reranker()
     stage_started = time.monotonic()
     # A score remembered while reranking serves only this user's later
@@ -490,6 +494,11 @@ def _ask(
 
     built.focus = (focus or "").strip()
     prompt = context_builder.render(built, question)
+    # The passages the answer is about to be written from - authorized, above
+    # the floor and inside the budget - so a reader sees where it is looking
+    # before the first word. Titles and pages only.
+    streaming.sources(built.passages)
+    streaming.status(streaming.WRITING)
 
     # --- Answer -----------------------------------------------------------
     answerer = get_answerer()
@@ -550,6 +559,7 @@ def _ask(
         )
 
     # --- Verify before returning -----------------------------------------
+    streaming.status(streaming.VERIFYING)
     stage_started = time.monotonic()
     report = grounding.validate(response.text, built, abstained=False)
     timings["grounding"] = _elapsed_ms(stage_started)
