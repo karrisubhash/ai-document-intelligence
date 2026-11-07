@@ -276,6 +276,8 @@ class CapabilityTests(TestCase):
 
     def test_a_system_admin_has_everything(self):
         caps = self.capabilities(make_user("sadmin", UserProfile.Role.SYSTEM_ADMIN))
+        # is_guest says what the account is, not something it may do.
+        self.assertIs(caps.pop("is_guest"), False)
         self.assertTrue(all(caps.values()))
 
 
