@@ -1,16 +1,20 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
+import { aiApi } from "../api/ai";
 import { ApiError, api } from "../api/client";
 import { useResource, type Resource } from "../api/hooks";
-import type { Citation, ConversationSummary, Paginated } from "../api/types";
+import type { Citation, ConversationSummary, Paginated, StreamSource } from "../api/types";
+import { useMe } from "../auth/AuthContext";
 import {
   Answer,
   SourceDialog,
+  answerAsMarkdown,
   fromMessage,
   fromResponse,
   type AnswerView,
 } from "../components/chat/Answer";
+import { AnswerProgress, stageLabel } from "../components/chat/Progress";
 import { Icon } from "../components/icons";
 import {
   Alert,
@@ -31,6 +35,7 @@ import {
 import { EXAMPLE_QUESTIONS } from "../lib/examples";
 import { formatRelative } from "../lib/format";
 import { Markdown } from "../lib/markdown";
+import "../styles/chat.css";
 
 function fitComposer(box: HTMLTextAreaElement | null) {
   if (!box) return;
@@ -47,6 +52,24 @@ interface Turn {
   streaming?: string;
   /** Where the answer being written comes from, when the server said. */
   streamingSource?: string;
+  /** The step the server says it is on, and the passages it is reading. */
+  stage?: string;
+  sources?: StreamSource[];
+  /** The reader pressed Stop: nothing was saved. */
+  stopped?: boolean;
+}
+
+/** How close to the bottom counts as "reading the latest" (px). */
+const NEAR_BOTTOM = 80;
+
+function clock(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(
+    new Date(value),
+  );
+}
+
+function isAbort(caught: unknown): boolean {
+  return caught instanceof DOMException && caught.name === "AbortError";
 }
 
 function ConversationList({
@@ -359,6 +382,8 @@ function ConversationList({
 
 export default function ChatPage() {
   useDocumentTitle("Ask");
+  const me = useMe();
+  const toast = useToast();
   const params = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -395,6 +420,22 @@ export default function ChatPage() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState(handoff.question ?? "");
   const [sending, setSending] = useState(false);
+  // The turn being written, so Stop can end it (and the server stops the
+  // model, see ChatStreamView).
+  const inFlight = useRef<AbortController | null>(null);
+  // Edit & resend: the last question, back in the composer, replacing its
+  // turn when sent.
+  const [editing, setEditing] = useState<{ key: string; replaces: number | null } | null>(null);
+  // Enter while an answer is still being written: said, not ignored.
+  const [busyHint, setBusyHint] = useState(false);
+  // The one live region: what a screen reader hears about the turn.
+  const [announcement, setAnnouncement] = useState("");
+  // Whether answers are being written right now, or quoted (capacity).
+  const [capabilitiesTick, setCapabilitiesTick] = useState(0);
+  const capabilities = useResource(() => aiApi.capabilities(), [capabilitiesTick]);
+  // Follow the newest words only while the reader is at the bottom.
+  const following = useRef(true);
+  const [showJump, setShowJump] = useState(false);
   const [inspecting, setInspecting] = useState<{ citation: Citation; quote: string } | null>(
     null,
   );
@@ -465,9 +506,32 @@ export default function ChatPage() {
     setTurnsFor(conversationId);
   }, [conversationId, history.data, turnsFor]);
 
+  // Autoscroll only for a reader who is already at the bottom. Every delta
+  // changes `turns`, and scrolling on each one yanked anyone reading the
+  // sources further up back down.
   useEffect(() => {
+    const box = thread.current;
+    if (!box) return;
+    if (following.current) {
+      box.scrollTo({ top: box.scrollHeight, behavior: sending ? "auto" : "smooth" });
+      setShowJump(false);
+    } else if (turns.length) {
+      setShowJump(true);
+    }
+  }, [turns, sending]);
+
+  const onThreadScroll = () => {
+    const box = thread.current;
+    if (!box) return;
+    following.current = box.scrollHeight - box.scrollTop - box.clientHeight < NEAR_BOTTOM;
+    if (following.current) setShowJump(false);
+  };
+
+  const jumpToLatest = () => {
+    following.current = true;
+    setShowJump(false);
     thread.current?.scrollTo({ top: thread.current.scrollHeight, behavior: "smooth" });
-  }, [turns]);
+  };
 
   // The composer grows with what is typed, up to its maximum height - and
   // refits when its width changes, which re-wraps the text.
@@ -499,32 +563,59 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const send = async (text: string) => {
+  const send = async (
+    text: string,
+    options: { replaceKey?: string; replaces?: number | null; everywhere?: boolean } = {},
+  ) => {
     const question = text.trim();
-    if (!question || sending) return;
+    if (!question) return;
+    if (sending) {
+      setBusyHint(true);
+      setAnnouncement("Still answering the last question.");
+      return;
+    }
     const key = `t${Date.now()}`;
     const askedIn = view.current;
-    setTurns((current) => [...current, { key, question, answer: null }]);
+    const fresh: Turn = { key, question, answer: null };
+    // A regenerated, edited or retried turn takes the place of the one it
+    // replaces; anything else is a new turn at the end.
+    setTurns((current) =>
+      options.replaceKey && current.some((turn) => turn.key === options.replaceKey)
+        ? current.map((turn) => (turn.key === options.replaceKey ? fresh : turn))
+        : [...current, fresh],
+    );
     setDraft("");
+    setEditing(null);
+    setBusyHint(false);
     setSending(true);
+    following.current = true;
+    setAnnouncement("Searching your documents.");
+    const controller = new AbortController();
+    inFlight.current = controller;
+    const patch = (update: (turn: Turn) => Turn) =>
+      setTurns((current) => current.map((turn) => (turn.key === key ? update(turn) : turn)));
     try {
-      const patch = (update: (turn: Turn) => Turn) =>
-        setTurns((current) => current.map((turn) => (turn.key === key ? update(turn) : turn)));
       const response = await api.chatStream(
         {
           question,
           conversation_id: conversationId,
-          ...(scope
-            ? { document_id: scope.id }
-            : collectionId
-              ? { collection_id: Number(collectionId) }
-              : {}),
+          ...(options.replaces ? { replaces: options.replaces } : {}),
+          ...(options.everywhere
+            ? {}
+            : scope
+              ? { document_id: scope.id }
+              : collectionId
+                ? { collection_id: Number(collectionId) }
+                : {}),
         },
         {
           onDelta: (piece) => patch((turn) => ({ ...turn, streaming: (turn.streaming ?? "") + piece })),
           onReset: (source) =>
             patch((turn) => ({ ...turn, streaming: "", streamingSource: source })),
+          onStatus: (stage) => patch((turn) => ({ ...turn, stage })),
+          onSources: (sources) => patch((turn) => ({ ...turn, sources })),
         },
+        controller.signal,
       );
       if (!mounted.current) return;
       if (view.current !== askedIn) {
@@ -536,6 +627,7 @@ export default function ChatPage() {
       setTurns((current) =>
         current.map((turn) => (turn.key === key ? { ...turn, answer: fromResponse(response) } : turn)),
       );
+      setAnnouncement(response.abstained ? "No answer: not enough evidence." : "Answer ready.");
       if (conversationId === null) {
         setTurnsFor(response.conversation_id);
         navigate(`/ask/${response.conversation_id}`, {
@@ -547,26 +639,50 @@ export default function ChatPage() {
       conversations.reload();
     } catch (caught) {
       if (view.current === askedIn) {
-        setTurns((current) =>
-          current.map((turn) => (turn.key === key ? { ...turn, error: caught } : turn)),
-        );
+        if (isAbort(caught)) {
+          patch((turn) => ({ ...turn, stopped: true }));
+          setAnnouncement("Answer stopped.");
+        } else {
+          patch((turn) => ({ ...turn, error: caught }));
+          setAnnouncement("The answer could not be completed.");
+        }
       }
     } finally {
+      if (inFlight.current === controller) inFlight.current = null;
       setSending(false);
+      // Writing may have just paused or resumed (a cooldown, the day's quota).
+      setCapabilitiesTick((tick) => tick + 1);
       if (view.current === askedIn) composer.current?.focus();
+    }
+  };
+
+  const stop = () => inFlight.current?.abort();
+
+  const copy = async (answer: AnswerView) => {
+    try {
+      await navigator.clipboard.writeText(answerAsMarkdown(answer));
+      toast("Answer copied, with its sources.", "success");
+    } catch {
+      toast("The answer could not be copied. Select it and copy it instead.", "danger");
     }
   };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void send(draft);
+    void send(draft, editing ? { replaceKey: editing.key, replaces: editing.replaces } : {});
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void send(draft);
+      void send(draft, editing ? { replaceKey: editing.key, replaces: editing.replaces } : {});
     }
+  };
+
+  const editLast = (turn: Turn) => {
+    setDraft(turn.question);
+    setEditing({ key: turn.key, replaces: turn.answer?.id ?? null });
+    composer.current?.focus();
   };
 
   const startNew = () => {
@@ -584,6 +700,10 @@ export default function ChatPage() {
   // Showing a conversation whose turns have not been loaded yet.
   const opening = conversationId !== null && turnsFor !== conversationId;
   const conversationCount = conversations.data?.count ?? 0;
+  const lastKey = turns.length ? turns[turns.length - 1].key : null;
+  const scoped = Boolean(scope || collectionId);
+  const quoting = capabilities.data?.mode === "quoting";
+  const showDetails = Boolean(me.capabilities.view_system_status);
 
   return (
     <div className={`chat${listOpen ? " chat-list-open" : ""}`}>
@@ -630,7 +750,13 @@ export default function ChatPage() {
 
       <section className="chat-main" aria-label="Conversation">
         <h1 className="visually-hidden">Ask</h1>
-        <div className="thread" ref={thread} aria-live="polite" aria-busy={sending}>
+        {/* The one live region. The thread itself is not live: with it and
+            the streaming text both announcing, a screen reader read the
+            answer out word by word, twice. */}
+        <p className="visually-hidden" aria-live="polite">
+          {announcement}
+        </p>
+        <div className="thread" ref={thread} aria-busy={sending} onScroll={onThreadScroll}>
           <div className="thread-inner">
             {history.error && opening ? (
               <ErrorState
@@ -665,62 +791,153 @@ export default function ChatPage() {
                 </div>
               </div>
             ) : (
-              turns.map((turn) => (
-                <article key={turn.key} className="turn">
-                  <div className="bubble bubble-user">
-                    <p>{turn.question}</p>
-                  </div>
-                  <div className="assistant-row">
-                    <span className="assistant-avatar" aria-hidden="true">
-                      <Icon name="sparkles" size={16} />
-                    </span>
-                    <div className="bubble bubble-assistant">
-                      {turn.answer ? (
-                        <Answer
-                          answer={turn.answer}
-                          onInspect={(citation, quote) => setInspecting({ citation, quote })}
+              turns.map((turn) => {
+                const latest = turn.key === lastKey;
+                const settled = !sending || !latest;
+                return (
+                  <article key={turn.key} className="turn">
+                    <div className="user-row">
+                      {latest && settled && !editing ? (
+                        <IconButton
+                          icon="pencil"
+                          size="sm"
+                          className="turn-edit"
+                          label="Edit question"
+                          onClick={() => editLast(turn)}
                         />
-                      ) : turn.error ? (
-                        <Alert tone="danger" title="No answer">
-                          {turn.error instanceof ApiError && turn.error.status === 429
-                            ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
-                            : errorMessage(turn.error)}
-                        </Alert>
-                      ) : turn.streaming ? (
-                        // Provisional: the server's final answer replaces it.
-                        <div className="answer answer-streaming" aria-live="polite" aria-busy="true">
-                          <Markdown
-                            source={turn.streaming}
-                            renderCitation={(marker, key) => <sup key={key}>[{marker}]</sup>}
-                          />
-                          {turn.streamingSource === "general" ? (
-                            <div className="answer-meta">
-                              <Badge tone="warning" icon="globe">
-                                General knowledge · not from your documents
-                              </Badge>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="thinking">
-                          <span className="typing" aria-hidden="true">
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                          <span>Searching your documents and checking the evidence…</span>
-                        </div>
-                      )}
+                      ) : null}
+                      <div className={`bubble bubble-user${editing?.key === turn.key ? " bubble-editing" : ""}`}>
+                        <p>{turn.question}</p>
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))
+                    <div className="assistant-row">
+                      <span className="assistant-avatar" aria-hidden="true">
+                        <Icon name="sparkles" size={16} />
+                      </span>
+                      <div className="bubble bubble-assistant">
+                        {turn.answer ? (
+                          <Answer
+                            answer={turn.answer}
+                            showDetails={showDetails}
+                            onInspect={(citation, quote) => setInspecting({ citation, quote })}
+                            onAsk={latest && settled ? (question) => void send(question) : undefined}
+                            offerAlternatives={
+                              latest && turn.answer.abstained
+                                ? {
+                                    searchFor: turn.question,
+                                    askEverywhere: scoped
+                                      ? () => {
+                                          setScope(null);
+                                          setCollectionId("");
+                                          void send(turn.question, { everywhere: true });
+                                        }
+                                      : undefined,
+                                  }
+                                : undefined
+                            }
+                            actions={
+                              <>
+                                {turn.answer.abstained ? null : (
+                                  <IconButton
+                                    icon="copy"
+                                    size="sm"
+                                    label="Copy answer"
+                                    onClick={() => void copy(turn.answer!)}
+                                  />
+                                )}
+                                {latest && settled && turn.answer.id ? (
+                                  <IconButton
+                                    icon="refresh"
+                                    size="sm"
+                                    label="Regenerate answer"
+                                    onClick={() =>
+                                      void send(turn.question, {
+                                        replaceKey: turn.key,
+                                        replaces: turn.answer!.id,
+                                      })
+                                    }
+                                  />
+                                ) : null}
+                              </>
+                            }
+                          />
+                        ) : turn.error || turn.stopped ? (
+                          <div className="turn-failed">
+                            {turn.stopped ? (
+                              <p className="turn-stopped">
+                                <Icon name="x-circle" size={15} />
+                                You stopped this answer. Nothing was saved.
+                              </p>
+                            ) : (
+                              <Alert tone="danger" title="No answer">
+                                {turn.error instanceof ApiError && turn.error.status === 429
+                                  ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
+                                  : errorMessage(turn.error)}
+                              </Alert>
+                            )}
+                            {settled ? (
+                              <Button
+                                size="sm"
+                                icon="refresh"
+                                onClick={() => void send(turn.question, { replaceKey: turn.key })}
+                              >
+                                Try again
+                              </Button>
+                            ) : null}
+                          </div>
+                        ) : turn.streaming ? (
+                          // Provisional: the server's final answer replaces it.
+                          <div className="answer answer-streaming" aria-busy="true">
+                            <AnswerProgress stage={turn.stage} sources={turn.sources} compact />
+                            <Markdown
+                              source={turn.streaming}
+                              renderCitation={(marker, key) => <sup key={key}>[{marker}]</sup>}
+                            />
+                            {turn.streamingSource === "general" ? (
+                              <div className="answer-meta">
+                                <Badge tone="warning" icon="globe">
+                                  General knowledge · not from your documents
+                                </Badge>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="thinking" aria-label={stageLabel(turn.stage)}>
+                            <AnswerProgress stage={turn.stage} sources={turn.sources} />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
             )}
           </div>
         </div>
+        {showJump ? (
+          <button type="button" className="jump-latest" onClick={jumpToLatest}>
+            <Icon name="arrow-up" size={14} className="jump-latest-icon" />
+            Jump to latest
+          </button>
+        ) : null}
 
         <form className="composer" onSubmit={submit}>
           <div className="composer-inner">
+            {editing ? (
+              <div className="composer-editing">
+                <Icon name="pencil" size={14} />
+                <span>Editing your last question - sending replaces its answer.</span>
+                <IconButton
+                  icon="x"
+                  size="sm"
+                  label="Cancel editing"
+                  onClick={() => {
+                    setEditing(null);
+                    setDraft("");
+                  }}
+                />
+              </div>
+            ) : null}
             <div className="composer-box">
               <label htmlFor="composer" className="visually-hidden">
                 Your question
@@ -777,20 +994,40 @@ export default function ChatPage() {
                     </>
                   ) : null}
                 </div>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  icon="arrow-up"
-                  loading={sending}
-                  disabled={!draft.trim() || opening}
-                >
-                  Ask
-                </Button>
+                {quoting ? (
+                  <span
+                    className="capacity-chip"
+                    title="Every AI model is busy or has used today's allowance. Answers are quoted from your documents, still with their sources."
+                  >
+                    <Icon name="info" size={13} />
+                    {capabilities.data?.resumes_at
+                      ? `Answers quote your documents until ${clock(capabilities.data.resumes_at)}`
+                      : "Answers quote your documents for now"}
+                  </span>
+                ) : null}
+                {sending ? (
+                  <Button type="button" size="sm" icon="x-circle" onClick={stop}>
+                    Stop
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    icon="arrow-up"
+                    disabled={!draft.trim() || opening}
+                  >
+                    {editing ? "Ask again" : "Ask"}
+                  </Button>
+                )}
               </div>
             </div>
             <p className="composer-hint">
-              {turns.length ? (
+              {busyHint ? (
+                <span className="composer-busy">
+                  Still answering your last question - wait for it, or press Stop.
+                </span>
+              ) : turns.length ? (
                 <>Follow-up questions like “what about MECH?” use this conversation for context.</>
               ) : (
                 <>Answers cite the passages they come from.</>

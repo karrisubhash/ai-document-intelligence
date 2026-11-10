@@ -47,6 +47,7 @@ import type {
   SignupRequest,
   SignupStatus,
   SourcePassage,
+  StreamSource,
   SystemStatus,
 } from "./types";
 
@@ -232,6 +233,10 @@ export interface StreamHandlers {
   onDelta?: (text: string) => void;
   /** Discard what onDelta has shown; `source` labels the answer that follows. */
   onReset?: (source?: AnswerSource) => void;
+  /** Which step is running: "retrieving", "ranking", "writing" or "verifying". */
+  onStatus?: (stage: string) => void;
+  /** The passages the answer is being written from (provisional; `done` has the cited ones). */
+  onSources?: (sources: StreamSource[]) => void;
 }
 
 /**
@@ -305,6 +310,8 @@ export async function streamChat(
       const payload = JSON.parse(data.join("\n"));
       if (event === "delta") handlers.onDelta?.(payload.text);
       else if (event === "reset") handlers.onReset?.(payload.source);
+      else if (event === "status") handlers.onStatus?.(payload.stage);
+      else if (event === "sources") handlers.onSources?.(payload.sources ?? []);
       else if (event === "done") return payload as ChatResponse;
       else if (event === "error") {
         throw new ApiError(500, payload.detail ?? describe(500, null), payload);
@@ -357,7 +364,10 @@ export interface ChatInput {
   conversation_id?: number | null;
   document_type?: string;
   department?: string;
+  document_id?: number | null;
   collection_id?: number | null;
+  /** Regenerate / Edit & resend: the answer this turn replaces, in the same conversation. */
+  replaces?: number | null;
 }
 
 export interface UploadOptions {

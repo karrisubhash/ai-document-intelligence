@@ -357,6 +357,16 @@ export interface ChatResponse {
   model_display?: string;
   /** What ran in a lesser mode for this answer. */
   degraded?: Degraded;
+  /** Questions to ask next, drawn from what the answer cited; none after an abstention. */
+  suggestions?: string[];
+}
+
+/** A passage the answer is being written from, as the stream announces it. */
+export interface StreamSource {
+  marker: number;
+  document_id: number;
+  document_title: string;
+  page_number: number | null;
 }
 
 /** `reason`: "capacity" (comes back by itself) or "unavailable" (a failure). */
@@ -387,6 +397,7 @@ export interface MessageMetadata {
   /** What the provider said about the answer (documents.rag.engine.llm_metadata). */
   llm?: Record<string, unknown>;
   degraded?: Degraded;
+  suggestions?: string[];
 }
 
 export interface ChatMessage {

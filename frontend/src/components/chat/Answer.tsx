@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../../api/client";
@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   ChatResponse,
   Citation,
+  Degraded,
   FeedbackRating,
 } from "../../api/types";
 import { formatDuration, formatPercent } from "../../lib/format";
@@ -16,7 +17,17 @@ import { explainAbstention } from "../../lib/labels";
 import { Markdown } from "../../lib/markdown";
 import PageText from "../PageText";
 import { Icon, type IconName } from "../icons";
-import { Alert, Badge, Dialog, ErrorState, Skeleton, errorMessage, useToast } from "../ui";
+import {
+  Alert,
+  Badge,
+  Button,
+  Dialog,
+  ErrorState,
+  Skeleton,
+  errorMessage,
+  plural,
+  useToast,
+} from "../ui";
 
 /** One answer, whether it came back just now or was loaded from history. */
 export interface AnswerView {
@@ -42,6 +53,10 @@ export interface AnswerView {
   source: AnswerSource;
   /** The reader's earlier rating, so a reopened answer stays rated. */
   myFeedback?: FeedbackRating | null;
+  /** What ran in a lesser mode: the AI at capacity, a failure, a simpler ranking. */
+  degraded: Degraded | null;
+  /** Questions to ask next, drawn from what was cited. */
+  suggestions: string[];
 }
 
 export function fromResponse(response: ChatResponse): AnswerView {
@@ -68,6 +83,8 @@ export function fromResponse(response: ChatResponse): AnswerView {
     semantic: response.retrieval.semantic,
     timings: response.timings ?? {},
     source: response.source ?? (response.abstained ? "none" : "documents"),
+    degraded: response.degraded ?? null,
+    suggestions: response.suggestions ?? [],
   };
 }
 
@@ -101,7 +118,30 @@ export function fromMessage(message: ChatMessage): AnswerView {
     semantic: Boolean(meta.semantic_retrieval),
     timings: meta.timings ?? {},
     source: meta.source ?? (message.abstained ? "none" : "documents"),
+    degraded: message.degraded ?? meta.degraded ?? null,
+    suggestions: meta.suggestions ?? [],
   };
+}
+
+/**
+ * The answer as Markdown, its markers kept and resolved in footnotes:
+ * "[1] Fee Circular 2025, p. 4". What Copy puts on the clipboard, so a
+ * pasted answer still says where each claim came from.
+ */
+export function answerAsMarkdown(answer: AnswerView): string {
+  if (answer.abstained) return "Not enough evidence to answer.";
+  const notes = answer.citations
+    .slice()
+    .sort((a, b) => a.marker - b.marker)
+    .map((citation) => `[${citation.marker}] ${citation.document_title}, p. ${citation.page_number}`);
+  const label =
+    answer.source === "general" ? "\n\n(General knowledge, not from your documents.)" : "";
+  return `${answer.text.trim()}${label}${notes.length ? `\n\n${notes.join("\n")}` : ""}`;
+}
+
+/** Distinct documents an answer cites. */
+function citedDocuments(citations: Citation[]): number {
+  return new Set(citations.map((citation) => citation.document_id)).size;
 }
 
 // --- Source inspection --------------------------------------------------------
@@ -207,12 +247,35 @@ function Feedback({ messageId, initial = null }: { messageId: number; initial?: 
   const toast = useToast();
   const [rated, setRated] = useState<FeedbackRating | null>(initial);
   const [pending, setPending] = useState(false);
+  // After a Not helpful or Incorrect, an optional "what was wrong?" - the
+  // API has always taken a comment; nothing asked for one.
+  const [asking, setAsking] = useState(false);
+  const [comment, setComment] = useState("");
+  const [sent, setSent] = useState(false);
 
   const rate = async (rating: FeedbackRating) => {
     setPending(true);
     try {
       await api.feedback(messageId, rating);
       setRated(rating);
+      setSent(false);
+      setAsking(rating !== "HELPFUL");
+    } catch (caught) {
+      toast(errorMessage(caught), "danger");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const explain = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!rated || !comment.trim()) return;
+    setPending(true);
+    try {
+      await api.feedback(messageId, rated, comment.trim());
+      setSent(true);
+      setAsking(false);
+      setComment("");
     } catch (caught) {
       toast(errorMessage(caught), "danger");
     } finally {
@@ -221,34 +284,98 @@ function Feedback({ messageId, initial = null }: { messageId: number; initial?: 
   };
 
   return (
-    <div className="feedback" role="group" aria-label="Rate this answer">
-      <span className="feedback-label">{rated ? "Thanks for the feedback." : "Was this useful?"}</span>
-      {RATINGS.map(([rating, label, icon]) => (
-        <button
-          key={rating}
-          type="button"
-          className={`chip chip-sm${rated === rating ? " chip-active" : ""}`}
-          title={label}
-          aria-pressed={rated === rating}
-          disabled={pending}
-          onClick={() => rate(rating)}
-        >
-          <Icon name={icon} />
-          <span className="chip-label">{label}</span>
-        </button>
-      ))}
+    <div className="feedback-wrap">
+      <div className="feedback" role="group" aria-label="Rate this answer">
+        <span className="feedback-label">
+          {sent ? "Thanks - that helps us fix it." : rated ? "Thanks for the feedback." : "Was this useful?"}
+        </span>
+        {RATINGS.map(([rating, label, icon]) => (
+          <button
+            key={rating}
+            type="button"
+            className={`chip chip-sm${rated === rating ? " chip-active" : ""}`}
+            title={label}
+            aria-pressed={rated === rating}
+            disabled={pending}
+            onClick={() => rate(rating)}
+          >
+            <Icon name={icon} />
+            <span className="chip-label">{label}</span>
+          </button>
+        ))}
+      </div>
+      {asking ? (
+        <form className="feedback-comment" onSubmit={explain}>
+          <label htmlFor={`feedback-${messageId}`} className="feedback-comment-label">
+            What was wrong? <span className="muted">(optional)</span>
+          </label>
+          <textarea
+            id={`feedback-${messageId}`}
+            className="input"
+            rows={2}
+            maxLength={2000}
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            placeholder="e.g. the fee shown is last year's"
+          />
+          <div className="feedback-comment-actions">
+            <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>
+              Skip
+            </Button>
+            <Button size="sm" type="submit" loading={pending} disabled={!comment.trim()}>
+              Send
+            </Button>
+          </div>
+        </form>
+      ) : null}
     </div>
   );
+}
+
+function DegradedNote({ degraded }: { degraded: Degraded | null }) {
+  if (!degraded) return null;
+  if (degraded.answerer) {
+    return (
+      <p className="answer-degraded" role="note">
+        <Icon name="info" size={14} />
+        {degraded.reason === "capacity"
+          ? "AI writing is at capacity — this answer quotes your documents directly."
+          : "AI writing is unavailable right now — this answer quotes your documents directly."}
+      </p>
+    );
+  }
+  if (degraded.reranker) {
+    return (
+      <p className="answer-degraded" role="note">
+        <Icon name="info" size={14} />
+        Passages were ranked in a simpler mode just now, so this answer may be less precise.
+      </p>
+    );
+  }
+  return null;
 }
 
 export function Answer({
   answer,
   onInspect,
+  showDetails = false,
+  actions,
+  onAsk,
+  offerAlternatives,
 }: {
   answer: AnswerView;
   onInspect: (citation: Citation, answerText: string) => void;
+  /** Engineering detail (ranking, support, stage timings, notes): system administrators. */
+  showDetails?: boolean;
+  /** Copy, Regenerate and the like, shown beside the rating. */
+  actions?: ReactNode;
+  /** Ask a suggested follow-up. Only the latest answer offers them. */
+  onAsk?: (question: string) => void;
+  /** After an abstention: "Search instead", and "Ask across all documents" when scoped. */
+  offerAlternatives?: { searchFor: string; askEverywhere?: () => void };
 }) {
   const byMarker = new Map(answer.citations.map((citation) => [citation.marker, citation]));
+  const documents = citedDocuments(answer.citations);
 
   return (
     <div className="answer">
@@ -270,6 +397,22 @@ export function Answer({
                 {note}
               </p>
             ))}
+            {offerAlternatives ? (
+              <div className="abstention-actions">
+                <Link
+                  className="btn btn-secondary btn-sm"
+                  to={`/search?q=${encodeURIComponent(offerAlternatives.searchFor)}`}
+                >
+                  <Icon name="search" />
+                  Search instead
+                </Link>
+                {offerAlternatives.askEverywhere ? (
+                  <Button size="sm" icon="globe" onClick={offerAlternatives.askEverywhere}>
+                    Ask across all documents
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (
@@ -292,6 +435,8 @@ export function Answer({
           }}
         />
       )}
+
+      <DegradedNote degraded={answer.degraded} />
 
       {answer.planSteps.length > 1 ? (
         <div className="plan">
@@ -371,43 +516,69 @@ export function Answer({
             {answer.generative ? "Written from sources" : "Quoted from sources"}
           </Badge>
         )}
-        <span className="answer-duration">
-          <Icon name="clock" size={13} />
-          {formatDuration(answer.durationMs)}
+        <span className="answer-summary">
+          {answer.generative && answer.modelName && !answer.abstained ? (
+            <span className="answer-model">{answer.modelName}</span>
+          ) : null}
+          {!answer.abstained && answer.source !== "general" && answer.citations.length ? (
+            <span>
+              Checked against {answer.citations.length} {plural(answer.citations.length, "source")}
+              {documents > 1 ? ` in ${documents} documents` : ""}
+            </span>
+          ) : null}
+          <span className="answer-duration">
+            <Icon name="clock" size={13} />
+            {formatDuration(answer.durationMs)}
+          </span>
         </span>
+        {actions ? <span className="answer-actions">{actions}</span> : null}
         {answer.id ? <Feedback messageId={answer.id} initial={answer.myFeedback ?? null} /> : null}
       </div>
-      <details className="answer-details">
-        <summary>
-          <Icon name="chevron-right" size={14} />
-          How this answer was produced
-        </summary>
-        <ul className="details-list">
-          <li>
-            {answer.retrieved} passages retrieved, {answer.passagesUsed} used
-            {answer.semantic ? " (keyword and meaning search)" : " (keyword search)"}
-          </li>
-          {answer.reranker ? <li>Ranked by {answer.reranker}</li> : null}
-          <li>{answer.generative ? `Answered by ${answer.modelName}` : answer.modelName || "Answered by —"}</li>
-          {!answer.abstained && answer.source !== "general" ? (
-            <li>
-              Every figure checked against the cited passages; wording support{" "}
-              {formatPercent(answer.supportRatio)}
-            </li>
-          ) : null}
-          {Object.keys(answer.timings).length ? (
-            <li>
-              Time:{" "}
-              {Object.entries(answer.timings)
-                .map(([stage, ms]) => `${stage} ${formatDuration(ms)}`)
-                .join(", ")}
-            </li>
-          ) : null}
-          {answer.notes.map((note) => (
-            <li key={note}>{note}</li>
+
+      {onAsk && !answer.abstained && answer.suggestions.length ? (
+        <div className="followups" role="group" aria-label="Suggested follow-up questions">
+          {answer.suggestions.map((suggestion) => (
+            <button key={suggestion} type="button" className="followup" onClick={() => onAsk(suggestion)}>
+              <Icon name="corner-down-left" size={13} />
+              {suggestion}
+            </button>
           ))}
-        </ul>
-      </details>
+        </div>
+      ) : null}
+
+      {showDetails ? (
+        <details className="answer-details">
+          <summary>
+            <Icon name="chevron-right" size={14} />
+            Developer details
+          </summary>
+          <ul className="details-list">
+            <li>
+              {answer.retrieved} passages retrieved, {answer.passagesUsed} used
+              {answer.semantic ? " (keyword and meaning search)" : " (keyword search)"}
+            </li>
+            {answer.reranker ? <li>Ranked by {answer.reranker}</li> : null}
+            <li>{answer.generative ? `Answered by ${answer.modelName}` : answer.modelName || "Answered by —"}</li>
+            {!answer.abstained && answer.source !== "general" ? (
+              <li>
+                Every figure checked against the cited passages; wording support{" "}
+                {formatPercent(answer.supportRatio)}
+              </li>
+            ) : null}
+            {Object.keys(answer.timings).length ? (
+              <li>
+                Time:{" "}
+                {Object.entries(answer.timings)
+                  .map(([stage, ms]) => `${stage} ${formatDuration(ms)}`)
+                  .join(", ")}
+              </li>
+            ) : null}
+            {answer.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }
