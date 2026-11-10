@@ -271,8 +271,17 @@ class HybridSearchTests(TestCase):
             self.index(title, body, self.user, "Registry")
 
     def index(self, title, body, owner, department):
+        # document_type_source="user": every fixture here is deliberately
+        # typed REGULATION for the document_type filter tests below, and
+        # the type detector (on by default) would otherwise reclassify
+        # "Revaluation Circular" as CIRCULAR from its own text - a person's
+        # choice is exactly what the detector must never override.
         document = Document.objects.create(
-            title=title, document_type="REGULATION", owner=owner, department=department
+            title=title,
+            document_type="REGULATION",
+            document_type_source=Document.TypeSource.USER,
+            owner=owner,
+            department=department,
         )
         version = document.versions.create(
             version_number=1,

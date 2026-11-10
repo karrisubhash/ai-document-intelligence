@@ -83,6 +83,106 @@ the caller is refused.
 | GET | `/api/documents/{id}/tables/` · `/figures/` | read | Detected tables (cells + span) and located figures |
 | GET | `/api/documents/{id}/chunks/` | read | Indexed chunks with page, span and embedding identity (paginated) |
 | GET | `/api/documents/{id}/source/?chunk=C` | read | The page text of the pass chunk C came from, its span, and `is_current` |
+| GET | `/api/documents/{id}/insights/` | read | The extractive brief — see [Document intelligence](#document-intelligence). Not audited when allowed |
+| GET | `/api/documents/{id}/related/` | read | Up to 5 related documents. Throttled (`insights`). Not audited when allowed |
+| GET | `/api/documents/{id}/thumbnail/` | read | First-page image or **404**. Not audited when allowed |
+| GET | `/api/documents/suggestions/` | signed in | Questions across readable documents. Throttled (`insights`) |
+| GET | `/api/documents/deadlines/?days=90` | signed in | Upcoming dates in readable documents. Throttled (`insights`) |
+
+## Document intelligence
+
+Computed after a document is processed, on CPU, with no language model: an extractive
+brief, typed facts, related documents and a thumbnail (`docs/ai/pipeline.md`, "Document
+intelligence"). Every cross-document read is scoped to the documents the caller can read
+first; a document the caller cannot read is a **404** on its own endpoints and never appears
+in another's results. Offsets (`start`, `end`) are Unicode code points into the stored page
+text of the live extraction pass, and re-slice exactly; open them with
+`/documents/{id}?tab=text&page=P&start=S&end=E`. The three cross-document reads, and a PATCH
+that changes `document_type`, share the per-user `insights` throttle (`THROTTLE_INSIGHTS`,
+600/hour).
+
+**Additions to the document shapes** (additive; the list omits `counts` and `collections`):
+
+| Field | List | Detail | Meaning |
+|---|---|---|---|
+| `document_type_source` | ✓ | ✓ | `default` (the upload default, GENERAL), `auto` (set by the type detector), `user` (chosen by a person; the detector never changes it). Read-only |
+| `type_confidence` | ✓ | ✓ | The detector's confidence (0–1) when `auto`, else `null`. Read-only |
+| `page_count` | ✓ | ✓ | Pages of the live extraction pass, or `null` |
+| `has_thumbnail` | ✓ | ✓ | Whether `/thumbnail/` answers with an image |
+| `current_stage` | ✓ | ✓ | While QUEUED/PROCESSING: the running job's stage (e.g. `"OCR"`) or `null` before it starts; `null` otherwise |
+| `counts` | | ✓ | `{"tables": int, "figures": int, "fields_found": int}` for the live pass; `fields_found` is the newest extraction under the current type |
+| `collections` | | ✓ | `[{"id": int, "name": str}]` — only collections the caller can see |
+| `current_version.uploaded_by_name` | | ✓ | The uploader's full name or username (also on `/versions/`) |
+
+`current_version.file` (the storage key) is no longer returned anywhere. A **PATCH** that
+*changes* `document_type` sets `document_type_source` to `user`, clears `type_confidence`
+and queues re-extraction under the new type plus a new brief (not a reprocess); sending the
+unchanged type with a title edit changes nothing. **POST `/api/documents/`** (and its
+idempotent replay) adds `possible_duplicates`: `[{"id", "title", "status", "is_archived",
+"is_current_version"}]` — other documents the uploader can read that hold a file with the
+same SHA-256 (at most 5). It never blocks the upload. **GET `.../classification/`** rows add
+`taxonomy` (`document_type` | `layout_class`) and `abstained` (bool); document-type verdicts
+are listed first, and the model artifact's server path is no longer in `metadata`.
+
+**`GET /api/v1/documents/{id}/insights/`**
+
+```json
+{ "document_id": 7, "version_id": 3, "content_id": 9,
+  "status": "READY",                    // READY | PENDING | FAILED | UNAVAILABLE
+  "method": "extractive-v1", "generated_at": "2026-11-07T10:01:00Z",   // null unless READY
+  "summary":    [{"text": "...", "page_number": 1, "start": 120, "end": 160}],
+  "key_points": [{"text": "...", "page_number": 1, "start": 200, "end": 229,
+                  "kind": "deadline"}],  // deadline|obligation|figure|date|clause|heading
+  "key_phrases": [{"text": "bus pass", "score": 1.0}],                 // best first, score 0-1
+  "entities": [{"type": "DEADLINE", "text": "15th March 2027", "normalized": "2027-03-15",
+                "page_number": 2, "start": 10, "end": 25, "count": 1,
+                "label": "Last date for renewal of the bus pass"}],
+  "stats": {"pages": 2, "words": 1200, "reading_minutes": 6, "ocr_pages": 0, "language": "en"},
+  "suggested_questions": ["What is the last date for renewal of the bus pass?"],
+  "document_type": {"value": "CIRCULAR", "source": "auto", "confidence": 0.97},
+  "ai": null }
+```
+
+`status`: `PENDING` while the document is processing or its brief is queued; `FAILED` when
+the generator failed (the document itself is unaffected); `UNAVAILABLE` when there is no
+live pass (quarantined, failed processing) or enrichment is switched off. Unless `READY`,
+the lists are empty and `stats` is zeros with `language: "unknown"`. Entity `type` is one of
+`DATE DEADLINE MONEY PERCENT DURATION EMAIL PHONE URL REFERENCE COURSE_CODE ORG`;
+`normalized` is an ISO date (or `YYYY-MM` for a month), `"INR 4500"` / `"USD 300"`, `"75%"`,
+an ISO-8601 duration (`P15D`, `PT2H`), a lower-cased email, an E.164 phone (`+914023456789`),
+a URL with lower-cased scheme and host, an upper-cased reference or course code, a
+whitespace-collapsed organisation name — or `null`. `label` (additive to the original
+contract) says what a date is for, or `""`. `stats.language` is `en | hi | te | mixed |
+unknown`. `ai` is reserved for an on-demand AI brief: `{"summary", "questions", "model",
+"generated_at"}`, `null` until one exists (none is generated yet).
+
+**`GET /api/v1/documents/{id}/related/`** → `{"results": [{"id", "title", "document_type",
+"department", "updated_at", "similarity": 0.0-1.0, "near_duplicate": bool}], "method":
+"semantic" | "lexical" | "unavailable"}`. At most 5, readable, live (processed, not
+quarantined) and not archived. `semantic`: cosine between document centroids (mean chunk
+vectors of a semantic embedding model), below `DOCUMENT_RELATED_MIN_SIMILARITY` (0.5) not
+shown. `lexical` (no semantic vectors): harmonic mean of key-phrase overlap both ways, below
+0.2 not shown. `near_duplicate`: similarity ≥ `DOCUMENT_NEAR_DUPLICATE_SIMILARITY` (0.97), or
+the same file (SHA-256) or the same text.
+
+**`GET /api/v1/documents/{id}/thumbnail/`** → the image (`image/webp`, or `image/png`), ~320
+px wide, of the current version's first page, with `Cache-Control: private, max-age=300`,
+`ETag` and `Last-Modified`; `If-None-Match` answers **304**. **404** when there is none (Word
+and text files, not yet rendered) or the version is quarantined. Append `?v=<version id>` to
+key the browser cache to the version.
+
+**`GET /api/v1/documents/suggestions/`** → `{"results": [{"question", "document_id",
+"document_title"}]}` — at most 8, one per document first, from the most recently updated
+readable documents with a brief. The selection is cached per user for
+`DOCUMENT_SUGGESTIONS_CACHE_SECONDS` (600); what the user may read is checked again on
+every request.
+
+**`GET /api/v1/documents/deadlines/?days=90`** → `{"results": [{"date": "YYYY-MM-DD", "type":
+"DEADLINE" | "DATE", "label", "text", "document_id", "document_title", "page_number",
+"start", "end"}]}` — at most 20, soonest first (deadlines before plain dates on the same
+day, one row per document and date), from today to today + `days` (1–366, default 90;
+anything else is **400** `{"days": [...]}`), from the live pass of readable, non-archived
+documents. `type` is additive to the original contract.
 
 ## Search and chat
 
