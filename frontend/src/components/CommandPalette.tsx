@@ -42,10 +42,13 @@ export default function CommandPalette({
   open,
   onClose,
   onSignOut,
+  onShortcuts,
 }: {
   open: boolean;
   onClose: () => void;
   onSignOut: () => void;
+  /** Opens the keyboard shortcuts sheet. */
+  onShortcuts?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -177,6 +180,18 @@ export default function CommandPalette({
       text: label,
       meta: theme === value ? "Current" : undefined,
       run: () => setTheme(value),
+    });
+  }
+
+  if (onShortcuts && matches("keyboard shortcuts keys help hotkeys")) {
+    commands.push({
+      id: "shortcuts",
+      group: "Preferences",
+      icon: "keyboard",
+      title: "Keyboard shortcuts",
+      text: "Keyboard shortcuts",
+      meta: "?",
+      run: onShortcuts,
     });
   }
 

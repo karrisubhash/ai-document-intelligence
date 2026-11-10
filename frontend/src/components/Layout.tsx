@@ -15,9 +15,12 @@ import { attentionBadge, useAttention, type Attention } from "../api/notificatio
 import { useAuth, useMe } from "../auth/AuthContext";
 import { displayName } from "../lib/format";
 import { ROLE_LABEL } from "../lib/labels";
-import { setTheme, useResolvedTheme, useTheme } from "../lib/theme";
+import { prefetchRoute } from "../lib/lazy";
+import { setTheme, useTheme } from "../lib/theme";
 import CommandPalette from "./CommandPalette";
+import { RouteErrorBoundary } from "./ErrorBoundary";
 import { BrandMark, Icon } from "./icons";
+import ShortcutsDialog, { IS_MAC } from "./ShortcutsDialog";
 import { PRIMARY, adminItems, sectionFor, type NavItem } from "./navigation";
 import NotificationBell from "./NotificationBell";
 import {
@@ -65,8 +68,33 @@ function readCollapsed(): boolean {
   }
 }
 
-const isMac =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+/** Typing goes to the field, not to a page-wide shortcut. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target instanceof HTMLInputElement) {
+    return !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(
+      target.type,
+    );
+  }
+  return false;
+}
+
+/**
+ * The field "/" goes to: the page's search or question box. A page marks it
+ * with data-primary-search; until it does, its first search input, or Ask's
+ * question box.
+ */
+function primaryField(): HTMLInputElement | HTMLTextAreaElement | null {
+  const main = document.getElementById("main");
+  // In order of preference, not of position on the page.
+  for (const selector of ["[data-primary-search]", 'input[type="search"]', "textarea#composer"]) {
+    const field = main?.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector);
+    if (field && !field.disabled && !field.closest("[hidden], [inert]")) return field;
+  }
+  return null;
+}
 
 function NavList({
   items,
@@ -93,6 +121,10 @@ function NavList({
               end={item.end}
               className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
               onClick={onNavigate}
+              // The screen's code is fetched while the pointer is on its way,
+              // so the click does not wait for it.
+              onPointerEnter={() => prefetchRoute(item.to)}
+              onFocus={() => prefetchRoute(item.to)}
               title={item.label}
               aria-describedby={describedBy}
             >
@@ -116,7 +148,11 @@ function NavList({
   );
 }
 
-function UserMenu({ onSignOut }: { onSignOut: () => void }) {
+/**
+ * Who is signed in, their account, the theme - the one place it is chosen
+ * in the shell; quick find has the same commands - and signing out.
+ */
+function UserMenu({ onSignOut, onShortcuts }: { onSignOut: () => void; onShortcuts: () => void }) {
   const me = useMe();
   const navigate = useNavigate();
   const [theme] = useTheme();
@@ -148,6 +184,9 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
       <MenuItem icon="key" onSelect={() => navigate("/account")}>
         Account and password
       </MenuItem>
+      <MenuItem icon="keyboard" onSelect={onShortcuts}>
+        Keyboard shortcuts
+      </MenuItem>
       <MenuSeparator />
       <div role="group" aria-labelledby={themeLabel}>
         <MenuLabel id={themeLabel}>Theme</MenuLabel>
@@ -176,9 +215,9 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [navOpen, setNavOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [trail, setTrail] = useState<Crumb[] | null>(null);
   const navToggle = useRef<HTMLButtonElement>(null);
-  const resolvedTheme = useResolvedTheme();
   const location = useLocation();
   const admin = adminItems(can);
   const section = sectionFor(location.pathname, admin);
@@ -237,6 +276,29 @@ export default function Layout({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // "?" shows the shortcuts and "/" goes to the page's search or question
+  // box - only while nothing is being typed and no dialog is open, so the
+  // keys still type themselves in every field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isTyping(event.target) || document.querySelector("dialog[open]")) return;
+      if (event.key === "?") {
+        event.preventDefault();
+        setShortcutsOpen(true);
+      } else if (event.key === "/") {
+        const field = primaryField();
+        if (!field) return;
+        event.preventDefault();
+        field.focus();
+        field.select?.();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const toggleCollapsed = () => {
     setCollapsed((value) => {
       try {
@@ -284,7 +346,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           ) : null}
         </nav>
         <div className="sidebar-footer">
-          <UserMenu onSignOut={signOut} />
+          <UserMenu onSignOut={signOut} onShortcuts={() => setShortcutsOpen(true)} />
         </div>
       </aside>
 
@@ -330,43 +392,47 @@ export default function Layout({ children }: { children: ReactNode }) {
               )}
             </nav>
           ) : section ? (
+            // A top-level screen: just its name. Its group ("Workspace",
+            // "Administration") is a sidebar heading, not a place.
             <div className="topbar-location">
-              <span className="topbar-group">{section.group}</span>
-              <Icon name="chevron-right" size={14} className="topbar-separator" />
               <span className="topbar-page">{section.item.label}</span>
             </div>
           ) : null}
           <div className="topbar-spacer" />
+          {/* The top bar's controls. The theme is chosen in the user menu
+              and in quick find, not here: a rare setting does not need the
+              prime spot. */}
           <button
             type="button"
             className="quick-find"
             onClick={() => setPaletteOpen(true)}
-            aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
+            aria-keyshortcuts={IS_MAC ? "Meta+K" : "Control+K"}
           >
             <Icon name="search" />
             <span className="quick-find-label">Search or jump to…</span>
             <span className="quick-find-keys">
-              <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
               <Kbd>K</Kbd>
             </span>
           </button>
           <NotificationBell />
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={resolvedTheme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
-            title={resolvedTheme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
-            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-          >
-            <Icon name={resolvedTheme === "dark" ? "sun" : "moon"} size={18} />
-          </button>
         </header>
         <main id="main" className="main" tabIndex={-1}>
-          <TrailContext.Provider value={setTrail}>{children}</TrailContext.Provider>
+          <TrailContext.Provider value={setTrail}>
+            {/* A page that throws is replaced by an explanation; the shell
+                around it, and the way to another screen, keep working. */}
+            <RouteErrorBoundary>{children}</RouteErrorBoundary>
+          </TrailContext.Provider>
         </main>
       </div>
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onSignOut={signOut} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onSignOut={signOut}
+        onShortcuts={() => setShortcutsOpen(true)}
+      />
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }

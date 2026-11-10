@@ -486,6 +486,11 @@ jobs:
       - name: Production configuration
         run: python infrastructure/check_deployment_config.py
 
+      # The 2 vCPU / 8 GB profile must merge into the same production
+      # stack, with its memory ceilings and log rotation in place.
+      - name: Small-server configuration
+        run: python infrastructure/check_deployment_config.py docker-compose.small.yml
+
   deploy-staging:
     name: Deploy to staging
     runs-on: ubuntu-latest

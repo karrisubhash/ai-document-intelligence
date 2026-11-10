@@ -96,6 +96,48 @@ the first start. That once left the backend crash-looping after a reboot.
 `check_deployment_config.py` rejects an application-service tmpfs that declares neither a
 `uid=` nor a `mode=` (either one is enough to keep it writable).
 
+## Small-server profile
+
+For a 2 vCPU / 8 GB CPU-only host (the live server's size), add the third file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.small.yml up -d
+# with Prometheus and Grafana:
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.small.yml --profile monitoring up -d
+python infrastructure/check_deployment_config.py docker-compose.small.yml
+```
+
+It writes down the tuning the live server used to set by hand in `.env`. Every
+value is a default that `.env` can still override.
+
+| Setting | Small profile | Production overlay | Why |
+|---|---|---|---|
+| `GUNICORN_WORKERS` × `GUNICORN_THREADS` | 2 × 4 | 3 × 2 | two copies of the local models in memory; eight request slots, since a streamed chat answer holds one for its whole length |
+| `CELERY_CONCURRENCY` (ingest) | 1 | 2 | OCR is CPU-bound; two OCR processes would take both cores from searches and answers |
+| `CELERY_INDEX_CONCURRENCY` | 1 | 6 | bulk re-embedding is rare; six processes idle at 2.3 GiB |
+| `EMBEDDING_LOCAL_THREADS` | 1 (backend and both workers) | 0 (torch's choice: one per host core) | processes do not fight over two cores |
+| `OMP_THREAD_LIMIT` (ingest worker) | 1 | unset | tesseract likewise |
+| `mem_limit` | db 1g, redis 512m, backend 2.5g, worker 2g, worker-index 1.5g, nginx 256m, certbot 128m, prometheus 512m, grafana 256m | none | one runaway (a 500-page scan) is OOM-killed and restarted alone |
+| `cpus` | worker 1.5, worker-index 1.0 | none | a long OCR run always leaves room for web requests |
+| logs | json-file, 10 MB × 3 per container | Docker default (unbounded) | the live server set this in `/etc/docker/daemon.json` |
+| Prometheus, Grafana | only with `--profile monitoring` | always | together ~0.5 GB a small box needs more; `GRAFANA_PASSWORD` is still required to parse the overlay |
+
+Ceilings are not reservations: measured use is backend 1.2–1.7 GiB, ingest worker
+about 1.1 GiB, Postgres about 150 MB (see
+[release/staging-runbook.md](../release/staging-runbook.md)). Keep swap enabled
+(the live server has 4 GiB). Still set `HF_HUB_OFFLINE=1` after `warm_models`.
+
+## Compression
+
+nginx gzips JavaScript, CSS, JSON, SVG and manifests (level 5, responses of 1 kB
+or more, `Vary: Accept-Encoding`) - the built app is about 600 kB raw and 180 kB
+gzipped. `text/event-stream` is deliberately not compressed: compression would
+hold the chat stream's events back until a block filled. The stream also opts out
+of proxy buffering with `X-Accel-Buffering: no` (see `infrastructure/nginx/proxy_params`).
+Verified on `nginx:1.27-alpine`: `nginx -t` passes; assets, the app shell and API
+JSON come back with `Content-Encoding: gzip`; a streamed response arrives event by
+event, uncompressed. `npm run size` in `frontend/` reports the gzipped sizes.
+
 ## Scaling
 
 `docker compose … up -d --scale backend=3` — nginx balances by least connections across
