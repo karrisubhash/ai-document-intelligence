@@ -227,6 +227,25 @@ describe("search results by document", () => {
     expect(screen.getByText(/none of which belongs/)).toBeInTheDocument();
   });
 
+  it("preselects a collection handed off from its own Search button, without running a search", async () => {
+    vi.spyOn(api, "collections").mockResolvedValue({ count: 1, next: null, previous: null, results: [COLLECTION] });
+    const search = vi.spyOn(api, "search");
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/search", state: { collectionId: 5 } }]}>
+        <AuthProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    const select = await screen.findByRole("combobox", { name: "Collection" });
+    await waitFor(() => expect(select).toHaveValue("5"));
+    expect(search).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Remove filter Collection: Exam pack/ })).toBeInTheDocument();
+  });
+
   it("applies a filter at once, shows it as a chip, and removes it", async () => {
     const search = vi.spyOn(api, "search").mockResolvedValue(response());
     renderSearch();

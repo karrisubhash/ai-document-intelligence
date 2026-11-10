@@ -357,10 +357,15 @@ export default function SearchPage() {
   // by POST so that what people look for never lands in access logs or
   // browser history; mirroring it into the address bar would undo that.
   // Quick find hands a query over in history state instead, which this
-  // page clears as soon as it has read it.
-  const handoff = ((location.state as { query?: string } | null)?.query ?? "").trim();
+  // page clears as soon as it has read it. A collection hand-off (from its
+  // own "Search" button) carries no query - it only preselects the filter.
+  const handoffState = (location.state as { query?: string; collectionId?: number } | null) ?? {};
+  const handoff = (handoffState.query ?? "").trim();
   const [query, setQuery] = useState(handoff);
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [filters, setFilters] = useState<Filters>({
+    ...NO_FILTERS,
+    collection: handoffState.collectionId ? String(handoffState.collectionId) : "",
+  });
   // The server owns the page size (SEARCH_DEFAULT_LIMIT) and its ceiling
   // (SEARCH_MAX_LIMIT): a new search sends no limit, and "Show more" adds one
   // more page of the size the server chose. A fixed client-side size used to
@@ -389,10 +394,10 @@ export default function SearchPage() {
 
   const sentHandoff = useRef(false);
   useEffect(() => {
-    if (!handoff || sentHandoff.current) return;
+    if (sentHandoff.current || (!handoff && !handoffState.collectionId)) return;
     sentHandoff.current = true;
     navigate(location.pathname, { replace: true, state: {} });
-    void run(requestFor(handoff, NO_FILTERS));
+    if (handoff) void run(requestFor(handoff, filters));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
