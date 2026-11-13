@@ -6,21 +6,27 @@ document is a 404 identical to a missing one, and never appears in another
 document's related list, the corpus suggestions or the deadlines.
 """
 
+import math
+import random
 from unittest import mock
 
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework.throttling import SimpleRateThrottle
 
 from accounts.models import UserProfile
+from documents.api import insights as briefs
 from documents.api.views import DocumentViewSet
 from documents.models import (
     AuditLog,
     ClassificationResult,
     Collection,
     Document,
+    DocumentCentroid,
+    DocumentContent,
     DocumentInsight,
     ExtractionResult,
     ProcessingJob,
@@ -237,6 +243,87 @@ class RelatedEndpointTests(InsightsApiTestCase):
         ids = [row["id"] for row in response.data["results"]]
         self.assertEqual(ids[0], similar.pk)
         self.assertGreater(response.data["results"][0]["similarity"], 0.9)
+
+    def semantic_neighbours_behind_a_crowd(self, crowd=250):
+        """A readable neighbour, and `crowd` centroids nearer still that the
+        caller may not read.
+
+        The crowd is what a larger institution's index holds in front of a
+        small department's documents: other departments' documents, earlier
+        passes, other models' vectors. Here they are passes of a Physics
+        document, each a hair from `first` - all nearer than the readable
+        neighbour, and more of them than the index's 200-candidate probe.
+        """
+        reset_provider_cache()
+        self.addCleanup(reset_provider_cache)
+        first = self.document(self.upload_text(HOSTEL, title="Hostel A"))
+        similar = self.document(
+            self.upload_text(HOSTEL.replace("Visitors", "Guests"), title="Hostel B")
+        )
+        self.as_outsider()
+        hidden = self.document(self.upload_text(CIRCULAR, title="Physics circular"))
+        self.client.force_authenticate(user=self.user)
+
+        mine = DocumentCentroid.objects.get(
+            document_content=first.current_version.current_content, semantic=True
+        )
+        version = hidden.current_version
+        passes = DocumentContent.objects.bulk_create(
+            DocumentContent(document_version=version, processing_version="earlier")
+            for _ in range(crowd)
+        )
+        noise = random.Random(7)
+        rows = []
+        for content in passes:
+            vector = [value + noise.uniform(-1e-3, 1e-3) for value in mine.embedding]
+            norm = math.sqrt(sum(value * value for value in vector))
+            rows.append(
+                DocumentCentroid(
+                    document_content=content,
+                    document_version=version,
+                    model_name=mine.model_name,
+                    model_version=mine.model_version,
+                    dimensions=len(vector),
+                    semantic=True,
+                    chunk_count=1,
+                    embedding=[value / norm for value in vector],
+                )
+            )
+        DocumentCentroid.objects.bulk_create(rows)
+
+        # Planned as a table of real size is planned: through the
+        # nearest-neighbour index. A test table is small enough that sorting
+        # every row costs less, and that plan never shows what the index does.
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL enable_seqscan = off")
+            cursor.execute("SET LOCAL enable_sort = off")
+        return first, similar
+
+    @override_settings(DOCUMENT_EMBEDDING_PROVIDER=SEMANTIC)
+    def test_a_readable_neighbour_is_found_behind_nearer_ones_the_caller_cannot_read(
+        self,
+    ):
+        first, similar = self.semantic_neighbours_behind_a_crowd()
+
+        response = self.client.get(f"/api/v1/documents/{first.pk}/related/")
+        self.assertEqual(response.data["method"], "semantic")
+        self.assertEqual([row["id"] for row in response.data["results"]], [similar.pk])
+
+    @override_settings(DOCUMENT_EMBEDDING_PROVIDER=SEMANTIC)
+    def test_past_the_exact_limit_the_index_scan_goes_on_until_it_finds_them(self):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
+            )
+            installed = tuple(int(part) for part in cursor.fetchone()[0].split(".")[:2])
+        if installed < (0, 8):
+            self.skipTest("iterative index scans need pgvector 0.8")
+        first, similar = self.semantic_neighbours_behind_a_crowd()
+
+        with mock.patch.object(briefs, "RELATED_EXACT_MAX", 0):
+            response = self.client.get(f"/api/v1/documents/{first.pk}/related/")
+        self.assertEqual(response.data["method"], "semantic")
+        self.assertEqual([row["id"] for row in response.data["results"]], [similar.pk])
 
     def test_related_is_throttled_as_an_insights_read(self):
         first = self.document(self.upload_text(HOSTEL))

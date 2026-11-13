@@ -183,8 +183,11 @@ unknown`. `ai` is reserved for an on-demand AI brief: `{"summary", "questions", 
 "semantic" | "lexical" | "unavailable"}`. At most 5, readable, live (processed, not
 quarantined) and not archived. `semantic`: cosine between document centroids (mean chunk
 vectors of a semantic embedding model), below `DOCUMENT_RELATED_MIN_SIMILARITY` (0.5) not
-shown. `lexical` (no semantic vectors): harmonic mean of key-phrase overlap both ways, below
-0.2 not shown. `near_duplicate`: similarity ≥ `DOCUMENT_NEAR_DUPLICATE_SIMILARITY` (0.97), or
+shown; ranked only among the live passes of documents the caller can read - exactly, up
+to 5,000 of them, and past that through the HNSW index with an iterative scan (pgvector
+0.8+), so documents the caller cannot read never crowd readable ones out. `lexical` (no
+semantic vectors): harmonic mean of key-phrase overlap both ways, below 0.2 not shown.
+`near_duplicate`: similarity ≥ `DOCUMENT_NEAR_DUPLICATE_SIMILARITY` (0.97), or
 the same file (SHA-256) or the same text.
 
 **`GET /api/v1/documents/{id}/thumbnail/`** → the image (`image/webp`, or `image/png`), ~320
