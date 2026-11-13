@@ -205,6 +205,10 @@ test("another department cannot see these documents at all", async ({ page }) =>
 test("a department admin manages their people and sees the denied attempt", async ({ page }) => {
   await signIn(page, "cs_admin");
   await page.getByRole("link", { name: "Users" }).click();
+  // Wait for the screen itself: the home screen's charts carry hidden data
+  // tables for screen readers, and "table" must not resolve against them
+  // while the Users screen is still loading.
+  await expect(page.getByRole("heading", { level: 1, name: "Users" })).toBeVisible();
   const table = page.locator("table");
   await expect(table).toContainText("asha");
   await expect(table).not.toContainText("ravi");
