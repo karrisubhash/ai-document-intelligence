@@ -6,8 +6,8 @@ from config.health import health_check, readiness_check
 from documents.evaluation_api.views import FeedbackView
 from documents.observability.views import metrics_view
 from documents.operations.views import DashboardView
-from notifications.views import AttentionView
 from documents.samples.views import SampleLibraryView
+from notifications.views import AttentionView
 
 # Every JSON endpoint, without its prefix. Mounted twice below.
 api_patterns = [
