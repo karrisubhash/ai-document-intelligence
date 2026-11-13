@@ -289,6 +289,8 @@ describe("search results by document", () => {
       expect(chat).toHaveBeenCalledWith(
         expect.objectContaining({ question: "fees", collection_id: 5, document_type: "POLICY" }),
         expect.anything(),
+        // Ask passes an AbortSignal so Stop can end the answer.
+        expect.anything(),
       ),
     );
     expect(await screen.findByText("Policy")).toBeInTheDocument();

@@ -124,7 +124,7 @@ describe("dashboard", () => {
   it("tells a system administrator they see everything", async () => {
     vi.spyOn(api, "me").mockResolvedValue(me({ role: "SYSTEM_ADMIN", department: "" }));
     renderAt("/");
-    expect(await screen.findByText("You can see every document, in every department.")).toBeInTheDocument();
+    expect(await screen.findByText("You can see every department's documents.")).toBeInTheDocument();
     expect(screen.queryByText(/Ask an administrator to assign you a department/)).toBeNull();
   });
 
@@ -140,7 +140,7 @@ describe("dashboard", () => {
       () => new Promise<Dashboard>((resolve) => (deliver = resolve)),
     );
     renderAt("/");
-    const summary = await screen.findByRole("region", { name: "Document summary" });
+    const summary = await screen.findByRole("region", { name: "Your library and questions" });
     expect(within(summary).queryByText("—")).toBeNull();
     expect(summary.querySelectorAll('[aria-busy="true"]')).toHaveLength(4);
     await act(async () => deliver(DASHBOARD));

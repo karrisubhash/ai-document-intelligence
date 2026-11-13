@@ -270,7 +270,7 @@ describe("library cells", () => {
   });
 
   it("adds pages, marks a detected type and names the live stage", () => {
-    expect(fileLine(row)).toBe("circular.pdf · v1 · 2 pages · 2.0 KB");
+    expect(fileLine(row)).toBe("circular.pdf · v1 · 2 pages · 2.0 KB");
     render(
       <>
         <TypeCell row={row} />
