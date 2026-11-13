@@ -53,7 +53,9 @@ function renderHome() {
 }
 
 async function sampleStep(): Promise<HTMLElement> {
-  const title = await screen.findByText("Load sample documents");
+  // The first render loads the whole shell, which on a loaded machine can
+  // take longer than findBy's 5 s (as the other page suites allow for).
+  const title = await screen.findByText("Load sample documents", {}, { timeout: 15_000 });
   return title.closest("li") as HTMLElement;
 }
 
