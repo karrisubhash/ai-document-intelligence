@@ -97,7 +97,7 @@ the caller is refused.
 | GET | `/api/documents/{id}/processing/` | read | Every job with its stage events |
 | GET | `/api/documents/{id}/content/` | read | Page texts of the live extraction pass |
 | GET | `/api/documents/{id}/classification/` | read | Every verdict, with model and version |
-| GET | `/api/documents/{id}/extraction/` | read | Every field-extraction pass; one row per declared field, including NOT_FOUND and CONFLICTED |
+| GET | `/api/documents/{id}/extraction/` | read | The field extractions of the live extraction pass under the document's current type, newest first; one row per declared field, including NOT_FOUND and CONFLICTED. Empty when that type has no schema or has not been extracted yet, and for a quarantined version |
 | GET | `/api/documents/{id}/tables/` · `/figures/` | read | Detected tables (cells + span) and located figures |
 | GET | `/api/documents/{id}/chunks/` | read | Indexed chunks with page, span and embedding identity (paginated) |
 | GET | `/api/documents/{id}/source/?chunk=C` | read | The page text of the pass chunk C came from, its span, and `is_current` |

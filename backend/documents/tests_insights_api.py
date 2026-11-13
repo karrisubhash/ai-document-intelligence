@@ -609,6 +609,60 @@ class DocumentShapeTests(InsightsApiTestCase):
         self.assertEqual(document.document_type_source, "auto")
         self.assertIsNotNone(document.type_confidence)
 
+    def test_fields_are_those_of_the_current_type_after_a_change_to_one_with_none(
+        self,
+    ):
+        document = self.document(self.upload_text(CIRCULAR))
+        url = f"/api/v1/documents/{document.pk}/extraction/"
+        self.assertEqual(
+            [row["document_type"] for row in self.client.get(url).data], ["CIRCULAR"]
+        )
+
+        # OTHER has no schema in the bundled pack: nothing is extracted.
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {"document_type": "OTHER"},
+                format="multipart",
+            )
+
+        self.assertEqual(self.client.get(url).data, [])
+        detail = self.client.get(f"/api/v1/documents/{document.pk}/").data
+        self.assertEqual(detail["counts"]["fields_found"], 0)
+
+    def test_fields_are_those_of_the_live_pass_only(self):
+        # An earlier pass's spans point into text the reader no longer sees.
+        document = self.document(self.upload_text(CIRCULAR))
+        version = document.current_version
+        live = version.current_content
+        earlier = DocumentContent.objects.create(
+            document_version=version, processing_version="earlier"
+        )
+        ExtractionResult.objects.create(
+            document_version=version,
+            document_content=earlier,
+            model_name="rule-extractor",
+            model_version="v0",
+            schema_name="institutional",
+            schema_version="v0",
+            document_type="CIRCULAR",
+        )
+
+        data = self.client.get(f"/api/v1/documents/{document.pk}/extraction/").data
+        self.assertTrue(data)
+        self.assertEqual({row["document_content"] for row in data}, {live.pk})
+
+    def test_a_quarantined_version_lists_no_fields(self):
+        document = self.document(self.upload_text(CIRCULAR))
+        ProcessingJob.objects.create(
+            document_version=document.current_version,
+            status=ProcessingJob.Status.FAILED,
+            error_code=ErrorCode.MALWARE_DETECTED,
+        )
+        response = self.client.get(f"/api/v1/documents/{document.pk}/extraction/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
     def test_the_source_cannot_be_written_directly(self):
         document = self.document(self.upload_text("Minutes of the meeting."))
         self.client.patch(

@@ -531,7 +531,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def extraction(self, request, pk=None):
-        """Every field-extraction pass recorded for the current version."""
+        """The fields of the document as it stands now, newest first.
+
+        Extractions of the live pass under the document's current type - the
+        ones `counts.fields_found` and the brief describe - and no others.
+        An extraction under a type the document no longer has (a person
+        corrected the type, or a reprocess put back General) lists another
+        schema's fields as this document's, and an earlier pass's spans
+        point into text the reader no longer sees. Empty when the current
+        type has no schema or has not been extracted yet, and for a
+        quarantined version, whose text is withdrawn.
+        """
         document = self.get_object()
         version = document.current_version
 
@@ -541,7 +551,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        results = version.extraction_results.prefetch_related("extracted_fields")
+        content = _live_content(version)
+        if content is None:
+            return Response([])
+        results = content.extraction_results.filter(
+            document_type=document.document_type
+        ).prefetch_related("extracted_fields")
         return Response(ExtractionResultSerializer(results, many=True).data)
 
     @action(detail=True, methods=["get"])
