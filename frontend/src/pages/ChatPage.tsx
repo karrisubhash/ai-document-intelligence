@@ -473,6 +473,18 @@ export default function ChatPage() {
   // page has just created already shows its turns with their live response
   // data, so it is not rebuilt from history; any OTHER conversation is.
   const [turnsFor, setTurnsFor] = useState<number | null>(null);
+  // The edit in progress, while the turn it edits is on screen. Any other -
+  // another conversation's, or a turn the server has since replaced - is
+  // none: the composer's question then goes as a new one.
+  const edit = editing && turns.some((turn) => turn.key === editing.key) ? editing : null;
+  // Ends an edit, and takes the question it put in the composer with it -
+  // but only while the edit was showing: otherwise what is there is the
+  // reader's own.
+  const dropEdit = () => {
+    if (!editing) return;
+    setEditing(null);
+    if (edit) setDraft("");
+  };
 
   // The conversation the route shows, and a counter that moves whenever it
   // REALLY changes (not when StrictMode re-runs an effect). An answer that
@@ -498,12 +510,19 @@ export default function ChatPage() {
     if (shown.current === conversationId) return;
     shown.current = conversationId;
     view.current += 1;
+    // An edit belongs to the conversation it was started in. Carried
+    // along, it was sent here naming the other conversation's answer to
+    // replace, and refused.
+    dropEdit();
     if (conversationId === null || conversationId !== turnsFor) {
       // Another conversation's turns never sit under this URL while its
       // own history loads - or, if the load fails, for good.
       setTurns([]);
       if (conversationId === null) setTurnsFor(null);
     }
+    // Only a change of conversation does anything here (`shown`), and it
+    // re-runs the effect with that render's dropEdit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, turnsFor]);
 
   useEffect(() => {
@@ -692,15 +711,18 @@ export default function ChatPage() {
     }
   };
 
+  const sendDraft = () =>
+    void send(draft, edit ? { replaceKey: edit.key, replaces: edit.replaces } : {});
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void send(draft, editing ? { replaceKey: editing.key, replaces: editing.replaces } : {});
+    sendDraft();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void send(draft, editing ? { replaceKey: editing.key, replaces: editing.replaces } : {});
+      sendDraft();
     }
   };
 
@@ -712,6 +734,8 @@ export default function ChatPage() {
 
   const startNew = () => {
     setScope(null);
+    // An edit is the open conversation's (see the effect above).
+    dropEdit();
     if (conversationId === null) {
       // Already on the new-question screen: clearing it is a new view too,
       // so an answer still on its way is not shown on the empty page.
@@ -822,7 +846,7 @@ export default function ChatPage() {
                 return (
                   <article key={turn.key} className="turn">
                     <div className="user-row">
-                      {latest && settled && !editing ? (
+                      {latest && settled && !edit ? (
                         <IconButton
                           icon="pencil"
                           size="sm"
@@ -831,7 +855,7 @@ export default function ChatPage() {
                           onClick={() => editLast(turn)}
                         />
                       ) : null}
-                      <div className={`bubble bubble-user${editing?.key === turn.key ? " bubble-editing" : ""}`}>
+                      <div className={`bubble bubble-user${edit?.key === turn.key ? " bubble-editing" : ""}`}>
                         <p>{turn.question}</p>
                       </div>
                     </div>
@@ -953,19 +977,11 @@ export default function ChatPage() {
 
         <form className="composer" onSubmit={submit}>
           <div className="composer-inner">
-            {editing ? (
+            {edit ? (
               <div className="composer-editing">
                 <Icon name="pencil" size={14} />
                 <span>Editing your last question - sending replaces its answer.</span>
-                <IconButton
-                  icon="x"
-                  size="sm"
-                  label="Cancel editing"
-                  onClick={() => {
-                    setEditing(null);
-                    setDraft("");
-                  }}
-                />
+                <IconButton icon="x" size="sm" label="Cancel editing" onClick={dropEdit} />
               </div>
             ) : null}
             <div className="composer-box">
@@ -1071,7 +1087,7 @@ export default function ChatPage() {
                     icon="arrow-up"
                     disabled={!draft.trim() || opening}
                   >
-                    {editing ? "Ask again" : "Ask"}
+                    {edit ? "Ask again" : "Ask"}
                   </Button>
                 )}
               </div>

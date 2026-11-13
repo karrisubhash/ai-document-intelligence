@@ -95,6 +95,31 @@ function answer(conversationId: number, text: string): ChatResponse {
   };
 }
 
+const EXAMS: Conversation = {
+  id: 8,
+  title: "Exam dates",
+  department: "Physics",
+  created_at: "2026-10-05T10:00:00Z",
+  updated_at: "2026-10-05T10:00:00Z",
+  messages: [
+    message(5, "USER", "When do exams start?"),
+    message(6, "ASSISTANT", "Exams start on 3 March."),
+  ],
+};
+
+function summaryOf(conversation: Conversation) {
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    department: conversation.department,
+    created_at: conversation.created_at,
+    updated_at: conversation.updated_at,
+    message_count: conversation.messages.length,
+  };
+}
+
+const BOTH = { count: 2, next: null, previous: null, results: [summaryOf(HOSTEL), summaryOf(EXAMS)] };
+
 function abstained(conversationId: number): ChatResponse {
   return {
     ...answer(conversationId, "Not enough evidence to answer."),
@@ -251,6 +276,42 @@ describe("ChatPage Search instead", () => {
         expect.objectContaining({ query: QUESTION, collection_id: 5 }),
       ),
     );
+  });
+});
+
+describe("ChatPage edits", () => {
+  it("does not carry an edit into another conversation", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue(BOTH);
+    vi.spyOn(api, "conversation").mockImplementation(async (id) => (id === 8 ? EXAMS : HOSTEL));
+    const stream = vi.spyOn(api, "chatStream").mockResolvedValue(answer(8, "On the notice board."));
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    expect(screen.getByText(/Editing your last question/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("link", { name: /Exam dates/ }));
+    expect(await screen.findByText("When do exams start?")).toBeInTheDocument();
+    expect(screen.queryByText(/Editing your last question/)).not.toBeInTheDocument();
+    const box = screen.getByLabelText("Your question");
+    expect(box).toHaveValue("");
+
+    // A new question here - not the other conversation's answer to
+    // replace, which the server refuses.
+    await userEvent.type(box, "And the timetable?{Enter}");
+    const [input] = stream.mock.calls[0];
+    expect(input).toEqual(
+      expect.objectContaining({ question: "And the timetable?", conversation_id: 8 }),
+    );
+    expect(input).not.toHaveProperty("replaces");
+  });
+
+  it("does not carry an edit to a new question", async () => {
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    await userEvent.click(screen.getByRole("button", { name: "New question" }));
+
+    expect(await screen.findByText("Ask a question about your documents")).toBeInTheDocument();
+    expect(screen.queryByText(/Editing your last question/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Your question")).toHaveValue("");
   });
 });
 
