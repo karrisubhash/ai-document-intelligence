@@ -12,7 +12,7 @@ import type { FeedbackRating } from "../../api/types";
 import { BarChart, BarList, KpiTile, LineChart, type GoodDirection } from "../../components/charts";
 import { Icon } from "../../components/icons";
 import { Badge, Card, EmptyState, ErrorState, Pagination, Skeleton } from "../../components/ui";
-import { formatDuration, formatPercent, formatRelative } from "../../lib/format";
+import { formatDuration, formatLongDay, formatPercent, formatRelative } from "../../lib/format";
 import { ABSTENTION_LABEL, ANSWER_STAGE_LABEL, explainAbstention, humanize } from "../../lib/labels";
 
 const RATING: Record<FeedbackRating, { label: string; tone: "success" | "warning" | "danger"; icon: "thumbs-up" | "thumbs-down" | "flag" }> = {
@@ -37,7 +37,9 @@ function FeedbackRow({ item }: { item: FeedbackItem }) {
         <Badge tone={rating.tone} icon={rating.icon}>
           {rating.label}
         </Badge>
-        <span className="muted small">{formatRelative(item.created_at)}</span>
+        <time className="muted small" dateTime={item.rated_on}>
+          {formatLongDay(item.rated_on)}
+        </time>
         {item.department ? <span className="muted small">· {item.department}</span> : null}
         <span className="feedback-item-meta">
           {item.abstained ? (

@@ -80,7 +80,8 @@ RANGES = {"7d": 7, "30d": 30, "90d": 90}
 DEFAULT_RANGE = "30d"
 # Part of every cache key: a deploy that changes a report's shape must not
 # serve the previous release's cached copy for the next five minutes.
-SCHEMA = 1
+# 2: flagged items are dated to the day (operations.feedback).
+SCHEMA = 2
 # Rankings (most cited, most viewed) and the flagged-answer list.
 TOP = 10
 FLAGGED = 8

@@ -121,9 +121,9 @@ is the last `days` days including today; the previous period is the `days` days 
 `GET /api/v1/admin/feedback/?rating=INCORRECT,NOT_HELPFUL&since=2026-10-01&page=2` -
 administrators only, scoped as above, newest first, paginated like every list
 (`{count, next, previous, results}`, 50 a page). `rating`: one value or several,
-comma-separated, case-insensitive (unknown **400**); `since`: a date (that day's start) or an
-ISO datetime (malformed **400**). Not audited (a read of aggregate quality data, like the
-other monitors).
+comma-separated, case-insensitive (unknown **400**); `since`: a date - ratings given that day
+or later, days in `ANALYTICS_TIME_ZONE` - or an ISO datetime, which is read as its day there
+(malformed **400**). Not audited (a read of aggregate quality data, like the other monitors).
 
 A `FeedbackItem`:
 
@@ -132,9 +132,7 @@ A `FeedbackItem`:
   "id": 9,
   "rating": "INCORRECT",                     // HELPFUL | NOT_HELPFUL | INCORRECT
   "comment": "The curfew changed to 11 pm.", // what the rater wrote for the reviewer
-  "created_at": "2026-11-07T08:01:00Z",      // when it was rated
-  "message_id": 412,
-  "answered_at": "2026-11-07T07:58:00Z",
+  "rated_on": "2026-11-07",                  // the day it was rated, in ANALYTICS_TIME_ZONE
   "department": "Computer Science",          // the conversation's
   "question": "What time is the hostel curfew?",  // see "Question text" below; null = not shown
   "answer_excerpt": "Residents must return ...",  // <= 280 characters, cut at a word
@@ -157,7 +155,12 @@ department administrator (often the asker's own head of department) and on every
 rating. `""` means a flag whose question could not be found. The audit log still never
 holds question text, and the analytics aggregates never read it.
 
-**Who rated** is never returned, to anyone: the queue judges answers, not people.
+**Who rated** is never returned, to anyone: the queue judges answers, not people. Nor is
+anything that would say it in a join: the audit log has a `CHAT` row, under the asker's name,
+within milliseconds of every answer, and only the asker can rate an answer - so an item
+carries no time finer than the day it was rated, not the answer's id (ids are handed out in
+order, a clock to anyone who can compare them with their own messages), and `since` is read
+as a day rather than as an instant that could be moved a second at a time.
 
 **Withheld answers.** For a department administrator, an answer that cites a document
 outside their department - or one since deleted, whose department can no longer be

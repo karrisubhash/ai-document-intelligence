@@ -43,7 +43,9 @@ How the numbers are counted, where it is not obvious:
 - **No question or search text** is read to build any chart: searches are counted from the
   `SEARCH` audit rows (which hold only the number of hits), questions from their recorded
   outcome. The audit log still never records either.
-- The **rated answers** queue never says who rated. It shows the answer as an excerpt, and to a
+- The **rated answers** queue never says who rated, and dates a rating to the day only: every
+  answer has an audit row under the asker's name from the same moment, so an exact time
+  would say who rated it. It shows the answer as an excerpt, and to a
   department administrator withholds it when the answer quotes a document outside their
   department. The **question** is shown only to system administrators and only for answers
   flagged incorrect or not helpful - the rater asked for that answer to be looked at, and the

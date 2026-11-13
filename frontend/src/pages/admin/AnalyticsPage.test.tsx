@@ -9,6 +9,7 @@ import type { Me } from "../../api/types";
 import App from "../../App";
 import { AuthProvider } from "../../auth/AuthContext";
 import { ToastProvider } from "../../components/ui";
+import { formatLongDay } from "../../lib/format";
 
 const ADMIN: Me = {
   id: 1,
@@ -111,9 +112,7 @@ const FLAG: FeedbackItem = {
   id: 3,
   rating: "INCORRECT",
   comment: "It closes at 8.",
-  created_at: new Date().toISOString(),
-  message_id: 40,
-  answered_at: new Date().toISOString(),
+  rated_on: "2026-11-07",
   department: "Computer Science",
   question: null,
   answer_excerpt: "The lab closes at 6 pm. [1]",
@@ -207,6 +206,10 @@ describe("AnalyticsPage", () => {
     expect(await screen.findByText("“It closes at 8.”", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("The lab closes at 6 pm. [1]")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Lab rules" })).toHaveAttribute("href", "/documents/12");
+    // Dated to the day it was rated: the queue is sent no time to show.
+    expect(document.querySelector('.feedback-item time[datetime="2026-11-07"]')).toHaveTextContent(
+      formatLongDay("2026-11-07"),
+    );
     expect(screen.getByText(/Questions are visible to system administrators only/)).toBeInTheDocument();
     expect(screen.getByText("Nothing relevant enough")).toBeInTheDocument();
     expect(await screen.findByText("No benchmark runs yet")).toBeInTheDocument();
