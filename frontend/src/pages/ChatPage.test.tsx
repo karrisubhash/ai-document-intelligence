@@ -3,8 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../api/client";
-import type { ChatMessage, ChatResponse, Conversation, Me } from "../api/types";
+import { tagRequest } from "../api/cache";
+import { ApiError, api } from "../api/client";
+import type {
+  ChatMessage,
+  ChatResponse,
+  Collection,
+  Conversation,
+  Me,
+  SearchResponse,
+} from "../api/types";
 import App from "../App";
 import { AuthProvider } from "../auth/AuthContext";
 import { ToastProvider } from "../components/ui";
@@ -88,8 +96,57 @@ function answer(conversationId: number, text: string): ChatResponse {
   };
 }
 
+const EXAMS: Conversation = {
+  id: 8,
+  title: "Exam dates",
+  department: "Physics",
+  created_at: "2026-10-05T10:00:00Z",
+  updated_at: "2026-10-05T10:00:00Z",
+  messages: [
+    message(5, "USER", "When do exams start?"),
+    message(6, "ASSISTANT", "Exams start on 3 March."),
+  ],
+};
+
+function summaryOf(conversation: Conversation) {
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    department: conversation.department,
+    created_at: conversation.created_at,
+    updated_at: conversation.updated_at,
+    message_count: conversation.messages.length,
+  };
+}
+
+const BOTH = { count: 2, next: null, previous: null, results: [summaryOf(HOSTEL), summaryOf(EXAMS)] };
+
+function abstained(conversationId: number): ChatResponse {
+  return {
+    ...answer(conversationId, "Not enough evidence to answer."),
+    abstained: true,
+    abstention_reason: "no_relevant_passages",
+  };
+}
+
+/** A turn still being answered, until the reader presses Stop. */
+function untilStopped(...args: Parameters<typeof api.chatStream>): Promise<ChatResponse> {
+  const signal = args[2];
+  return new Promise((_, reject) => {
+    signal?.addEventListener("abort", () =>
+      reject(new DOMException("The user aborted a request.", "AbortError")),
+    );
+  });
+}
+
 function LocationProbe() {
-  return <output data-testid="location">{useLocation().pathname}</output>;
+  const location = useLocation();
+  return (
+    <>
+      <output data-testid="location">{location.pathname}</output>
+      <output data-testid="query-string">{location.search}</output>
+    </>
+  );
 }
 
 function renderAt(path: string) {
@@ -174,6 +231,281 @@ describe("ChatPage", () => {
     open(HOSTEL);
     expect(await screen.findByText("What is the hostel fee?")).toBeInTheDocument();
     expect(screen.getByLabelText("Your question")).toBeEnabled();
+  });
+});
+
+describe("ChatPage Search instead", () => {
+  const QUESTION = "What is the parking fee for visiting parents?";
+  const NOTHING_FOUND: SearchResponse = {
+    query: QUESTION,
+    count: 0,
+    limit: 20,
+    max_limit: 50,
+    semantic: true,
+    embedding_model: "",
+    retrieval: { lexical_candidates: 0, vector_candidates: 0, authorized_documents: 0 },
+    ranking: { reranker: "", degraded: false, relevance_floor: null, reranked: 0, below_floor: 0 },
+    notes: [],
+    results: [],
+  };
+
+  it("hands the question to Search without putting it in the address", async () => {
+    vi.spyOn(api, "chatStream").mockResolvedValue(abstained(3));
+    const search = vi.spyOn(api, "search").mockResolvedValue(NOTHING_FOUND);
+    renderAt("/ask");
+    await userEvent.type(await screen.findByLabelText("Your question"), `${QUESTION}{Enter}`);
+    await userEvent.click(await screen.findByRole("link", { name: "Search instead" }));
+
+    // Search has the question, and runs it...
+    expect(await screen.findByLabelText("Search documents")).toHaveValue(QUESTION);
+    await waitFor(() =>
+      expect(search).toHaveBeenCalledWith(expect.objectContaining({ query: QUESTION })),
+    );
+    // ...and the address has not: what people ask stays out of browser
+    // history, and out of the access log a reload would write.
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/search$/);
+    expect(screen.getByTestId("query-string")).toBeEmptyDOMElement();
+  });
+
+  it("searches within the collection the question was asked in", async () => {
+    const examPack = { id: 5, name: "Exam pack" } as unknown as Collection;
+    vi.spyOn(api, "collections").mockResolvedValue({
+      count: 1,
+      next: null,
+      previous: null,
+      results: [examPack],
+    });
+    vi.spyOn(api, "chatStream").mockResolvedValue(abstained(3));
+    const search = vi.spyOn(api, "search").mockResolvedValue(NOTHING_FOUND);
+    renderAt("/ask");
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Ask within" }), "5");
+    await userEvent.type(screen.getByLabelText("Your question"), `${QUESTION}{Enter}`);
+    await userEvent.click(await screen.findByRole("link", { name: "Search instead" }));
+
+    await waitFor(() =>
+      expect(search).toHaveBeenCalledWith(
+        expect.objectContaining({ query: QUESTION, collection_id: 5 }),
+      ),
+    );
+  });
+});
+
+describe("ChatPage turns that end without an answer", () => {
+  const KEPT = /The hostel fee is 60000/;
+  const EDITED = "What is the hostel fee per semester?";
+
+  it("puts the answer back when its regenerate is stopped, and an edit still replaces it", async () => {
+    const stream = vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Regenerate answer" }));
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    // The server removes an answer only when its replacement is saved, so
+    // it still holds this one, and the page shows it.
+    expect(await screen.findByText(KEPT)).toBeInTheDocument();
+    expect(screen.queryByText(/You stopped this answer/)).not.toBeInTheDocument();
+
+    // An edit sent now still replaces it, instead of adding a second pair.
+    await userEvent.click(screen.getByRole("button", { name: "Edit question" }));
+    const box = screen.getByLabelText("Your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, `${EDITED}{Enter}`);
+    expect(stream).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: EDITED, conversation_id: 7, replaces: 2 }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("gives a stopped edit back to the composer, still replacing the answer", async () => {
+    const stream = vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    const box = screen.getByLabelText("Your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, `${EDITED}{Enter}`);
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    // The turn as the server still holds it, and the edit ready to resend.
+    expect(await screen.findByText(KEPT)).toBeInTheDocument();
+    expect(screen.getByText("What is the hostel fee?")).toBeInTheDocument();
+    expect(box).toHaveValue(EDITED);
+    await userEvent.click(screen.getByRole("button", { name: "Ask again" }));
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(stream).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: EDITED, replaces: 2 }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("keeps the answer when its regenerate is refused, and says why", async () => {
+    vi.spyOn(api, "chatStream").mockRejectedValue(
+      new ApiError(429, "Too many requests.", { detail: "Too many requests." }),
+    );
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Regenerate answer" }));
+
+    expect(
+      await screen.findByText(
+        "You have asked a lot of questions in a short time. Wait a few minutes and try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(KEPT)).toBeInTheDocument();
+    expect(screen.queryByText("No answer")).not.toBeInTheDocument();
+  });
+
+  it("shows what the server kept when a stopped regenerate was saved after all", async () => {
+    vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    let held = HOSTEL;
+    vi.spyOn(api, "conversation").mockImplementation(async () => held);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Regenerate answer" }));
+    // The server learns of a Stop only when a write to the closed
+    // connection fails: this one saved the new answer, and removed the
+    // one it replaced, first.
+    held = {
+      ...HOSTEL,
+      messages: [
+        message(3, "USER", "What is the hostel fee?"),
+        message(4, "ASSISTANT", "The hostel fee is 65000."),
+      ],
+    };
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("The hostel fee is 65000.")).toBeInTheDocument();
+    expect(screen.queryByText(KEPT)).not.toBeInTheDocument();
+    expect(screen.queryByText(/You stopped this answer/)).not.toBeInTheDocument();
+  });
+
+  it("does not give back a stopped edit that was saved after all", async () => {
+    vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    let held = HOSTEL;
+    vi.spyOn(api, "conversation").mockImplementation(async () => held);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    const box = screen.getByLabelText("Your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, `${EDITED}{Enter}`);
+    // Saved, and the answer it replaced removed, before the Stop arrived.
+    held = {
+      ...HOSTEL,
+      messages: [message(3, "USER", EDITED), message(4, "ASSISTANT", "It is 30000 a semester.")],
+    };
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("It is 30000 a semester.")).toBeInTheDocument();
+    expect(screen.queryByText(KEPT)).not.toBeInTheDocument();
+    // Not in the composer to be sent a second time.
+    expect(box).toHaveValue("");
+    expect(screen.queryByText(/Editing your last question/)).not.toBeInTheDocument();
+  });
+
+  it("does not claim a stopped question went unsaved, and reloads the list in case", async () => {
+    vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    renderAt("/ask");
+    await userEvent.type(await screen.findByLabelText("Your question"), "Pending question{Enter}");
+    await waitFor(() => expect(api.conversations).toHaveBeenCalled());
+    const listed = vi.mocked(api.conversations).mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("You stopped this answer.")).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing was saved/)).not.toBeInTheDocument();
+    // Saved after all, its new conversation is listed.
+    await waitFor(() => expect(api.conversations).toHaveBeenCalledTimes(listed + 1));
+  });
+});
+
+describe("ChatPage edits", () => {
+  it("does not carry an edit into another conversation", async () => {
+    vi.spyOn(api, "conversations").mockResolvedValue(BOTH);
+    vi.spyOn(api, "conversation").mockImplementation(async (id) => (id === 8 ? EXAMS : HOSTEL));
+    const stream = vi.spyOn(api, "chatStream").mockResolvedValue(answer(8, "On the notice board."));
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    expect(screen.getByText(/Editing your last question/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("link", { name: /Exam dates/ }));
+    expect(await screen.findByText("When do exams start?")).toBeInTheDocument();
+    expect(screen.queryByText(/Editing your last question/)).not.toBeInTheDocument();
+    const box = screen.getByLabelText("Your question");
+    expect(box).toHaveValue("");
+
+    // A new question here - not the other conversation's answer to
+    // replace, which the server refuses.
+    await userEvent.type(box, "And the timetable?{Enter}");
+    const [input] = stream.mock.calls[0];
+    expect(input).toEqual(
+      expect.objectContaining({ question: "And the timetable?", conversation_id: 8 }),
+    );
+    expect(input).not.toHaveProperty("replaces");
+  });
+
+  it("does not carry an edit to a new question", async () => {
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    await userEvent.click(screen.getByRole("button", { name: "New question" }));
+
+    expect(await screen.findByText("Ask a question about your documents")).toBeInTheDocument();
+    expect(screen.queryByText(/Editing your last question/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Your question")).toHaveValue("");
+  });
+});
+
+describe("ChatPage reopening a remembered conversation", () => {
+  // Conversation 7, then 8, then 7 again: the reopening shows what the
+  // first visit loaded at once (api/cache.ts), while its own load - which
+  // the test answers - runs.
+  let answerReopening: (conversation: Conversation) => void = () => undefined;
+  let failReopening: (error: unknown) => void = () => undefined;
+
+  async function reopen() {
+    let reopened = false;
+    vi.spyOn(api, "conversations").mockResolvedValue(BOTH);
+    vi.spyOn(api, "conversation").mockImplementation((id) => {
+      const path = `/api/v1/chat/conversations/${id}/`;
+      if (id === 7 && reopened) {
+        return tagRequest(
+          new Promise<Conversation>((resolve, reject) => {
+            answerReopening = resolve;
+            failReopening = reject;
+          }),
+          path,
+        );
+      }
+      return tagRequest(Promise.resolve(id === 8 ? EXAMS : HOSTEL), path);
+    });
+    renderAt("/ask/7");
+    await screen.findByText("What is the hostel fee?");
+    await userEvent.click(screen.getByRole("link", { name: /Exam dates/ }));
+    await screen.findByText("When do exams start?");
+
+    reopened = true;
+    await userEvent.click(screen.getByRole("link", { name: /Hostel fees/ }));
+    expect(await screen.findByText("What is the hostel fee?")).toBeInTheDocument();
+  }
+
+  it("shows a turn asked elsewhere once its own load arrives", async () => {
+    await reopen();
+    answerReopening({
+      ...HOSTEL,
+      messages: [
+        ...HOSTEL.messages,
+        message(3, "USER", "Is there a mess fee?"),
+        message(4, "ASSISTANT", "The mess fee is 30000."),
+      ],
+    });
+
+    expect(await screen.findByText("Is there a mess fee?")).toBeInTheDocument();
+  });
+
+  it("says the conversation could not be opened once its load fails", async () => {
+    await reopen();
+    failReopening(new ApiError(404, "Not found.", { detail: "Not found." }));
+
+    expect(await screen.findByText("This conversation could not be opened")).toBeInTheDocument();
+    expect(screen.queryByText("What is the hostel fee?")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Your question")).toBeDisabled();
   });
 });
 

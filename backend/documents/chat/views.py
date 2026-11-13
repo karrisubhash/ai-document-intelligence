@@ -161,83 +161,95 @@ class ChatView(APIView):
                     answer.model_version = reply.model_version
                     answer.llm = llm_metadata(reply)
                     source = "general"
+
+            # Said in the answer itself rather than buried in its notes:
+            # which model wrote it, and whether it was quoted because the AI
+            # was at capacity (documents.rag.labels).
+            degraded = labels.degraded(
+                answerer=answer.answerer_fell_back,
+                reranker=answer.reranker_degraded,
+                llm=answer.llm,
+                source=source,
+            )
+            model_display = labels.answer_display(
+                model_name=answer.model_name,
+                model_version=answer.model_version,
+                generative=answer.generative,
+                llm=answer.llm,
+            )
+
+            # A turn the reader stopped is not saved - they never saw an
+            # answer to keep - and the turn it was to replace stays. The
+            # server learns of a Stop only when a write to the closed
+            # connection fails, and that can be after the turn's last
+            # streamed event, while the answer is checked or quoted. So it
+            # is asked here, before anything is written, and again as the
+            # last statement before the commit: a Stop noticed while the
+            # turn was being written rolls all of it back, the removal of
+            # the replaced turn included. Both are no-ops outside the
+            # stream view.
+            streaming.checkpoint()
+            with transaction.atomic():
+                Message.objects.create(
+                    conversation=conversation,
+                    role=Message.Role.USER,
+                    content=data["question"],
+                )
+                assistant = Message.objects.create(
+                    conversation=conversation,
+                    role=Message.Role.ASSISTANT,
+                    content=answer.answer,
+                    abstained=answer.abstained,
+                    abstention_reason=answer.abstention_reason,
+                    citations=answer.citations,
+                    support_ratio=answer.support_ratio,
+                    model_name=answer.model_name,
+                    model_version=answer.model_version,
+                    generative=answer.generative,
+                    retrieved=answer.retrieved,
+                    passages_used=answer.passages_used,
+                    duration_ms=answer.duration_ms,
+                    metadata={
+                        "reranker": answer.reranker_name,
+                        "semantic_retrieval": answer.semantic_retrieval,
+                        "suspected_injections": answer.suspected_injections,
+                        "grounding_failures": answer.grounding_failures,
+                        "notes": answer.notes,
+                        "planned": answer.planned,
+                        "plan": [step.question for step in answer.steps],
+                        "unanswered": answer.unanswered,
+                        # How a follow-up was resolved, so an answer to the
+                        # wrong reading of a question can be traced to the
+                        # rewrite that caused it rather than blamed on
+                        # retrieval.
+                        "followup": resolved.as_metadata,
+                        "timings": answer.timings,
+                        "source": source,
+                        # What the provider said: model actually used, what
+                        # it fell back from, tokens, finish reason, data use.
+                        "llm": answer.llm,
+                        "degraded": degraded,
+                    },
+                )
+                if replaced:
+                    # In the same transaction as the turn that replaces it:
+                    # the conversation never shows both, or neither.
+                    Message.objects.filter(id__in=replaced).delete()
+                # touch() so the conversation sorts by recency.
+                update_fields = ["updated_at"]
+                if not conversation.title:
+                    conversation.title = _title_from(data["question"])
+                    update_fields.append("title")
+                conversation.save(update_fields=update_fields)
+                streaming.checkpoint()  # the last statement before the commit
         except BaseException:
-            # Created for this question, which was never answered: left in
+            # Created for this question, whose turn was never saved: left in
             # place it was an empty "Untitled conversation" in the list.
             # BaseException, so a turn the reader stopped
             # (streaming.Cancelled) is cleaned up too.
             if created:
                 conversation.delete()
             raise
-
-        # Said in the answer itself rather than buried in its notes: which
-        # model wrote it, and whether it was quoted because the AI was at
-        # capacity (documents.rag.labels).
-        degraded = labels.degraded(
-            answerer=answer.answerer_fell_back,
-            reranker=answer.reranker_degraded,
-            llm=answer.llm,
-            source=source,
-        )
-        model_display = labels.answer_display(
-            model_name=answer.model_name,
-            model_version=answer.model_version,
-            generative=answer.generative,
-            llm=answer.llm,
-        )
-
-        with transaction.atomic():
-            Message.objects.create(
-                conversation=conversation,
-                role=Message.Role.USER,
-                content=data["question"],
-            )
-            assistant = Message.objects.create(
-                conversation=conversation,
-                role=Message.Role.ASSISTANT,
-                content=answer.answer,
-                abstained=answer.abstained,
-                abstention_reason=answer.abstention_reason,
-                citations=answer.citations,
-                support_ratio=answer.support_ratio,
-                model_name=answer.model_name,
-                model_version=answer.model_version,
-                generative=answer.generative,
-                retrieved=answer.retrieved,
-                passages_used=answer.passages_used,
-                duration_ms=answer.duration_ms,
-                metadata={
-                    "reranker": answer.reranker_name,
-                    "semantic_retrieval": answer.semantic_retrieval,
-                    "suspected_injections": answer.suspected_injections,
-                    "grounding_failures": answer.grounding_failures,
-                    "notes": answer.notes,
-                    "planned": answer.planned,
-                    "plan": [step.question for step in answer.steps],
-                    "unanswered": answer.unanswered,
-                    # How a follow-up was resolved, so an answer to the
-                    # wrong reading of a question can be traced to the
-                    # rewrite that caused it rather than blamed on
-                    # retrieval.
-                    "followup": resolved.as_metadata,
-                    "timings": answer.timings,
-                    "source": source,
-                    # What the provider said: model actually used, what it
-                    # fell back from, tokens, finish reason, data use.
-                    "llm": answer.llm,
-                    "degraded": degraded,
-                },
-            )
-            if replaced:
-                # In the same transaction as the turn that replaces it: the
-                # conversation never shows both, or neither.
-                Message.objects.filter(id__in=replaced).delete()
-            # touch() so the conversation sorts by recency.
-            update_fields = ["updated_at"]
-            if not conversation.title:
-                conversation.title = _title_from(data["question"])
-                update_fields.append("title")
-            conversation.save(update_fields=update_fields)
 
         record_event(
             user=request.user,
@@ -398,14 +410,18 @@ class ChatStreamView(ChatView):
         # Set when the reader goes away - the browser's Stop, a closed tab -
         # which the server learns when a write to the connection fails and
         # the response generator is closed (_events). The turn's next
-        # streaming call then raises streaming.Cancelled: no more words are
-        # generated, so no more free-tier quota is spent, and nothing is
+        # streaming call, or the checkpoints before it is saved
+        # (ChatView.handle), then raises streaming.Cancelled: no more words
+        # are generated, so no more free-tier quota is spent, and nothing is
         # saved - the reader never saw an answer to keep.
         cancelled = threading.Event()
 
         def sink(event, payload):
             if cancelled.is_set():
                 raise streaming.Cancelled()
+            if event == streaming.CHECKPOINT:
+                # Only asks whether the reader is still there.
+                return
             if event == "delta":
                 events.put((event, {"text": payload}))
             elif event == "reset":

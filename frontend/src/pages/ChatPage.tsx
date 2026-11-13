@@ -6,6 +6,7 @@ import { ApiError, api } from "../api/client";
 import { useResource, type Resource } from "../api/hooks";
 import type {
   Citation,
+  Conversation,
   ConversationSummary,
   DocumentType,
   Paginated,
@@ -62,8 +63,45 @@ interface Turn {
   /** The step the server says it is on, and the passages it is reading. */
   stage?: string;
   sources?: StreamSource[];
-  /** The reader pressed Stop: nothing was saved. */
+  /** The reader pressed Stop before the answer arrived. */
   stopped?: boolean;
+}
+
+/** A conversation's turns as the server holds them. */
+function turnsOf(conversation: Conversation): Turn[] {
+  const turns: Turn[] = [];
+  const messages = conversation.messages;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role !== "USER") continue;
+    const reply = messages[index + 1];
+    turns.push({
+      key: `m${message.id}`,
+      question: message.content,
+      answer: reply && reply.role === "ASSISTANT" ? fromMessage(reply) : null,
+    });
+  }
+  return turns;
+}
+
+/**
+ * Whether `turns` show exactly the answers the server holds, in order. A
+ * turn without an answer (stopped, failed) is the page's own: the server
+ * never had it.
+ */
+function showsAnswersOf(turns: Turn[], conversation: Conversation): boolean {
+  const shown = turns.flatMap((turn) => (turn.answer?.id ? [turn.answer.id] : []));
+  const held = conversation.messages
+    .filter((message) => message.role === "ASSISTANT")
+    .map((message) => message.id);
+  return shown.length === held.length && shown.every((id, index) => id === held[index]);
+}
+
+/** Why a turn got no answer, in words for the reader. */
+function failureMessage(error: unknown): string {
+  return error instanceof ApiError && error.status === 429
+    ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
+    : errorMessage(error);
 }
 
 /** How close to the bottom counts as "reading the latest" (px). */
@@ -438,6 +476,10 @@ export default function ChatPage() {
 
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState(handoff.question ?? "");
+  // The composer's text as last rendered, for a turn that ends after the
+  // reader has typed something new there.
+  const draftNow = useRef(draft);
+  draftNow.current = draft;
   const [sending, setSending] = useState(false);
   // The turn being written, so Stop can end it (and the server stops the
   // model, see ChatStreamView).
@@ -473,6 +515,25 @@ export default function ChatPage() {
   // page has just created already shows its turns with their live response
   // data, so it is not rebuilt from history; any OTHER conversation is.
   const [turnsFor, setTurnsFor] = useState<number | null>(null);
+  // The turns on screen were painted from a remembered copy of the
+  // conversation (api/cache.ts) that this visit's own load has not
+  // confirmed yet.
+  const [fromMemory, setFromMemory] = useState(false);
+  // Counts the turns this page has started. What the server said about the
+  // conversation before the latest of them cannot replace what is on screen.
+  const started = useRef(0);
+  // The edit in progress, while the turn it edits is on screen. Any other -
+  // another conversation's, or a turn the server has since replaced - is
+  // none: the composer's question then goes as a new one.
+  const edit = editing && turns.some((turn) => turn.key === editing.key) ? editing : null;
+  // Ends an edit, and takes the question it put in the composer with it -
+  // but only while the edit was showing: otherwise what is there is the
+  // reader's own.
+  const dropEdit = () => {
+    if (!editing) return;
+    setEditing(null);
+    if (edit) setDraft("");
+  };
 
   // The conversation the route shows, and a counter that moves whenever it
   // REALLY changes (not when StrictMode re-runs an effect). An answer that
@@ -498,32 +559,38 @@ export default function ChatPage() {
     if (shown.current === conversationId) return;
     shown.current = conversationId;
     view.current += 1;
+    setFromMemory(false);
+    // An edit belongs to the conversation it was started in. Carried
+    // along, it was sent here naming the other conversation's answer to
+    // replace, and refused.
+    dropEdit();
     if (conversationId === null || conversationId !== turnsFor) {
       // Another conversation's turns never sit under this URL while its
       // own history loads - or, if the load fails, for good.
       setTurns([]);
       if (conversationId === null) setTurnsFor(null);
     }
+    // Only a change of conversation does anything here (`shown`), and it
+    // re-runs the effect with that render's dropEdit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, turnsFor]);
 
   useEffect(() => {
-    if (conversationId === null || turnsFor === conversationId) return;
-    if (!history.data || history.data.id !== conversationId) return;
-    const rebuilt: Turn[] = [];
-    const messages = history.data.messages;
-    for (let index = 0; index < messages.length; index += 1) {
-      const message = messages[index];
-      if (message.role !== "USER") continue;
-      const reply = messages[index + 1];
-      rebuilt.push({
-        key: `m${message.id}`,
-        question: message.content,
-        answer: reply && reply.role === "ASSISTANT" ? fromMessage(reply) : null,
-      });
+    if (conversationId === null || !history.data || history.data.id !== conversationId) return;
+    if (turnsFor !== conversationId) {
+      setTurns(turnsOf(history.data));
+      setTurnsFor(conversationId);
+      setFromMemory(history.stale);
+      return;
     }
-    setTurns(rebuilt);
-    setTurnsFor(conversationId);
-  }, [conversationId, history.data, turnsFor]);
+    // Painted from a remembered copy: this visit's own load replaces it
+    // when it arrives. Another tab or device may have added a turn since,
+    // and follow-ups are resolved against what the server holds.
+    if (!fromMemory || history.stale) return;
+    setFromMemory(false);
+    const held = history.data;
+    setTurns((current) => (showsAnswersOf(current, held) ? current : turnsOf(held)));
+  }, [conversationId, history.data, history.stale, turnsFor, fromMemory]);
 
   // Autoscroll only for a reader who is already at the bottom. Every delta
   // changes `turns`, and scrolling on each one yanked anyone reading the
@@ -582,6 +649,33 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // What the server kept of a turn that ended without an answer: stopped,
+  // or failed. It learns of a Stop only when writing to the closed
+  // connection fails, so a turn stopped in its last moments can still have
+  // been saved - and the answer it replaced removed. The page then shows
+  // the conversation as the server holds it, not an answer that is gone or
+  // a question it says has none. `restored`: an edit the stopped or failed
+  // turn gave back to the composer.
+  const reconcile = async (id: number, restored?: { question: string; replaces: number }) => {
+    const askedIn = view.current;
+    const turn = started.current;
+    let held: Conversation;
+    try {
+      held = await api.conversation(id);
+    } catch {
+      return; // Best effort: the page stays as it is.
+    }
+    // Never over another conversation, or a turn started since.
+    if (!mounted.current || view.current !== askedIn || started.current !== turn) return;
+    setTurns((current) => (showsAnswersOf(current, held) ? current : turnsOf(held)));
+    // Saved after all - the answer it was to replace is gone: the edit is
+    // not left in the composer to be sent a second time.
+    if (restored && !held.messages.some((message) => message.id === restored.replaces)) {
+      setEditing((current) => (current?.replaces === restored.replaces ? null : current));
+      setDraft((current) => (current === restored.question ? "" : current));
+    }
+  };
+
   const send = async (
     text: string,
     options: { replaceKey?: string; replaces?: number | null; everywhere?: boolean } = {},
@@ -595,7 +689,14 @@ export default function ChatPage() {
     }
     const key = `t${Date.now()}`;
     const askedIn = view.current;
+    started.current += 1;
     const fresh: Turn = { key, question, answer: null };
+    // The turn a regenerated or edited one replaces. The server removes it
+    // only together with saving its replacement, so until then it is still
+    // the conversation's, and it comes back if this turn is stopped or fails.
+    const replaced = options.replaces
+      ? turns.find((turn) => turn.key === options.replaceKey && turn.answer?.id === options.replaces)
+      : undefined;
     // A regenerated, edited or retried turn takes the place of the one it
     // replaces; anything else is a new turn at the end.
     setTurns((current) =>
@@ -605,6 +706,9 @@ export default function ChatPage() {
     );
     setDraft("");
     setEditing(null);
+    // Started on remembered turns, which this visit's load of the
+    // conversation then no longer replaces: it may predate this turn.
+    setFromMemory(false);
     setBusyHint(false);
     setSending(true);
     following.current = true;
@@ -663,15 +767,29 @@ export default function ChatPage() {
       }
       conversations.reload();
     } catch (caught) {
+      if (!mounted.current) return;
+      const stopped = isAbort(caught);
       if (view.current === askedIn) {
-        if (isAbort(caught)) {
-          patch((turn) => ({ ...turn, stopped: true }));
-          setAnnouncement("Answer stopped.");
+        let restored: { question: string; replaces: number } | undefined;
+        if (replaced?.answer) {
+          const replacedId = replaced.answer.id;
+          setTurns((current) => current.map((turn) => (turn.key === key ? replaced : turn)));
+          // An edited question goes back into the composer, so what was
+          // typed is not lost - unless something new has been typed since.
+          if (question !== replaced.question && !draftNow.current.trim()) {
+            setDraft(question);
+            setEditing({ key: replaced.key, replaces: replacedId });
+            if (replacedId) restored = { question, replaces: replacedId };
+          }
+          if (!stopped) toast(failureMessage(caught), "danger");
         } else {
-          patch((turn) => ({ ...turn, error: caught }));
-          setAnnouncement("The answer could not be completed.");
+          patch((turn) => (stopped ? { ...turn, stopped: true } : { ...turn, error: caught }));
         }
+        setAnnouncement(stopped ? "Answer stopped." : "The answer could not be completed.");
+        if (conversationId !== null) void reconcile(conversationId, restored);
       }
+      // Saved after all, perhaps: a first question with its conversation.
+      conversations.reload();
     } finally {
       if (inFlight.current === controller) inFlight.current = null;
       setSending(false);
@@ -692,15 +810,18 @@ export default function ChatPage() {
     }
   };
 
+  const sendDraft = () =>
+    void send(draft, edit ? { replaceKey: edit.key, replaces: edit.replaces } : {});
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void send(draft, editing ? { replaceKey: editing.key, replaces: editing.replaces } : {});
+    sendDraft();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void send(draft, editing ? { replaceKey: editing.key, replaces: editing.replaces } : {});
+      sendDraft();
     }
   };
 
@@ -712,6 +833,8 @@ export default function ChatPage() {
 
   const startNew = () => {
     setScope(null);
+    // An edit is the open conversation's (see the effect above).
+    dropEdit();
     if (conversationId === null) {
       // Already on the new-question screen: clearing it is a new view too,
       // so an answer still on its way is not shown on the empty page.
@@ -724,6 +847,10 @@ export default function ChatPage() {
 
   // Showing a conversation whose turns have not been loaded yet.
   const opening = conversationId !== null && turnsFor !== conversationId;
+  // A conversation that could not be opened - also one painted from a
+  // remembered copy that its own load then could not confirm (deleted in
+  // another tab, say), whose turns must not stay standing.
+  const unopened = Boolean(history.error) && (opening || fromMemory);
   const conversationCount = conversations.data?.count ?? 0;
   const lastKey = turns.length ? turns[turns.length - 1].key : null;
   const scoped = Boolean(scope || collectionId);
@@ -783,7 +910,7 @@ export default function ChatPage() {
         </p>
         <div className="thread" ref={thread} aria-busy={sending} onScroll={onThreadScroll}>
           <div className="thread-inner">
-            {history.error && opening ? (
+            {unopened ? (
               <ErrorState
                 error={history.error}
                 title="This conversation could not be opened"
@@ -822,7 +949,7 @@ export default function ChatPage() {
                 return (
                   <article key={turn.key} className="turn">
                     <div className="user-row">
-                      {latest && settled && !editing ? (
+                      {latest && settled && !edit ? (
                         <IconButton
                           icon="pencil"
                           size="sm"
@@ -831,7 +958,7 @@ export default function ChatPage() {
                           onClick={() => editLast(turn)}
                         />
                       ) : null}
-                      <div className={`bubble bubble-user${editing?.key === turn.key ? " bubble-editing" : ""}`}>
+                      <div className={`bubble bubble-user${edit?.key === turn.key ? " bubble-editing" : ""}`}>
                         <p>{turn.question}</p>
                       </div>
                     </div>
@@ -850,6 +977,11 @@ export default function ChatPage() {
                               latest && turn.answer.abstained
                                 ? {
                                     searchFor: turn.question,
+                                    // The collection asked within, which
+                                    // Search can narrow to as well (one
+                                    // document in scope, it cannot).
+                                    collectionId:
+                                      !scope && collectionId ? Number(collectionId) : undefined,
                                     askEverywhere: scoped
                                       ? () => {
                                           setScope(null);
@@ -889,15 +1021,17 @@ export default function ChatPage() {
                         ) : turn.error || turn.stopped ? (
                           <div className="turn-failed">
                             {turn.stopped ? (
+                              // No claim that nothing was saved: a Stop can
+                              // reach the server after it saved the turn.
+                              // Then the page shows what it saved instead
+                              // (reconcile).
                               <p className="turn-stopped">
                                 <Icon name="x-circle" size={15} />
-                                You stopped this answer. Nothing was saved.
+                                You stopped this answer.
                               </p>
                             ) : (
                               <Alert tone="danger" title="No answer">
-                                {turn.error instanceof ApiError && turn.error.status === 429
-                                  ? "You have asked a lot of questions in a short time. Wait a few minutes and try again."
-                                  : errorMessage(turn.error)}
+                                {failureMessage(turn.error)}
                               </Alert>
                             )}
                             {settled ? (
@@ -948,19 +1082,11 @@ export default function ChatPage() {
 
         <form className="composer" onSubmit={submit}>
           <div className="composer-inner">
-            {editing ? (
+            {edit ? (
               <div className="composer-editing">
                 <Icon name="pencil" size={14} />
                 <span>Editing your last question - sending replaces its answer.</span>
-                <IconButton
-                  icon="x"
-                  size="sm"
-                  label="Cancel editing"
-                  onClick={() => {
-                    setEditing(null);
-                    setDraft("");
-                  }}
-                />
+                <IconButton icon="x" size="sm" label="Cancel editing" onClick={dropEdit} />
               </div>
             ) : null}
             <div className="composer-box">
@@ -980,7 +1106,7 @@ export default function ChatPage() {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={onKeyDown}
-                disabled={opening}
+                disabled={opening || unopened}
               />
               <div className="composer-bar">
                 <div className="composer-scope">
@@ -1064,9 +1190,9 @@ export default function ChatPage() {
                     variant="primary"
                     size="sm"
                     icon="arrow-up"
-                    disabled={!draft.trim() || opening}
+                    disabled={!draft.trim() || opening || unopened}
                   >
-                    {editing ? "Ask again" : "Ask"}
+                    {edit ? "Ask again" : "Ask"}
                   </Button>
                 )}
               </div>

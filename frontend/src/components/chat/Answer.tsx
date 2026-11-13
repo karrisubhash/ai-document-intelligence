@@ -371,8 +371,12 @@ export function Answer({
   actions?: ReactNode;
   /** Ask a suggested follow-up. Only the latest answer offers them. */
   onAsk?: (question: string) => void;
-  /** After an abstention: "Search instead", and "Ask across all documents" when scoped. */
-  offerAlternatives?: { searchFor: string; askEverywhere?: () => void };
+  /**
+   * After an abstention: "Search instead" (within `collectionId`, the
+   * collection the question was asked in), and "Ask across all documents"
+   * when scoped.
+   */
+  offerAlternatives?: { searchFor: string; collectionId?: number; askEverywhere?: () => void };
 }) {
   const byMarker = new Map(answer.citations.map((citation) => [citation.marker, citation]));
   const documents = citedDocuments(answer.citations);
@@ -401,7 +405,15 @@ export function Answer({
               <div className="abstention-actions">
                 <Link
                   className="btn btn-secondary btn-sm"
-                  to={`/search?q=${encodeURIComponent(offerAlternatives.searchFor)}`}
+                  // Handed over in history state, which Search reads once
+                  // and clears - never in the address, where a question
+                  // lands in browser history and, on a reload, in access
+                  // logs.
+                  to="/search"
+                  state={{
+                    query: offerAlternatives.searchFor,
+                    collectionId: offerAlternatives.collectionId,
+                  }}
                 >
                   <Icon name="search" />
                   Search instead

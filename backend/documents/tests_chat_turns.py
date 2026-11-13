@@ -1,5 +1,6 @@
 """A chat turn's lifecycle: live progress, Stop, and Regenerate / Edit."""
 
+import threading
 import time
 from unittest import mock
 
@@ -160,6 +161,82 @@ class StopTests(TransactionTestCase):
         response.worker.join(timeout=10)
         self.assertEqual(events[-1][0], "done")
         self.assertEqual(Message.objects.count(), 2)
+
+    # The server learns of a Stop only when a write to the closed connection
+    # fails, and that can be after the turn's last streamed event. These
+    # stop the reader there: the turn has nothing left to stream, and used
+    # to be saved - replacing the answer it was regenerating - while the
+    # page said nothing was.
+
+    def stop_at(self, target, attribute, payload):
+        """Streams `payload`, and closes the response - what the server does
+        when a write to the closed connection fails - once the turn reaches
+        `target.attribute`. The turn then carries on from there."""
+        reached, closed = threading.Event(), threading.Event()
+        real = getattr(target, attribute)
+
+        def the_reader_leaves_here(*args, **kwargs):
+            if not reached.is_set():
+                reached.set()
+                closed.wait(timeout=10)
+            return real(*args, **kwargs)
+
+        with mock.patch.object(target, attribute, the_reader_leaves_here):
+            response = self.client.post(
+                STREAM, payload, format="json", HTTP_ACCEPT="text/event-stream"
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            next(iter(response.streaming_content))  # the reader is there
+            self.assertTrue(
+                reached.wait(timeout=10), f"the turn never reached {attribute}"
+            )
+            response.close()
+            closed.set()
+            response.worker.join(timeout=10)
+        self.assertFalse(response.worker.is_alive())
+
+    def messages_of(self, conversation_id):
+        rows = Message.objects.filter(conversation_id=conversation_id).order_by("id")
+        return list(rows.values_list("id", "content"))
+
+    def regenerating(self):
+        """A saved, grounded turn, and a request to regenerate its answer."""
+        first = self.client.post(CHAT, {"question": QUESTION}, format="json").data
+        self.assertFalse(first["abstained"], first)
+        return first["conversation_id"], {
+            "question": QUESTION,
+            "conversation_id": first["conversation_id"],
+            "replaces": first["message_id"],
+        }
+
+    def test_a_regenerate_stopped_while_its_answer_is_checked_keeps_the_answer(self):
+        over_one_passage(self, groq(StreamingChatClient(["You need 75 percent [1]."])))
+        conversation, regenerate = self.regenerating()
+        before = self.messages_of(conversation)
+
+        # Verifying is the last event; nothing streams after the check.
+        self.stop_at(engine.grounding, "validate", regenerate)
+
+        self.assertEqual(self.messages_of(conversation), before)
+
+    def test_a_regenerate_stopped_while_it_is_saved_is_rolled_back_whole(self):
+        over_one_passage(self, groq(StreamingChatClient(["You need 75 percent [1]."])))
+        conversation, regenerate = self.regenerating()
+        before = self.messages_of(conversation)
+
+        # The conversation is touched last, after the replaced turn's removal.
+        self.stop_at(Conversation, "save", regenerate)
+
+        self.assertEqual(self.messages_of(conversation), before)
+
+    def test_a_first_question_stopped_after_its_last_event_leaves_nothing(self):
+        over_one_passage(self, groq(StreamingChatClient(["You need 75 percent [1]."])))
+
+        self.stop_at(engine.grounding, "validate", {"question": QUESTION})
+
+        self.assertEqual(Message.objects.count(), 0)
+        # Nor the conversation made for it, as for a turn stopped mid-answer.
+        self.assertEqual(Conversation.objects.count(), 0)
 
 
 class ReplaceTurnTests(TestCase):
