@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../api/client";
+import { tagRequest } from "../api/cache";
+import { ApiError, api } from "../api/client";
 import type {
   ChatMessage,
   ChatResponse,
@@ -312,6 +313,63 @@ describe("ChatPage edits", () => {
     expect(await screen.findByText("Ask a question about your documents")).toBeInTheDocument();
     expect(screen.queryByText(/Editing your last question/)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Your question")).toHaveValue("");
+  });
+});
+
+describe("ChatPage reopening a remembered conversation", () => {
+  // Conversation 7, then 8, then 7 again: the reopening shows what the
+  // first visit loaded at once (api/cache.ts), while its own load - which
+  // the test answers - runs.
+  let answerReopening: (conversation: Conversation) => void = () => undefined;
+  let failReopening: (error: unknown) => void = () => undefined;
+
+  async function reopen() {
+    let reopened = false;
+    vi.spyOn(api, "conversations").mockResolvedValue(BOTH);
+    vi.spyOn(api, "conversation").mockImplementation((id) => {
+      const path = `/api/v1/chat/conversations/${id}/`;
+      if (id === 7 && reopened) {
+        return tagRequest(
+          new Promise<Conversation>((resolve, reject) => {
+            answerReopening = resolve;
+            failReopening = reject;
+          }),
+          path,
+        );
+      }
+      return tagRequest(Promise.resolve(id === 8 ? EXAMS : HOSTEL), path);
+    });
+    renderAt("/ask/7");
+    await screen.findByText("What is the hostel fee?");
+    await userEvent.click(screen.getByRole("link", { name: /Exam dates/ }));
+    await screen.findByText("When do exams start?");
+
+    reopened = true;
+    await userEvent.click(screen.getByRole("link", { name: /Hostel fees/ }));
+    expect(await screen.findByText("What is the hostel fee?")).toBeInTheDocument();
+  }
+
+  it("shows a turn asked elsewhere once its own load arrives", async () => {
+    await reopen();
+    answerReopening({
+      ...HOSTEL,
+      messages: [
+        ...HOSTEL.messages,
+        message(3, "USER", "Is there a mess fee?"),
+        message(4, "ASSISTANT", "The mess fee is 30000."),
+      ],
+    });
+
+    expect(await screen.findByText("Is there a mess fee?")).toBeInTheDocument();
+  });
+
+  it("says the conversation could not be opened once its load fails", async () => {
+    await reopen();
+    failReopening(new ApiError(404, "Not found.", { detail: "Not found." }));
+
+    expect(await screen.findByText("This conversation could not be opened")).toBeInTheDocument();
+    expect(screen.queryByText("What is the hostel fee?")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Your question")).toBeDisabled();
   });
 });
 

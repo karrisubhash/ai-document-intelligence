@@ -6,6 +6,7 @@ import { ApiError, api } from "../api/client";
 import { useResource, type Resource } from "../api/hooks";
 import type {
   Citation,
+  Conversation,
   ConversationSummary,
   DocumentType,
   Paginated,
@@ -64,6 +65,36 @@ interface Turn {
   sources?: StreamSource[];
   /** The reader pressed Stop: nothing was saved. */
   stopped?: boolean;
+}
+
+/** A conversation's turns as the server holds them. */
+function turnsOf(conversation: Conversation): Turn[] {
+  const turns: Turn[] = [];
+  const messages = conversation.messages;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role !== "USER") continue;
+    const reply = messages[index + 1];
+    turns.push({
+      key: `m${message.id}`,
+      question: message.content,
+      answer: reply && reply.role === "ASSISTANT" ? fromMessage(reply) : null,
+    });
+  }
+  return turns;
+}
+
+/**
+ * Whether `turns` show exactly the answers the server holds, in order. A
+ * turn without an answer (stopped, failed) is the page's own: the server
+ * never had it.
+ */
+function showsAnswersOf(turns: Turn[], conversation: Conversation): boolean {
+  const shown = turns.flatMap((turn) => (turn.answer?.id ? [turn.answer.id] : []));
+  const held = conversation.messages
+    .filter((message) => message.role === "ASSISTANT")
+    .map((message) => message.id);
+  return shown.length === held.length && shown.every((id, index) => id === held[index]);
 }
 
 /** How close to the bottom counts as "reading the latest" (px). */
@@ -473,6 +504,10 @@ export default function ChatPage() {
   // page has just created already shows its turns with their live response
   // data, so it is not rebuilt from history; any OTHER conversation is.
   const [turnsFor, setTurnsFor] = useState<number | null>(null);
+  // The turns on screen were painted from a remembered copy of the
+  // conversation (api/cache.ts) that this visit's own load has not
+  // confirmed yet.
+  const [fromMemory, setFromMemory] = useState(false);
   // The edit in progress, while the turn it edits is on screen. Any other -
   // another conversation's, or a turn the server has since replaced - is
   // none: the composer's question then goes as a new one.
@@ -510,6 +545,7 @@ export default function ChatPage() {
     if (shown.current === conversationId) return;
     shown.current = conversationId;
     view.current += 1;
+    setFromMemory(false);
     // An edit belongs to the conversation it was started in. Carried
     // along, it was sent here naming the other conversation's answer to
     // replace, and refused.
@@ -526,23 +562,21 @@ export default function ChatPage() {
   }, [conversationId, turnsFor]);
 
   useEffect(() => {
-    if (conversationId === null || turnsFor === conversationId) return;
-    if (!history.data || history.data.id !== conversationId) return;
-    const rebuilt: Turn[] = [];
-    const messages = history.data.messages;
-    for (let index = 0; index < messages.length; index += 1) {
-      const message = messages[index];
-      if (message.role !== "USER") continue;
-      const reply = messages[index + 1];
-      rebuilt.push({
-        key: `m${message.id}`,
-        question: message.content,
-        answer: reply && reply.role === "ASSISTANT" ? fromMessage(reply) : null,
-      });
+    if (conversationId === null || !history.data || history.data.id !== conversationId) return;
+    if (turnsFor !== conversationId) {
+      setTurns(turnsOf(history.data));
+      setTurnsFor(conversationId);
+      setFromMemory(history.stale);
+      return;
     }
-    setTurns(rebuilt);
-    setTurnsFor(conversationId);
-  }, [conversationId, history.data, turnsFor]);
+    // Painted from a remembered copy: this visit's own load replaces it
+    // when it arrives. Another tab or device may have added a turn since,
+    // and follow-ups are resolved against what the server holds.
+    if (!fromMemory || history.stale) return;
+    setFromMemory(false);
+    const held = history.data;
+    setTurns((current) => (showsAnswersOf(current, held) ? current : turnsOf(held)));
+  }, [conversationId, history.data, history.stale, turnsFor, fromMemory]);
 
   // Autoscroll only for a reader who is already at the bottom. Every delta
   // changes `turns`, and scrolling on each one yanked anyone reading the
@@ -624,6 +658,9 @@ export default function ChatPage() {
     );
     setDraft("");
     setEditing(null);
+    // Started on remembered turns, which this visit's load of the
+    // conversation then no longer replaces: it may predate this turn.
+    setFromMemory(false);
     setBusyHint(false);
     setSending(true);
     following.current = true;
@@ -748,6 +785,10 @@ export default function ChatPage() {
 
   // Showing a conversation whose turns have not been loaded yet.
   const opening = conversationId !== null && turnsFor !== conversationId;
+  // A conversation that could not be opened - also one painted from a
+  // remembered copy that its own load then could not confirm (deleted in
+  // another tab, say), whose turns must not stay standing.
+  const unopened = Boolean(history.error) && (opening || fromMemory);
   const conversationCount = conversations.data?.count ?? 0;
   const lastKey = turns.length ? turns[turns.length - 1].key : null;
   const scoped = Boolean(scope || collectionId);
@@ -807,7 +848,7 @@ export default function ChatPage() {
         </p>
         <div className="thread" ref={thread} aria-busy={sending} onScroll={onThreadScroll}>
           <div className="thread-inner">
-            {history.error && opening ? (
+            {unopened ? (
               <ErrorState
                 error={history.error}
                 title="This conversation could not be opened"
@@ -1001,7 +1042,7 @@ export default function ChatPage() {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={onKeyDown}
-                disabled={opening}
+                disabled={opening || unopened}
               />
               <div className="composer-bar">
                 <div className="composer-scope">
@@ -1085,7 +1126,7 @@ export default function ChatPage() {
                     variant="primary"
                     size="sm"
                     icon="arrow-up"
-                    disabled={!draft.trim() || opening}
+                    disabled={!draft.trim() || opening || unopened}
                   >
                     {edit ? "Ask again" : "Ask"}
                   </Button>
