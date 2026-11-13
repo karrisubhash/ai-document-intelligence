@@ -1,9 +1,11 @@
 import logging
 
 from django.db import DatabaseError, transaction
-from django.http import FileResponse
+from django.db.models import Case, IntegerField, Value, When
+from django.http import FileResponse, HttpResponseNotModified
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.http import http_date
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -12,9 +14,11 @@ from rest_framework.response import Response
 from accounts.services import UnknownDepartment, resolve_department
 from documents import authorization, idempotency
 from documents.api import discovery
+from documents.api import insights as briefs
 from documents.audit import record_event
 from documents.models import (
     AuditLog,
+    ClassificationResult,
     Document,
     DocumentChunk,
     DocumentVersion,
@@ -22,6 +26,7 @@ from documents.models import (
 )
 from documents.observability import telemetry
 from documents.permissions import DocumentAccessPolicy
+from documents.processing.insights.enrichment import Reason
 from documents.services import (
     DocumentArchived,
     DocumentQuarantined,
@@ -32,6 +37,7 @@ from documents.services import (
     reprocess_document,
     restore_document,
 )
+from documents.tasks_insights import enqueue_enrichment
 from documents.throttling import BurstUserThrottle
 
 from .serializers import (
@@ -50,6 +56,7 @@ from .serializers import (
     DocumentVersionSerializer,
     ExtractionResultSerializer,
     ProcessingJobSerializer,
+    with_listing_facts,
 )
 
 logger = logging.getLogger("adi.documents")
@@ -155,6 +162,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
         elif self.action == "bulk_delete":
             # Up to BULK_DELETE_LIMIT transactions and audit rows a request.
             self.throttle_scope = "bulk_delete"
+        elif self.action in ("related", "suggestions", "deadlines") or (
+            # A type change queues a re-extraction and a new brief; a title
+            # edit costs nothing and is not counted.
+            self.action in ("update", "partial_update")
+            and "document_type" in self.request.data
+        ):
+            self.throttle_scope = "insights"
         else:
             self.throttle_scope = None
         return super().get_throttles()
@@ -196,11 +210,36 @@ class DocumentViewSet(viewsets.ModelViewSet):
             # term, filter value or ordering field it accepts can widen the
             # result set back past this boundary. See discovery.py.
             scoped = authorization.visible_documents(
-                self.request.user, queryset.select_related("current_version", "owner")
+                self.request.user,
+                with_listing_facts(queryset.select_related("current_version", "owner")),
             )
             return discovery.apply(scoped, query.validated_data)
 
         return queryset
+
+    def perform_update(self, serializer):
+        """A changed type is a person's decision: recorded, and acted on.
+
+        Only a CHANGE counts. The edit form sends the type with every save,
+        so treating an unchanged value as a choice would pin the upload
+        default (or the detector's guess) every time someone fixed a title.
+        """
+        document = serializer.instance
+        new_type = serializer.validated_data.get("document_type")
+        if new_type is None or new_type == document.document_type:
+            serializer.save()
+            return
+
+        serializer.save(
+            document_type_source=Document.TypeSource.USER, type_confidence=None
+        )
+        if document.current_version_id:
+            # Fields under the new type's schema, and a brief whose questions
+            # follow them - not a reprocess: OCR and indexing are unchanged.
+            version_id = document.current_version_id
+            transaction.on_commit(
+                lambda: enqueue_enrichment(version_id, Reason.TYPE_CHANGED)
+            )
 
     def create(self, request, *args, **kwargs):
         serializer = DocumentCreateSerializer(
@@ -225,7 +264,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 pk=replay_pk,
             )
             return Response(
-                DocumentSerializer(document, context={"request": request}).data,
+                {
+                    **DocumentSerializer(document, context={"request": request}).data,
+                    "possible_duplicates": briefs.possible_duplicates(
+                        request.user, document
+                    ),
+                },
                 status=status.HTTP_202_ACCEPTED,
                 headers={idempotency.REPLAYED_HEADER: "true"},
             )
@@ -267,6 +311,14 @@ class DocumentViewSet(viewsets.ModelViewSet):
             document = Document.objects.create(
                 title=data["title"],
                 document_type=data["document_type"],
+                # GENERAL is what the upload form starts on, so it says
+                # nothing about the uploader's intent and the type detector
+                # may replace it. Any other type was chosen, and stays.
+                document_type_source=(
+                    Document.TypeSource.DEFAULT
+                    if data["document_type"] == Document.DocumentType.GENERAL
+                    else Document.TypeSource.USER
+                ),
                 department=department,
                 owner=request.user,
             )
@@ -281,7 +333,15 @@ class DocumentViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            DocumentSerializer(document, context={"request": request}).data,
+            {
+                **DocumentSerializer(document, context={"request": request}).data,
+                # A hint, never a refusal: the same bytes already stored in
+                # documents this uploader can read. Documents they cannot
+                # read are not mentioned, not even as a count.
+                "possible_duplicates": briefs.possible_duplicates(
+                    request.user, document
+                ),
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 
@@ -337,7 +397,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_202_ACCEPTED,
             )
 
-        versions = document.versions.all()
+        versions = document.versions.select_related("uploaded_by")
         return Response(DocumentVersionSerializer(versions, many=True).data)
 
     @action(detail=True, methods=["get"])
@@ -406,6 +466,10 @@ class DocumentViewSet(viewsets.ModelViewSet):
         storing runs per model is being able to see them side by side. An
         empty list is a real answer - the stage records SKIPPED when no
         classifier is configured, and the pipeline history says so.
+
+        Document-type verdicts come first, newest first, then layout
+        classes: a client that reads the first item reads the product's own
+        type verdict, never a layout label presented as the type.
         """
         document = self.get_object()
         version = document.current_version
@@ -416,7 +480,15 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        results = version.classification_results.all()
+        results = version.classification_results.annotate(
+            taxonomy_rank=Case(
+                When(
+                    taxonomy=ClassificationResult.Taxonomy.DOCUMENT_TYPE, then=Value(0)
+                ),
+                default=Value(1),
+                output_field=IntegerField(),
+            )
+        ).order_by("taxonomy_rank", "-created_at")
         return Response(ClassificationResultSerializer(results, many=True).data)
 
     @action(detail=True, methods=["get"])
@@ -488,6 +560,83 @@ class DocumentViewSet(viewsets.ModelViewSet):
         if content is None:
             return Response([])
         return Response(DocumentFigureSerializer(content.figures.all(), many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def insights(self, request, pk=None):
+        """The extractive brief of the live extraction pass.
+
+        Not audited per call (the page visit is, by `retrieve`); a refusal
+        still is - see DocumentAccessPolicy. Quarantined versions have no
+        brief, exactly as they have no text.
+        """
+        return Response(briefs.insight_payload(self.get_object()))
+
+    @action(detail=True, methods=["get"])
+    def related(self, request, pk=None):
+        """Up to five readable, live documents most like this one."""
+        results, method = briefs.related_documents(request.user, self.get_object())
+        return Response({"results": results, "method": method})
+
+    @action(detail=True, methods=["get"])
+    def thumbnail(self, request, pk=None):
+        """The current version's first-page image, or 404.
+
+        Private-cacheable with validators, because a library grid asks for
+        dozens at once and re-asks on every visit; a 304 costs one indexed
+        lookup and no bytes. Never audited per call.
+        """
+        thumbnail = briefs.thumbnail_for(self.get_object())
+        if thumbnail is None or not thumbnail.file:
+            return Response(
+                {"detail": "This document has no thumbnail."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        etag = f'"t{thumbnail.pk}-{int(thumbnail.updated_at.timestamp())}"'
+        last_modified = http_date(thumbnail.updated_at.timestamp())
+        headers = {
+            "ETag": etag,
+            "Last-Modified": last_modified,
+            "Cache-Control": "private, max-age=300",
+        }
+        if_none_match = request.headers.get("If-None-Match", "")
+        if if_none_match and etag in [tag.strip() for tag in if_none_match.split(",")]:
+            response = HttpResponseNotModified()
+            for name, value in headers.items():
+                response[name] = value
+            return response
+
+        try:
+            handle = thumbnail.file.open("rb")
+        except (FileNotFoundError, OSError):
+            return Response(
+                {"detail": "This document has no thumbnail."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        response = FileResponse(handle, content_type=thumbnail.mime_type)
+        for name, value in headers.items():
+            response[name] = value
+        return response
+
+    @action(detail=False, methods=["get"])
+    def suggestions(self, request):
+        """Questions to ask, drawn from the briefs of readable documents."""
+        return Response({"results": briefs.corpus_suggestions(request.user)})
+
+    @action(detail=False, methods=["get"])
+    def deadlines(self, request):
+        """Upcoming dates in readable documents: `?days=` (1-366, default 90)."""
+        days = briefs.parse_days(request.query_params.get("days"))
+        if days is None:
+            return Response(
+                {
+                    "days": [
+                        f"Must be a whole number from 1 to {briefs.DEADLINE_DAYS_MAX}."
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"results": briefs.upcoming_deadlines(request.user, days)})
 
     @action(detail=True, methods=["get"])
     def source(self, request, pk=None):

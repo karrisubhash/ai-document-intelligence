@@ -372,7 +372,9 @@ def _discard_previous_attempt(job: ProcessingJob) -> None:
     # Cascades to PageContent, DocumentTable and the chunks and
     # embeddings derived from them - everything that was keyed to this
     # extraction pass goes with it, which is why it has to be replaced
-    # in the same transaction.
+    # in the same transaction. That includes the pass's brief, entities and
+    # centroid (DocumentInsight, DocumentEntity, DocumentCentroid), though
+    # enrichment only runs once a job has completed and is no longer retried.
     DocumentContent.objects.filter(processing_job=job).delete()
 
 
@@ -414,6 +416,16 @@ def _mark_completed(job: ProcessingJob, document: Document) -> None:
         job_id=job.id,
         attempt=job.attempt,
     )
+
+    # The brief, the related-documents centroid and the thumbnail are
+    # computed AFTER the pass is published and the job is final, on the
+    # index queue: none of it may delay "Ready", and none of it can fail the
+    # document. Imported here because the task module imports services,
+    # which imports this module.
+    from documents.tasks_insights import enqueue_enrichment
+
+    version_id = job.document_version_id
+    transaction.on_commit(lambda: enqueue_enrichment(version_id))
 
 
 def _mark_retrying(job: ProcessingJob, document: Document, exc: Exception) -> None:

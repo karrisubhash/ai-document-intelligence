@@ -1,15 +1,18 @@
+from django.db.models import Exists, F, OuterRef, Subquery
 from rest_framework import serializers
 
 from documents import authorization
 from documents.api import discovery
 from documents.models import (
     ClassificationResult,
+    Collection,
     Document,
     DocumentChunk,
     DocumentChunkEmbedding,
     DocumentContent,
     DocumentFigure,
     DocumentTable,
+    DocumentThumbnail,
     DocumentVersion,
     ExtractedField,
     ExtractionResult,
@@ -18,6 +21,100 @@ from documents.models import (
     ProcessingJob,
 )
 from documents.uploads import validate_upload
+
+IN_FLIGHT = (
+    Document.Status.UPLOADED,
+    Document.Status.QUEUED,
+    Document.Status.PROCESSING,
+)
+ACTIVE_JOB = (ProcessingJob.Status.QUEUED, ProcessingJob.Status.PROCESSING)
+
+
+def _thumbnail_exists():
+    # Only for a version with a live pass: a quarantined version's pass is
+    # withdrawn, and its picture with it (the endpoint answers 404).
+    return Exists(
+        DocumentThumbnail.objects.filter(
+            document_version=OuterRef("current_version"),
+            document_version__current_content__isnull=False,
+        )
+    )
+
+
+def _active_stage():
+    return Subquery(
+        ProcessingJob.objects.filter(
+            document_version=OuterRef("current_version"), status__in=ACTIVE_JOB
+        )
+        .order_by("-created_at")
+        .values("current_stage")[:1]
+    )
+
+
+def with_listing_facts(queryset):
+    """Annotate what the listing shows per row, in the listing's one query.
+
+    Page count, whether a thumbnail exists and the stage an in-flight job
+    is at - each a join or a correlated subquery, never a query per row
+    (QueryEfficiencyTests holds the listing to that).
+    """
+    return queryset.annotate(
+        listing_page_count=F("current_version__current_content__page_count"),
+        listing_has_thumbnail=_thumbnail_exists(),
+        listing_stage=_active_stage(),
+    )
+
+
+def display_name(user) -> str:
+    if user is None:
+        return ""
+    return user.get_full_name().strip() or user.get_username()
+
+
+class DocumentFactsMixin(serializers.Serializer):
+    """Facts shared by the list and detail shapes, from annotations when the
+    listing provides them and with a query each on a single document."""
+
+    page_count = serializers.SerializerMethodField()
+    has_thumbnail = serializers.SerializerMethodField()
+    current_stage = serializers.SerializerMethodField()
+
+    def get_page_count(self, document):
+        if hasattr(document, "listing_page_count"):
+            return document.listing_page_count
+        if not document.current_version_id:
+            return None
+        return (
+            DocumentContent.objects.filter(
+                pk=document.current_version.current_content_id
+            )
+            .values_list("page_count", flat=True)
+            .first()
+        )
+
+    def get_has_thumbnail(self, document):
+        if hasattr(document, "listing_has_thumbnail"):
+            return document.listing_has_thumbnail
+        return (
+            Document.objects.filter(pk=document.pk).filter(_thumbnail_exists()).exists()
+        )
+
+    def get_current_stage(self, document):
+        # Only while in flight: a finished document is at no stage.
+        if document.status not in IN_FLIGHT:
+            return None
+        if hasattr(document, "listing_stage"):
+            return document.listing_stage or None
+        stage = (
+            ProcessingJob.objects.filter(
+                document_version_id=document.current_version_id,
+                status__in=ACTIVE_JOB,
+            )
+            .order_by("-created_at")
+            .values_list("current_stage", flat=True)
+            .first()
+        )
+        return stage or None
 
 
 class PageContentSerializer(serializers.ModelSerializer):
@@ -52,24 +149,36 @@ class DocumentContentSerializer(serializers.ModelSerializer):
 
 
 class DocumentVersionSerializer(serializers.ModelSerializer):
-    # Storage key, not a fetchable URL - the bytes are only served by the
-    # authenticated /api/documents/{id}/download/ endpoint.
-    file = serializers.FileField(use_url=False)
+    """A version as document detail and the Versions tab show it.
+
+    No `file`: that is the storage key - a relative filesystem path, or the
+    S3 object key - an internal detail no client used (the bytes are only
+    served by the authenticated /download/ endpoint) and §16 asks not to
+    expose. It was already withheld from the listing; detail, create,
+    archive and /versions/ now match. `checksum` stays: it is what a caller
+    verifies a download against.
+    """
+
+    # Who replaced the file, readably - the id alone told a reader nothing.
+    uploaded_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = DocumentVersion
         fields = [
             "id",
             "version_number",
-            "file",
             "file_name",
             "file_size",
             "mime_type",
             "checksum",
             "uploaded_by",
+            "uploaded_by_name",
             "created_at",
         ]
         read_only_fields = fields
+
+    def get_uploaded_by_name(self, version):
+        return display_name(version.uploaded_by) if version.uploaded_by_id else ""
 
 
 class ProcessingEventSerializer(serializers.ModelSerializer):
@@ -110,7 +219,7 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class DocumentSerializer(serializers.ModelSerializer):
+class DocumentSerializer(DocumentFactsMixin, serializers.ModelSerializer):
     current_version = DocumentVersionSerializer(read_only=True)
     owner_username = serializers.SerializerMethodField()
     is_archived = serializers.BooleanField(read_only=True)
@@ -118,6 +227,9 @@ class DocumentSerializer(serializers.ModelSerializer):
     # which buttons to show - and nothing more: every action is decided
     # again by DocumentAccessPolicy when it is attempted.
     can_manage = serializers.SerializerMethodField()
+    # Detail only: what the tabs hold, so empty ones can say so up front.
+    counts = serializers.SerializerMethodField()
+    collections = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
@@ -125,11 +237,18 @@ class DocumentSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "document_type",
+            "document_type_source",
+            "type_confidence",
             "department",
             "owner",
             "owner_username",
             "status",
+            "current_stage",
             "current_version",
+            "page_count",
+            "has_thumbnail",
+            "counts",
+            "collections",
             "is_archived",
             "archived_at",
             "can_manage",
@@ -142,6 +261,10 @@ class DocumentSerializer(serializers.ModelSerializer):
             # it's set from the uploader's profile at creation time, not
             # editable afterwards through this serializer.
             "department",
+            # Who decided the type is derived from how it was set: a PATCH of
+            # document_type marks it "user" (DocumentViewSet.perform_update).
+            "document_type_source",
+            "type_confidence",
             "owner",
             "status",
             "current_version",
@@ -159,17 +282,51 @@ class DocumentSerializer(serializers.ModelSerializer):
             return False
         return authorization.can_manage_document(request.user, document)
 
+    def get_counts(self, document):
+        counts = {"tables": 0, "figures": 0, "fields_found": 0}
+        version = document.current_version
+        content_id = version.current_content_id if version else None
+        if content_id is None:
+            return counts
+        counts["tables"] = DocumentTable.objects.filter(
+            document_content_id=content_id
+        ).count()
+        counts["figures"] = DocumentFigure.objects.filter(
+            document_content_id=content_id
+        ).count()
+        # Fields of the newest extraction under the CURRENT type - the one
+        # the Fields tab shows; an older pass under another type does not
+        # describe this document any more.
+        counts["fields_found"] = (
+            ExtractionResult.objects.filter(
+                document_content_id=content_id, document_type=document.document_type
+            )
+            .order_by("-created_at")
+            .values_list("found_count", flat=True)
+            .first()
+        ) or 0
+        return counts
+
+    def get_collections(self, document):
+        request = self.context.get("request")
+        if request is None:
+            return []
+        # Only collections the caller can see: a collection narrows, it
+        # never discloses.
+        visible = authorization.visible_collections(
+            request.user, Collection.objects.filter(documents=document)
+        )
+        return [
+            {"id": pk, "name": name} for pk, name in visible.values_list("pk", "name")
+        ]
+
 
 class DocumentVersionSummarySerializer(serializers.ModelSerializer):
     """Just enough of a version to browse and size it in a results list.
 
-    Deliberately narrower than DocumentVersionSerializer: no `file` (the
-    storage key - relative filesystem path locally, or the S3 object key -
-    which a discovery listing has no use for and §16 asks not to expose),
-    and no `checksum` (integrity metadata for verifying a download, not for
-    browsing). Both remain on the version's own endpoint
-    (`/versions/`) and on document detail, where a caller with a specific
-    reason to check them still can.
+    Deliberately narrower than DocumentVersionSerializer: no `checksum`
+    (integrity metadata for verifying a download, not for browsing) and no
+    uploader name. The storage key (`file`) is exposed nowhere.
     """
 
     class Meta:
@@ -186,14 +343,15 @@ class DocumentVersionSummarySerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class DocumentListSerializer(serializers.ModelSerializer):
+class DocumentListSerializer(DocumentFactsMixin, serializers.ModelSerializer):
     """The `list` action's shape - see DocumentVersionSummarySerializer.
 
     Every top-level field here is identical to DocumentSerializer, so a
     consumer reading `results[].id/title/document_type/...` sees no change;
-    only the nested `current_version` is slimmer. That is the one
-    intentional, documented difference from the detail endpoint's shape
-    (README, "Document discovery").
+    only the nested `current_version` is slimmer, and the detail-only
+    `counts` and `collections` are absent (each would be a query per row).
+    That is the intentional, documented difference from the detail
+    endpoint's shape (README, "Document discovery").
     """
 
     current_version = DocumentVersionSummarySerializer(read_only=True)
@@ -207,11 +365,16 @@ class DocumentListSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "document_type",
+            "document_type_source",
+            "type_confidence",
             "department",
             "owner",
             "owner_username",
             "status",
+            "current_stage",
             "current_version",
+            "page_count",
+            "has_thumbnail",
             "is_archived",
             "archived_at",
             "can_manage",
@@ -493,13 +656,32 @@ class ClassificationResultSerializer(serializers.ModelSerializer):
             "processing_job",
             "model_name",
             "model_version",
+            # "document_type": the product's own type, from the type
+            # detector. "layout_class": a page-layout label (RVL-CDIP) - to
+            # be shown as exactly that, never as the document's type.
+            "taxonomy",
             "predicted_label",
             "confidence",
+            # The classifier declined to name a label (predicted_label is
+            # then "unknown"; metadata.top_label holds its best guess).
+            "abstained",
             "input_reference",
             "metadata",
             "created_at",
         ]
         read_only_fields = fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The model artifact's location on the server is an operator's
+        # detail, not something a reader needs or should see.
+        if isinstance(data.get("metadata"), dict):
+            data["metadata"] = {
+                key: value
+                for key, value in data["metadata"].items()
+                if key != "artifact"
+            }
+        return data
 
 
 class ExtractedFieldSerializer(serializers.ModelSerializer):

@@ -18,6 +18,11 @@ class ProcessingJob(models.Model):
         LAYOUT_ANALYSIS = "LAYOUT_ANALYSIS", "Layout analysis"
         EXTRACTION = "EXTRACTION", "Extraction"
         INDEXING = "INDEXING", "Indexing"
+        # Post-publish enrichment (brief, entities, related-documents vector,
+        # thumbnail), run on the index queue after the job has COMPLETED. It
+        # appears in a job's event timeline but never as its current stage,
+        # and never fails the document - see documents.tasks_insights.
+        INSIGHTS = "INSIGHTS", "Insights"
 
     document_version = models.ForeignKey(
         "documents.DocumentVersion",

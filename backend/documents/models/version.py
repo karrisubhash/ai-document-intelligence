@@ -66,6 +66,9 @@ class DocumentVersion(models.Model):
             # Uploads per day and per week (operations.analytics and the
             # dashboard's activity block): every file uploaded, by time.
             models.Index(fields=["created_at"], name="docversion_created_idx"),
+            # The exact-duplicate hint on upload looks a new file's SHA-256
+            # up among every stored version.
+            models.Index(fields=["checksum"], name="version_checksum_idx"),
         ]
 
     def __str__(self):

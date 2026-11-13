@@ -238,8 +238,10 @@ class RetryDoesNotDuplicateContentTests(TestCase):
         self.assertEqual(
             ExtractionResult.objects.filter(processing_job=self.job).count(), 1
         )
-        self.assertFalse(
-            ClassificationResult.objects.filter(processing_job=self.job).exists()
+        # The type detector runs by default and records one verdict per
+        # attempt; the retry must replace it, not add a second.
+        self.assertEqual(
+            ClassificationResult.objects.filter(processing_job=self.job).count(), 1
         )
 
     def test_a_failed_retry_does_not_destroy_the_previous_good_content(self):

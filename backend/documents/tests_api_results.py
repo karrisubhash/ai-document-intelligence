@@ -48,7 +48,14 @@ class ResultEndpointTests(AuthenticatedAPITestCase):
     def setUp(self):
         super().setUp()
 
-        with self.captureOnCommitCallbacks(execute=True):
+        # Type detection and field extraction both run by default and would
+        # type this "Academic Regulations" fixture and extract its fields;
+        # these tests are about what the endpoints return for rows they
+        # create themselves, so the pipeline records none of its own.
+        with (
+            override_settings(DOCUMENT_TYPE_DETECTOR="", DOCUMENT_FIELD_EXTRACTOR=""),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
             response = self.client.post(
                 reverse("document-list"),
                 {"title": "Academic Regulations", "file": make_txt_file()},

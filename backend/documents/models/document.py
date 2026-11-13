@@ -24,12 +24,36 @@ class Document(models.Model):
         FORM = "FORM", "Form"
         OTHER = "OTHER", "Other"
 
+    class TypeSource(models.TextChoices):
+        # The upload's default, GENERAL - nobody decided anything.
+        DEFAULT = "default", "Default"
+        # Set by the type detector from the document's own content, with
+        # the detector's confidence in `type_confidence`.
+        AUTO = "auto", "Detected"
+        # Chosen by a person, at upload or later. Never overwritten by the
+        # detector, whatever it concludes.
+        USER = "user", "Chosen"
+
     title = models.CharField(max_length=255)
     document_type = models.CharField(
         max_length=30,
         choices=DocumentType.choices,
         default=DocumentType.GENERAL,
     )
+    # Who decided `document_type`. The type selects the field-extraction
+    # schema, so "detected" and "chosen" must stay distinguishable: the
+    # detector may revise its own decision on a new version, never a
+    # person's. db_default as well as default: during an upgrade the
+    # previous release keeps creating documents after `migrate` commits,
+    # and its INSERTs do not name this column (see AuditLog.document_ref).
+    document_type_source = models.CharField(
+        max_length=10,
+        choices=TypeSource.choices,
+        default=TypeSource.DEFAULT,
+        db_default=TypeSource.DEFAULT,
+    )
+    # The detector's confidence when the source is "auto"; NULL otherwise.
+    type_confidence = models.FloatField(null=True, blank=True)
     department = models.CharField(max_length=255, blank=True, default="")
 
     # Ownership is left nullable until the authentication/authorization

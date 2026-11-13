@@ -5,7 +5,8 @@ import { api, type DocumentQuery } from "../api/client";
 import { useDebouncedValue, usePolling, useResource } from "../api/hooks";
 import { isProcessingNews, useNotificationArrivals } from "../api/notifications";
 import { DOCUMENT_STATUSES, DOCUMENT_TYPES } from "../api/types";
-import { FileTypeIcon, Icon } from "../components/icons";
+import { DocumentThumb, StageNote, TypeCell, fileLine } from "../components/document/LibraryCells";
+import { Icon } from "../components/icons";
 import UploadDialog from "../components/UploadDialog";
 import {
   Avatar,
@@ -23,7 +24,7 @@ import {
   useDocumentTitle,
   useToast,
 } from "../components/ui";
-import { formatBytes, formatRelative, pluralize } from "../lib/format";
+import { formatRelative, pluralize } from "../lib/format";
 import { IN_FLIGHT, STATUS_LABEL, TYPE_LABEL } from "../lib/labels";
 
 const SORTS: [string, string][] = [
@@ -404,20 +405,18 @@ export default function DocumentsPage() {
                     ) : null}
                     <td className="col-title">
                       <div className="cell-title">
-                        <FileTypeIcon fileName={row.current_version?.file_name} />
+                        <DocumentThumb row={row} />
                         <div className="cell-title-text">
                           <Link to={`/documents/${row.id}`} className="table-title">
                             {row.title}
                           </Link>
-                          <span className="table-sub">
-                            {row.current_version
-                              ? `${row.current_version.file_name} · v${row.current_version.version_number} · ${formatBytes(row.current_version.file_size)}`
-                              : "No file"}
-                          </span>
+                          <span className="table-sub">{fileLine(row)}</span>
                         </div>
                       </div>
                     </td>
-                    <td className="col-type">{TYPE_LABEL[row.document_type]}</td>
+                    <td className="col-type">
+                      <TypeCell row={row} />
+                    </td>
                     <td className="col-secondary">
                       {row.department || <span className="muted">—</span>}
                     </td>
@@ -436,6 +435,7 @@ export default function DocumentsPage() {
                         <StatusBadge status={row.status} />
                         {row.is_archived ? <Badge tone="muted">Archived</Badge> : null}
                       </div>
+                      <StageNote row={row} />
                     </td>
                     <td className="nowrap muted col-secondary col-updated" title={row.updated_at}>
                       {formatRelative(row.updated_at)}

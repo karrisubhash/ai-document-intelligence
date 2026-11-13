@@ -708,6 +708,14 @@ class ResponseShapeTests(DiscoveryTestCase):
                 "can_manage",
                 "created_at",
                 "updated_at",
+                # Added with document intelligence: who decided the type and
+                # how sure the detector was, the page count, whether a
+                # thumbnail exists, and the stage of an in-flight run.
+                "document_type_source",
+                "type_confidence",
+                "page_count",
+                "has_thumbnail",
+                "current_stage",
             },
         )
 
@@ -720,12 +728,18 @@ class ResponseShapeTests(DiscoveryTestCase):
         self.assertNotIn("checksum", version)
         self.assertEqual(version["file_name"], "shape.txt")
 
-    def test_the_detail_endpoint_is_unchanged(self):
-        """Backward compatibility: only the LIST action's shape changed."""
+    def test_the_detail_endpoint_keeps_the_checksum_but_not_the_storage_key(self):
+        """The storage key was withheld from the listing first; detail and
+        /versions/ now withhold it too (no client read it). The checksum,
+        which a download is verified against, stays on detail."""
         response = self.client.get(reverse("document-detail", args=[self.document.id]))
         version = response.data["current_version"]
-        self.assertIn("file", version)
+        self.assertNotIn("file", version)
         self.assertIn("checksum", version)
+        versions = self.client.get(
+            reverse("document-versions", args=[self.document.id])
+        )
+        self.assertNotIn("file", versions.data[0])
 
 
 class QueryEfficiencyTests(DiscoveryTestCase):
