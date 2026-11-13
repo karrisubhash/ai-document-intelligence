@@ -3,12 +3,8 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import { useResource, type Resource } from "../api/hooks";
-<<<<<<< HEAD
-import type { Citation, ConversationSummary, Paginated } from "../api/types";
-import { useAuth } from "../auth/AuthContext";
-=======
 import type { Citation, ConversationSummary, DocumentType, Paginated } from "../api/types";
->>>>>>> v2-search
+import { useAuth } from "../auth/AuthContext";
 import {
   Answer,
   SourceDialog,
