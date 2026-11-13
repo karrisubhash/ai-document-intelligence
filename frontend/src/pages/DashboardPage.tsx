@@ -361,7 +361,10 @@ export default function DashboardPage() {
           }
         />
         <KpiTile
-          label="Your questions this week"
+          // Not "Your questions…": Ask's composer is the one control labelled
+          // "Your question" (e2e locates it by label, which is a substring
+          // match, while this page may still be on screen).
+          label="Questions you asked this week"
           icon="message"
           loading={loading}
           value={data ? mine.lastWeek : null}
@@ -434,7 +437,7 @@ export default function DashboardPage() {
                   stacked
                   integer
                   height={180}
-                  title="Your questions per day, last 30 days"
+                  title="Questions you asked per day, last 30 days"
                   labels={mine.days.map((day) => day.date)}
                   series={[
                     { key: "answered", label: "Answered from documents", values: mine.days.map((day) => day.answered) },

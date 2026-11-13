@@ -38,13 +38,20 @@ test("no screen triggers a Content-Security-Policy violation", async ({ page }) 
   // preview, inline SVG and icons) is already loaded - since signed in,
   // /login and /signup only redirect home.
   await page.waitForLoadState("networkidle");
-  for (const path of ["/login", "/signup", "/favicon.svg", "/manifest.webmanifest"]) {
+  for (const path of ["/login", "/signup"]) {
     const screen = await page.goto(path);
     expect(screen?.status(), `${path} is not served`).toBe(200);
-    if (!path.includes(".")) {
-      expect(screen?.headers()["content-security-policy"], `${path} did not return the app shell`).toBe(policy);
-      await page.waitForLoadState("networkidle");
-    }
+    expect(screen?.headers()["content-security-policy"], `${path} did not return the app shell`).toBe(policy);
+    await page.waitForLoadState("networkidle");
+  }
+  // Brand files are fetched, not opened as pages: the browser loads them
+  // through <link rel=icon/manifest>, never as a document. Navigating to the
+  // manifest made Chromium render it in its own JSON viewer, whose inline
+  // styles the policy (correctly) refused - a violation of the probe, not
+  // of the app.
+  for (const path of ["/favicon.svg", "/manifest.webmanifest"]) {
+    const asset = await page.request.get(path);
+    expect(asset.status(), `${path} is not served`).toBe(200);
   }
   await page.goto("/");
 
