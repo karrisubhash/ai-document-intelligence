@@ -22,7 +22,10 @@ cited sources in `done` are the authoritative ones.
 
 STOPPING. The sink may raise `Cancelled` - the stream view does when the
 reader has gone away - and every emit, reset, status and sources call is a
-point where a turn notices it. It is a BaseException on purpose: the
+point where a turn notices it. So is `checkpoint()`, which sends nothing:
+the server learns of a Stop only when writing to the closed connection
+fails, which can be after the turn's last event, so the chat view asks once
+more before it saves anything. It is a BaseException on purpose: the
 gateway's "try the next model" and the answerer's "fall back to quoting"
 both catch Exception, and a reader who pressed Stop wants neither.
 """
@@ -36,6 +39,9 @@ RETRIEVING = "retrieving"
 RANKING = "ranking"
 WRITING = "writing"
 VERIFYING = "verifying"
+
+# The event checkpoint() passes to the sink; a sink sends nothing for it.
+CHECKPOINT = "checkpoint"
 
 
 class Cancelled(BaseException):  # noqa: N818 - a signal, like GeneratorExit
@@ -74,6 +80,13 @@ def status(stage: str) -> None:
     sink = _sink.get()
     if sink is not None:
         sink("status", {"stage": stage})
+
+
+def checkpoint() -> None:
+    """Raises `Cancelled` if the reader has gone; sends nothing either way."""
+    sink = _sink.get()
+    if sink is not None:
+        sink(CHECKPOINT, None)
 
 
 def sources(passages) -> None:
