@@ -187,12 +187,26 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-de
 |---|---|---|
 | `DEMO_ENABLED` | `False` | Offer the one-click demo |
 | `DEMO_DEPARTMENT` | `Demo` | Where guests live and `seed_demo` puts the samples |
-| `DEMO_GUEST_TTL_HOURS` | `24` | Guests older than this are deleted; sessions end no later |
-| `DEMO_MAX_GUESTS` | `200` | Guest accounts existing at once; past it, "the demo is full" |
+| `DEMO_GUEST_TTL_HOURS` | `3` | Guests older than this are deleted; sessions end no later |
+| `DEMO_GUEST_IDLE_MINUTES` | `30` | At the ceiling, a guest idle this long makes way for a new visitor (at least 10) |
+| `DEMO_MAX_GUESTS` | `200` | Guest accounts existing at once; past it, with none idle, "the demo is full" |
 | `THROTTLE_DEMO` / `THROTTLE_DEMO_GLOBAL` | `10/hour` / `60/hour` | Demo starts per address / from all addresses |
 | `THROTTLE_GUEST_CHAT` / `_BURST` / `_GLOBAL` | `20/hour` / `5/minute` / `120/hour` | Questions per guest / per guest per minute / all guests |
 | `THROTTLE_GUEST_SEARCH` / `_GLOBAL` | `60/hour` / `600/hour` | Searches per guest / all guests |
 | `THROTTLE_SAMPLES` | `10/hour` | Sample-library loads per administrator |
+
+**Keeping the ceiling out of reach.** Starting a demo takes nothing but a CSRF cookie, and
+the per-address limit stops nobody with a few addresses, so `DEMO_MAX_GUESTS` must not be
+reachable by guests nobody uses - or a script starting demos and walking away could keep
+every visitor out. Two things see to it. At the ceiling, a new visitor takes the place of
+the guest that has gone longest without a request, once that is `DEMO_GUEST_IDLE_MINUTES`
+(counted from the demo's start for a guest that never made one; audited as a
+`GUEST_PURGE` with `reason: "idle"`); below it nobody is displaced. And at most
+`THROTTLE_DEMO_GLOBAL` × `DEMO_GUEST_TTL_HOURS` demos can start before the first expires -
+60/hour × 3 h = 180 with the defaults - which is within the 200 guests allowed, so not even
+guests kept busy can fill it. Raise one of these and keep that product within
+`DEMO_MAX_GUESTS`: `manage.py check` (and `migrate`) warns when it is not (`accounts.W001`),
+and when even guests nobody uses could fill it within the idle time (`accounts.W002`).
 
 On a server whose answerer is a hosted model with a daily quota, guests' questions draw on
 the same quota as members'; `THROTTLE_GUEST_CHAT_GLOBAL` is what bounds their share. Lower

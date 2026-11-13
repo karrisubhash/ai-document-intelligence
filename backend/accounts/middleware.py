@@ -21,6 +21,10 @@ endpoint set, which is what request.user is built from here.
 The allowlist is matched on URL NAMES, so it holds for /api/v1/ and its
 /api/ alias alike and cannot be dodged by spelling a path differently: the
 decision is about which view would run.
+
+A guest's reads are looked at as well, which is why reads are not simply
+waved through: each request a guest makes is noted (demo.note_activity), so
+that at DEMO_MAX_GUESTS the guests nobody is using make way for new visitors.
 """
 
 import math
@@ -116,17 +120,25 @@ class GuestReadOnlyMiddleware:
         return self.get_response(request)
 
     def process_view(self, request, view_func, view_args, view_kwargs):
-        # Reads first and for free: a member's GET never so much as loads
-        # their profile here.
-        if request.method in READS:
-            return None
         user = getattr(request, "user", None)
+        reading = request.method in READS
+        # Reads first, and free for members: a member's GET never so much as
+        # loads their profile here. Only an account named like a guest -
+        # every guest is, and sign-up and account creation refuse the name
+        # to anyone else - is looked at further, and only its profile's flag
+        # says it is one.
+        if reading and not demo.named_like_guest(user):
+            return None
         if not demo.is_guest(user):
             return None
 
         name = request.resolver_match.url_name if request.resolver_match else None
         if name in PUBLIC_DOORS:
             return None
+        demo.note_activity(user)
+        if reading:
+            return None
+
         budget = GUEST_ACTIONS.get(name)
         if budget is None and NOTIFICATION_READ_STATE.match(request.path_info):
             budget = _no_budget

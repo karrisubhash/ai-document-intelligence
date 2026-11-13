@@ -1,14 +1,18 @@
 """The one-click demo: ephemeral guests that can read and ask, and nothing else."""
 
+import math
+import os
 from datetime import timedelta
 from io import StringIO
 from unittest import mock
 
+from django.conf import settings
+from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -19,6 +23,7 @@ from rest_framework.throttling import SimpleRateThrottle
 from accounts import demo
 from accounts.middleware import GUEST_ACTIONS, NOTIFICATION_READ_STATE, PUBLIC_DOORS
 from accounts.models import Department, UserProfile
+from accounts.throttling import DemoGlobalRateThrottle
 from documents.models import AuditLog, Conversation, Document, Message
 
 User = get_user_model()
@@ -26,6 +31,9 @@ Role = UserProfile.Role
 
 STRONG = "a-sufficiently-long-passphrase-9"
 DEMO_ON = {"DEMO_ENABLED": True, "DEMO_DEPARTMENT": "Demo"}
+# Spelled out where a test is not about the defaults: guests that live a day
+# and make way after half an hour idle.
+LONG_LIVED = {"DEMO_GUEST_TTL_HOURS": 24, "DEMO_GUEST_IDLE_MINUTES": 30}
 
 
 def make_user(username, role=Role.FACULTY, department="Physics"):
@@ -161,6 +169,9 @@ class DemoEndpointTests(DemoCase):
         self.assertEqual(
             full.json()["detail"].split(" ")[:4], ["The", "demo", "is", "full"]
         )
+        # In the body, where the landing page looks for it to tell "full"
+        # from "too many starts from your network" - both are 429s.
+        self.assertEqual(full.json()["code"], "demo_full")
         self.assertEqual(UserProfile.objects.filter(is_guest=True).count(), 1)
 
     def test_me_reports_who_is_a_guest(self):
@@ -497,6 +508,7 @@ class PurgeTests(DemoCase):
         purge = AuditLog.objects.get(action=AuditLog.Action.GUEST_PURGE)
         self.assertEqual(purge.metadata["deleted"], 1)
         self.assertEqual(purge.metadata["trigger"], "command")
+        self.assertEqual(purge.metadata["reason"], "expired")
 
     def test_dry_run_deletes_nothing(self):
         old, _ = self.guest_client()
@@ -529,6 +541,152 @@ class PurgeTests(DemoCase):
         )
 
 
+@override_settings(**DEMO_ON)
+class CapacityTests(DemoCase):
+    """DEMO_MAX_GUESTS bounds what the demo adds to the database. It must
+    never be a door that guests nobody uses can hold shut: anyone may start a
+    demo with nothing but a CSRF cookie, so a script that starts them and
+    walks away could otherwise keep every real visitor out."""
+
+    def backdate(self, guest, *, joined=None, seen=None):
+        now = timezone.now()
+        if joined is not None:
+            User.objects.filter(pk=guest.pk).update(date_joined=now - joined)
+        if seen is not None:
+            UserProfile.objects.filter(user=guest).update(last_seen_at=now - seen)
+
+    def test_the_defaults_keep_the_ceiling_out_of_reach(self):
+        """THROTTLE_DEMO_GLOBAL admits at most N starts in any hour, so at
+        most N per hour of DEMO_GUEST_TTL_HOURS guests are ever younger than
+        the TTL. It shipped as 60/hour x 24 h = 1440 against a ceiling of
+        200: a few hours of starts nobody used held the demo full for the
+        rest of the day."""
+        overridden = {
+            "DEMO_GUEST_TTL_HOURS",
+            "DEMO_MAX_GUESTS",
+            "THROTTLE_DEMO_GLOBAL",
+        } & set(os.environ)
+        if overridden:
+            self.skipTest(f"Not the defaults: {sorted(overridden)} set in .env")
+        throttle = DemoGlobalRateThrottle()
+        windows = math.ceil(settings.DEMO_GUEST_TTL_HOURS * 3600 / throttle.duration)
+        self.assertLessEqual(throttle.num_requests * windows, settings.DEMO_MAX_GUESTS)
+
+    def test_the_system_check_warns_when_the_ceiling_is_within_reach(self):
+        from accounts.checks import demo_capacity
+
+        def warnings(enabled=True, **values):
+            with (
+                override_settings(DEMO_ENABLED=enabled, **values),
+                throttle_rates(demo_global="60/hour"),
+            ):
+                return [message.id for message in demo_capacity(None)]
+
+        shipped = {
+            "DEMO_GUEST_TTL_HOURS": 3,
+            "DEMO_GUEST_IDLE_MINUTES": 30,
+            "DEMO_MAX_GUESTS": 200,
+        }
+        self.assertEqual(warnings(**shipped), [])
+        # Guests kept busy could fill it: 1440 starts within the TTL.
+        self.assertEqual(
+            warnings(**{**shipped, "DEMO_GUEST_TTL_HOURS": 24}), ["accounts.W001"]
+        )
+        # And guests nobody uses, too: 60 starts within the idle time.
+        self.assertEqual(
+            warnings(**{**shipped, "DEMO_GUEST_TTL_HOURS": 24, "DEMO_MAX_GUESTS": 60}),
+            ["accounts.W001", "accounts.W002"],
+        )
+        # Nothing to say about a demo that is off.
+        self.assertEqual(
+            warnings(enabled=False, **{**shipped, "DEMO_GUEST_TTL_HOURS": 24}), []
+        )
+
+    @override_settings(**LONG_LIVED, DEMO_MAX_GUESTS=2)
+    def test_guests_nobody_uses_cannot_hold_the_demo_full(self):
+        abandoned = [self.guest_client()[0] for _ in range(2)]
+        self.backdate(abandoned[0], joined=timedelta(minutes=40))
+        self.backdate(abandoned[1], joined=timedelta(minutes=50))
+
+        response = self.start()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        # One made way - the one unused longest - and no more: an idle
+        # visitor may still come back.
+        self.assertFalse(User.objects.filter(pk=abandoned[1].pk).exists())
+        self.assertTrue(User.objects.filter(pk=abandoned[0].pk).exists())
+        self.assertEqual(UserProfile.objects.filter(is_guest=True).count(), 2)
+        purge = AuditLog.objects.get(action=AuditLog.Action.GUEST_PURGE)
+        self.assertEqual(purge.metadata["deleted"], 1)
+        self.assertEqual(purge.metadata["reason"], "idle")
+        self.assertEqual(purge.metadata["trigger"], "demo")
+        self.assertEqual(purge.metadata["idle_minutes"], 30)
+
+    @override_settings(**LONG_LIVED, DEMO_MAX_GUESTS=2)
+    def test_idle_counts_from_a_guest_s_last_request(self):
+        early_reader = self.guest_client()[0]
+        late_quitter = self.guest_client()[0]
+        self.backdate(
+            early_reader, joined=timedelta(hours=2), seen=timedelta(minutes=40)
+        )
+        self.backdate(late_quitter, joined=timedelta(minutes=50))
+
+        self.assertEqual(self.start().status_code, status.HTTP_201_CREATED)
+
+        self.assertTrue(User.objects.filter(pk=early_reader.pk).exists())
+        self.assertFalse(User.objects.filter(pk=late_quitter.pk).exists())
+
+    @override_settings(**LONG_LIVED, DEMO_MAX_GUESTS=1)
+    def test_a_guest_in_use_keeps_its_place(self):
+        guest, client = self.guest_client()
+        self.backdate(guest, joined=timedelta(hours=2))
+        # A read is use: the guard notes it.
+        self.assertEqual(client.get("/api/v1/documents/").status_code, 200)
+
+        full = self.start()
+
+        self.assertEqual(full.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(full.json()["code"], "demo_full")
+        self.assertTrue(User.objects.filter(pk=guest.pk).exists())
+        self.assertFalse(
+            AuditLog.objects.filter(action=AuditLog.Action.GUEST_PURGE).exists()
+        )
+
+    @override_settings(**LONG_LIVED, DEMO_MAX_GUESTS=1)
+    def test_a_guest_just_started_is_not_taken_for_idle(self):
+        guest, _ = self.guest_client()
+        self.assertEqual(self.start().status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(User.objects.filter(pk=guest.pk).exists())
+
+    def test_a_guest_s_requests_are_noted_a_few_minutes_apart(self):
+        guest, client = self.guest_client()
+
+        def seen():
+            return UserProfile.objects.get(user=guest).last_seen_at
+
+        self.assertIsNone(seen())
+        client.get("/api/v1/documents/")
+        first = seen()
+        self.assertIsNotNone(first)
+        client.get("/api/v1/documents/")
+        self.assertEqual(seen(), first)
+
+        UserProfile.objects.filter(user=guest).update(
+            last_seen_at=first - demo.SEEN_RESOLUTION
+        )
+        client.post("/api/v1/search/", {"query": "attendance"}, format="json")
+        self.assertGreaterEqual(seen(), first)
+
+    def test_a_member_s_reads_never_load_their_profile_in_the_guard(self):
+        member = make_user("asha", Role.STUDENT, "Demo")
+        client = APIClient()
+        client.force_login(member)
+        with mock.patch.object(demo, "is_guest", wraps=demo.is_guest) as looked:
+            self.assertEqual(client.get("/api/v1/documents/").status_code, 200)
+        looked.assert_not_called()
+        self.assertIsNone(UserProfile.objects.get(user=member).last_seen_at)
+
+
 class GuestAdministrationTests(DemoCase):
     def setUp(self):
         super().setUp()
@@ -551,6 +709,20 @@ class GuestAdministrationTests(DemoCase):
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertFalse(User.objects.get(pk=self.guest.pk).has_usable_password())
+
+    def test_a_guest_keeps_its_name_in_the_django_admin(self):
+        """The guard picks out a guest's reads by the name before it loads a
+        profile (demo.named_like_guest): a guest renamed there would read
+        past it."""
+        user_admin = django_admin.site.get_model_admin(User)
+        request = RequestFactory().get("/django-admin/")
+        request.user = User.objects.create_superuser("boss", "b@example.edu", STRONG)
+
+        self.assertIn("username", user_admin.get_readonly_fields(request, self.guest))
+        self.assertNotIn(
+            "username", user_admin.get_readonly_fields(request, self.curator)
+        )
+        self.assertNotIn("username", user_admin.get_readonly_fields(request, None))
 
     def test_guests_are_not_counted_as_department_members(self):
         rows = self.client.get("/api/v1/admin/departments/").json()

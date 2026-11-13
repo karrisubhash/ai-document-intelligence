@@ -315,10 +315,25 @@ DEMO_DEPARTMENT = os.getenv("DEMO_DEPARTMENT", "Demo").strip() or "Demo"
 # Guests older than this are deleted, with their conversations, by
 # `manage.py purge_demo_guests` (schedule it) and, a few at a time, whenever
 # a new guest arrives. A guest's session ends no later than this either.
-DEMO_GUEST_TTL_HOURS = max(1, int(os.getenv("DEMO_GUEST_TTL_HOURS", "24")))
+#
+# Short on purpose: it is also what bounds how many guests can exist at
+# once. At most THROTTLE_DEMO_GLOBAL x this many demos start before the
+# first of them expires - 60/hour x 3 h = 180 - and that must stay within
+# DEMO_MAX_GUESTS, or visitors who keep their guests busy could fill the
+# demo. It was 24 hours (1440 starts against 200), which let a few hours of
+# scripted starts lock everyone out for the rest of the day. `manage.py
+# check` warns about a combination that can fill it (accounts.checks).
+DEMO_GUEST_TTL_HOURS = max(1, int(os.getenv("DEMO_GUEST_TTL_HOURS", "3")))
+# At DEMO_MAX_GUESTS, a new visitor takes the place of the guest that has
+# gone longest without a request, once that is this long - counted from the
+# demo's start for one that never made any. So guests started and abandoned
+# can never hold the demo full; below the ceiling nobody is displaced. At
+# least 10: a guest's requests are noted only every 5 minutes.
+DEMO_GUEST_IDLE_MINUTES = max(10, int(os.getenv("DEMO_GUEST_IDLE_MINUTES", "30")))
 # A ceiling on guest accounts existing at once, across every visitor - the
 # bound on what the demo can add to the database between sweeps. Reaching it
-# makes the demo say it is full until expired guests are swept.
+# - with no guest idle long enough to make way - makes the demo say it is
+# full.
 DEMO_MAX_GUESTS = int(os.getenv("DEMO_MAX_GUESTS", "200"))
 
 # True only under `manage.py test`. Named rather than repeated so every
