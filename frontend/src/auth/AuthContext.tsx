@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { ApiError, api, setUnauthorizedHandler } from "../api/client";
+import { demoApi } from "../api/demo";
 import type { Capabilities, Me } from "../api/types";
 
 /**
@@ -26,6 +27,8 @@ interface AuthState {
   /** Set when the session ended underneath the user rather than by sign-out. */
   expired: boolean;
   login: (username: string, password: string) => Promise<void>;
+  /** Start the one-click demo: a fresh read-only guest, signed in. */
+  startDemo: () => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   can: (capability: keyof Capabilities) => boolean;
@@ -85,6 +88,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState("signed-in");
   }, []);
 
+  // The server answers a demo start exactly as it answers a sign-in.
+  const startDemo = useCallback(async () => {
+    const profile = await demoApi.start();
+    setExpired(false);
+    setMe(profile);
+    setState("signed-in");
+  }, []);
+
   // Signed out only once the server says so. The session cookie is
   // httpOnly - the page cannot remove it - so a sign-out request that
   // failed (a network drop, a 5xx) used to LOOK signed out on a shared
@@ -107,8 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AuthState>(
-    () => ({ me, state, expired, login, logout, refresh, can }),
-    [me, state, expired, login, logout, refresh, can],
+    () => ({ me, state, expired, login, startDemo, logout, refresh, can }),
+    [me, state, expired, login, startDemo, logout, refresh, can],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

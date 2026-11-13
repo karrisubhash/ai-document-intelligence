@@ -2,3 +2,7 @@
 # line ending breaks the shebang: a web image built from a Windows checkout
 # (core.autocrlf=true) exited 127, "40-reload-certificates.sh: not found".
 *.sh text eol=lf
+
+# Sample documents are ingested byte for byte and recognised by checksum
+# (documents.samples): a checkout must never rewrite their line endings.
+backend/documents/samples/corpus/** -text

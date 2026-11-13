@@ -19,6 +19,7 @@ import { prefetchRoute } from "../lib/lazy";
 import { setTheme, useTheme } from "../lib/theme";
 import CommandPalette from "./CommandPalette";
 import { RouteErrorBoundary } from "./ErrorBoundary";
+import GuestBanner from "./GuestBanner";
 import { BrandMark, Icon } from "./icons";
 import ShortcutsDialog, { IS_MAC } from "./ShortcutsDialog";
 import { PRIMARY, adminItems, sectionFor, type NavItem } from "./navigation";
@@ -417,6 +418,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           </button>
           <NotificationBell />
         </header>
+        <GuestBanner />
         <main id="main" className="main" tabIndex={-1}>
           <TrailContext.Provider value={setTrail}>
             {/* A page that throws is replaced by an explanation; the shell

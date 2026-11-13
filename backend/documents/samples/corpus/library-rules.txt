@@ -1,0 +1,14 @@
+LIBRARY RULES
+Institute of Technology - Central Library
+
+Clause 9.1 Borrowing
+An undergraduate student may borrow up to four books at one time. A
+postgraduate student may borrow up to six.
+
+Clause 9.4 Overdue
+The late return fine is 5 rupees per day per book. Borrowing privileges are
+suspended once the accumulated fine exceeds 500 rupees.
+
+Clause 9.7 Reference section
+Reference volumes and bound journals may not be removed from the library
+under any circumstance.

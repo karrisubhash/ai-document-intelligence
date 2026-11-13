@@ -8,6 +8,9 @@ import Layout from "./components/Layout";
 import { Button, EmptyState, Spinner } from "./components/ui";
 // React.lazy, plus one guarded reload when a chunk is gone after a deploy.
 import { lazy } from "./lib/lazy";
+// Both in the main bundle: they are the first thing a visitor sees, and a
+// separate chunk would be one more round trip after the session check.
+import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
 
 // Split by area: someone who only searches never downloads the admin
@@ -102,7 +105,16 @@ export default function App() {
     );
   }
 
-  if (state === "signed-out") return <LoginPage />;
+  if (state === "signed-out") {
+    // The landing page at "/"; everywhere else the focused sign-in, so an
+    // address bookmarked or shared while signed in opens after sign-in.
+    return (
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="*" element={<LoginPage />} />
+      </Routes>
+    );
+  }
 
   if (state === "unreachable") {
     return (

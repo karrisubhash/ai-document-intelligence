@@ -6,6 +6,7 @@ import { useDebouncedValue, usePolling, useResource } from "../api/hooks";
 import { isProcessingNews, useNotificationArrivals } from "../api/notifications";
 import { DOCUMENT_STATUSES, DOCUMENT_TYPES } from "../api/types";
 import { DocumentThumb, StageNote, TypeCell, fileLine } from "../components/document/LibraryCells";
+import { useAuth } from "../auth/AuthContext";
 import { Icon } from "../components/icons";
 import UploadDialog from "../components/UploadDialog";
 import {
@@ -41,6 +42,8 @@ export default function DocumentsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
+  // A demo guest reads only; the server refuses uploads from one anyway.
+  const canUpload = !useAuth().can("is_guest");
   // Quick find's "Upload a document" lands here with the dialog open.
   const [uploading, setUploading] = useState(
     Boolean((location.state as { upload?: boolean } | null)?.upload),
@@ -200,9 +203,11 @@ export default function DocumentsPage() {
         title="Documents"
         description="Everything you have access to. Uploads are scanned, read and indexed in the background."
         actions={
-          <Button variant="primary" icon="upload" onClick={() => setUploading(true)}>
-            Upload document
-          </Button>
+          canUpload ? (
+            <Button variant="primary" icon="upload" onClick={() => setUploading(true)}>
+              Upload document
+            </Button>
+          ) : null
         }
       />
 
@@ -339,11 +344,11 @@ export default function DocumentsPage() {
                 <Button icon="x" onClick={clearFilters}>
                   Clear filters
                 </Button>
-              ) : (
+              ) : canUpload ? (
                 <Button variant="primary" icon="upload" onClick={() => setUploading(true)}>
                   Upload a document
                 </Button>
-              )
+              ) : null
             }
           >
             {filtered

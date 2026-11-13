@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type RefObject } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
@@ -15,6 +15,7 @@ import {
   errorMessage,
   useDocumentTitle,
 } from "../components/ui";
+import "../styles/front.css";
 import SignupForm from "./SignupForm";
 
 const FEATURES: [IconName, string, string][] = [
@@ -94,18 +95,94 @@ function signupRefusal(caught: unknown) {
   return null;
 }
 
-/** `offerSignup` is null until the server has answered. */
-function SignInForm({ offerSignup }: { offerSignup: boolean | null }) {
-  useDocumentTitle("Sign in");
+/** Whether the server offers sign-up: null until it has answered. */
+export function offersSignup(options: Resource<SignupOptions>): boolean | null {
+  if (options.data) return options.data.enabled;
+  return options.loading ? null : false;
+}
+
+/**
+ * The password box with a show/hide switch. The switch is named by its own
+ * (visually hidden) words, never by aria-label: a label containing
+ * "password" would make it a second match for every "Password" label
+ * lookup - the browser suite's getByLabel included - and its state is
+ * carried by aria-pressed, as for any toggle.
+ */
+function PasswordField({
+  value,
+  onChange,
+  shown,
+  onToggle,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  shown: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <Field label="Password" required>
+      {(props) => (
+        <div className="password-input">
+          <input
+            {...props}
+            className="input input-lg"
+            name="password"
+            type={shown ? "text" : "password"}
+            autoComplete="current-password"
+            // Spelled out while shown, the password must not be corrected
+            // or capitalised.
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            required
+          />
+          <button
+            type="button"
+            className="password-toggle"
+            aria-pressed={shown}
+            aria-controls={props.id}
+            onClick={onToggle}
+          >
+            <Icon name={shown ? "eye-off" : "eye"} size={18} />
+            <span className="visually-hidden">Show password</span>
+          </button>
+        </div>
+      )}
+    </Field>
+  );
+}
+
+/**
+ * The sign-in form, shared by the focused sign-in page and the landing
+ * page's hero. `offerSignup` is null until the server has answered.
+ */
+export function SignInForm({
+  offerSignup,
+  heading = "h1",
+  autoFocus = true,
+  usernameRef,
+}: {
+  offerSignup: boolean | null;
+  heading?: "h1" | "h2";
+  autoFocus?: boolean;
+  usernameRef?: RefObject<HTMLInputElement | null>;
+}) {
   const { login, expired } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [shown, setShown] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<ReturnType<typeof signupRefusal>>(null);
+  const Heading = heading;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    // Hidden again before it is sent: a browser offering to remember what
+    // was typed should see a password field, not a text box.
+    setShown(false);
     setPending(true);
     setError(null);
     setRefusal(null);
@@ -132,7 +209,7 @@ function SignInForm({ offerSignup }: { offerSignup: boolean | null }) {
 
   return (
     <>
-      <h1 className="login-title">Sign in</h1>
+      <Heading className="login-title">Sign in</Heading>
       <p className="login-subtitle">
         Search, read and ask questions of your institution's documents.
       </p>
@@ -149,6 +226,7 @@ function SignInForm({ offerSignup }: { offerSignup: boolean | null }) {
           {(props) => (
             <input
               {...props}
+              ref={usernameRef}
               className="input input-lg"
               name="username"
               autoComplete="username"
@@ -156,27 +234,19 @@ function SignInForm({ offerSignup }: { offerSignup: boolean | null }) {
               // "nia" into "Nia" signs nobody in.
               autoCapitalize="none"
               spellCheck={false}
-              autoFocus
+              autoFocus={autoFocus}
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               required
             />
           )}
         </Field>
-        <Field label="Password" required>
-          {(props) => (
-            <input
-              {...props}
-              className="input input-lg"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-          )}
-        </Field>
+        <PasswordField
+          value={password}
+          onChange={setPassword}
+          shown={shown}
+          onToggle={() => setShown((value) => !value)}
+        />
         {refusal ? (
           // An alert, like every other sign-in failure: it is the answer to
           // pressing Sign in, and the only one a waiting applicant gets.
@@ -235,7 +305,7 @@ function SignupPanel({ options }: { options: Resource<SignupOptions> }) {
           Accounts are issued by your department administrator. Ask them for one.
         </Alert>
         <p className="login-switch">
-          <Link to="/" className="link">
+          <Link to="/login" className="link">
             Back to sign in
           </Link>
         </p>
@@ -250,6 +320,16 @@ function SignupPanel({ options }: { options: Resource<SignupOptions> }) {
   );
 }
 
+function SignInTitle() {
+  useDocumentTitle("Sign in");
+  return null;
+}
+
+/**
+ * The focused sign-in view: /login, /signup, and any address visited while
+ * signed out other than the landing page - so a bookmarked document opens
+ * once its reader has signed in.
+ */
 export default function LoginPage() {
   const { pathname } = useLocation();
   // "/signup/" too: the edge serves the app for it, and the signed-in
@@ -263,10 +343,10 @@ export default function LoginPage() {
   return (
     <div className="login">
       <div className="login-aside">
-        <div className="brand">
+        <Link to="/" className="brand front-home-link">
           <BrandMark />
           <span className="brand-name">Document Intelligence</span>
-        </div>
+        </Link>
         <div className="login-pitch">
           <p className="login-headline">Answers you can trace back to the page.</p>
           <p className="login-lead">
@@ -293,19 +373,23 @@ export default function LoginPage() {
 
       <main className="login-main">
         <div className={`login-panel${signingUp ? " login-panel-wide" : ""}`}>
-          <div className="brand login-mobile-brand">
+          <Link to="/" className="brand login-mobile-brand front-home-link">
             <BrandMark />
             <span className="brand-name">Document Intelligence</span>
-          </div>
+          </Link>
           {signingUp ? (
             <SignupPanel options={options} />
           ) : (
-            <SignInForm
-              offerSignup={
-                options.data ? options.data.enabled : options.loading ? null : false
-              }
-            />
+            <>
+              <SignInTitle />
+              <SignInForm offerSignup={offersSignup(options)} />
+            </>
           )}
+          <p className="front-back">
+            <Link to="/" className="link">
+              What is Document Intelligence?
+            </Link>
+          </p>
         </div>
       </main>
     </div>

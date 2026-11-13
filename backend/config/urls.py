@@ -7,6 +7,7 @@ from documents.evaluation_api.views import FeedbackView
 from documents.observability.views import metrics_view
 from documents.operations.views import DashboardView
 from notifications.views import AttentionView
+from documents.samples.views import SampleLibraryView
 
 # Every JSON endpoint, without its prefix. Mounted twice below.
 api_patterns = [
@@ -28,6 +29,8 @@ api_patterns = [
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
     # Administration: accounts and departments (accounts app), and the
     # operational read models - audit, jobs, system status (documents app).
+    # Fill a department with the sample library (documents.samples).
+    path("admin/samples/", SampleLibraryView.as_view(), name="admin-samples"),
     path("admin/", include("accounts.api.admin_urls")),
     path("admin/", include("documents.operations.urls")),
     # The bell (a person's own notifications) and the administrators'

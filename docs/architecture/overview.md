@@ -57,6 +57,8 @@ answerer → grounding. An answer that fails grounding becomes an abstention. Se
 | Path | Responsibility |
 |---|---|
 | `backend/accounts/` | Users' profiles, the department registry, session login, expiring API tokens, administration API and its permission rules |
+| `backend/accounts/demo.py`, `middleware.py` | The one-click demo: ephemeral guest accounts, and the guard that keeps them read-only |
+| `backend/documents/samples/` | The sample library (corpus, its reproducible builder) and the seeding behind `seed_demo` and `POST /admin/samples/` |
 | `backend/documents/authorization.py` | The access rules, as plain functions every path calls |
 | `backend/documents/permissions.py` | The DRF policy for documents: 404 to non-readers, 403 to readers who may not manage, audit on both |
 | `backend/documents/api/` | Documents API: CRUD, versions, download, content, fields, tables, figures, citation source, archive |
@@ -76,6 +78,10 @@ answerer → grounding. An answer that fails grounding becomes an abstention. Se
 
 ## Boundaries that matter
 
+- **Demo guests are read-only in one place.** `GuestReadOnlyMiddleware` decides every
+  unsafe request from a guest's session before any view runs, by URL name against a short
+  allowlist; no view has to know guests exist, and a new endpoint is closed to them by
+  default.
 - **Authorization is computed before retrieval.** Similarity search runs only over chunks
   the caller could open directly; there is no "retrieve then filter" path for a leak to hide
   in. Citations therefore can only name readable documents.

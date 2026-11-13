@@ -67,6 +67,47 @@
   - With sign-up on, the active departments' names, codes and ids are public, because the
     form offers them.
 
+- **The one-click demo** (`accounts/demo.py`, off unless `DEMO_ENABLED=True`). Each visitor
+  who presses "Try the live demo" gets an account of their own - never a shared login, so
+  the owner-scoped conversation rules keep every visitor's questions from every other
+  visitor. What makes such an account safe to hand to anyone:
+  - *No credential but the session.* An unusable password and a random `guest-…` name: it
+    can never be signed into again, by its visitor or anyone else. No token can be issued
+    to it, and `ExpiringTokenAuthentication` refuses (and deletes) one made by hand.
+  - *Read-only, enforced in one place.* `accounts.middleware.GuestReadOnlyMiddleware`,
+    after authentication, refuses every request from a guest's session that is not GET,
+    HEAD or OPTIONS - before any view runs - unless its URL name is on a short allowlist:
+    ask (`chat`, `chat-stream`), `search` (a POST only to keep queries out of URLs),
+    rate an answer (`message-feedback`), mark notifications read (matched by the
+    notifications API's documented paths), sign out, and the public doors (`auth-login`,
+    `auth-demo`, `auth-signup`, `api-token-auth`, `auth-csrf`), which work on the
+    credentials or form they are sent and never on the signed-in account. Matching on URL
+    names holds for `/api/v1/` and `/api/` alike; an endpoint added later is closed to
+    guests until someone adds it. A refusal is counted (`authz_denials{action="GUEST_WRITE"}`)
+    and logged, not audited - a row per refusal would let a script write to the audit log
+    as fast as it can send.
+  - *The least access there is.* STUDENT in `DEMO_DEPARTMENT`: it reads that department's
+    documents (the sample library) and its own conversations, owns nothing, curates
+    nothing and sees no administration screen. Guests are not administrable - the user
+    endpoints neither list them nor accept a password or role for one - so nobody can turn
+    a guest into an account that signs in or reads more.
+  - *Bounded cost.* Demo starts are throttled per address and across all addresses, and
+    `DEMO_MAX_GUESTS` caps the guests existing at once (creation is serialised on the demo
+    department's row, so the cap is exact). Guests' chat and search spend per-guest and
+    all-guest budgets on top of the views' own throttles; members are never counted
+    against them, so a busy demo cannot slow the people the installation is for.
+  - *Ephemeral.* `manage.py purge_demo_guests` (and a sweep of up to 20 on every new demo)
+    deletes guests older than `DEMO_GUEST_TTL_HOURS` with their conversations, messages,
+    ratings, notifications and tokens; the delete re-checks the guest flag, so nothing else
+    can be removed. Their audit rows stay with the account cleared, as for any deleted
+    account; each sweep that deleted something writes one `GUEST_PURGE` row. A guest's
+    session never outlives its account.
+  - The demo is offered only once its department holds a Ready document, and the sample
+    library's documents belong to an inactive `sample-library` account, so a visitor never
+    learns an administrator's username from "owner" or "uploaded by".
+  - *Not covered:* guests' questions use whatever answerer is configured. With a hosted
+    model, the all-guest chat budget is what bounds how much of its quota visitors can use.
+
 **Not implemented:** SSO/SAML/OIDC, MFA, account lockout beyond throttling, password
 expiry. These are institutional decisions with integration work attached.
 

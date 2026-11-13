@@ -66,6 +66,26 @@ class UserProfile(models.Model):
         default=Role.STUDENT,
     )
     department = models.CharField(max_length=255, blank=True, default="")
+    # A one-click demo visitor (accounts.demo): anonymous, read-only and
+    # short-lived. Only demo.create_guest sets it - no form or API field
+    # does - and accounts.middleware.GuestReadOnlyMiddleware enforces what
+    # it means on every request, whatever the browser sends.
+    #
+    # db_default as well as default: while an upgrade is under way the
+    # previous release keeps serving after `migrate` commits, and its
+    # INSERTs (every new account makes a profile) do not name this column.
+    is_guest = models.BooleanField(default=False, db_default=False)
+
+    class Meta:
+        indexes = [
+            # Guests are counted on every demo start (DEMO_MAX_GUESTS) and
+            # swept by age; a partial index keeps both off the member rows.
+            models.Index(
+                fields=["is_guest"],
+                condition=models.Q(is_guest=True),
+                name="profile_guest_idx",
+            )
+        ]
 
     def __str__(self):
         return f"{self.user.get_username()} ({self.role})"
