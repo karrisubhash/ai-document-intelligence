@@ -194,6 +194,13 @@ chat_stream_failures = Counter(
     registry=REGISTRY,
 )
 
+chat_stream_cancellations = Counter(
+    "adi_chat_stream_cancellations_total",
+    "Streamed chat turns the reader stopped before they finished; nothing"
+    " further was generated and nothing was saved.",
+    registry=REGISTRY,
+)
+
 rag_abstentions = Counter(
     "adi_rag_abstentions_total",
     "Abstentions by reason. The reasons are a fixed vocabulary, so this is"

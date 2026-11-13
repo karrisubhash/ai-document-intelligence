@@ -1,0 +1,370 @@
+/* Ask: per-turn actions, live progress, honest capacity notes, follow-ups.
+   Tokens only, so both themes follow styles.css. */
+
+/* --- The user's question, with Edit on the latest one --------------------- */
+
+.user-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.user-row .bubble-user {
+  align-self: auto;
+}
+
+.turn-edit {
+  margin-top: 6px;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.turn:hover .turn-edit,
+.turn-edit:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .turn-edit {
+    opacity: 1;
+  }
+}
+
+.bubble-editing {
+  outline: 2px dashed var(--accent-border);
+  outline-offset: 2px;
+}
+
+/* --- Progress while an answer is built ----------------------------------- */
+
+.thinking .answer-progress {
+  width: 100%;
+}
+
+.answer-progress {
+  display: grid;
+  gap: 10px;
+}
+
+.answer-streaming .answer-progress {
+  margin-bottom: 10px;
+}
+
+.stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.step-dot {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.step-done {
+  color: var(--text-2);
+}
+
+.step-done .step-dot {
+  border-color: var(--success-mark);
+  background: var(--success-mark);
+  color: #ffffff;
+}
+
+.step-current {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.step-current .step-dot {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: step-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes step-pulse {
+  50% {
+    box-shadow: 0 0 0 5px var(--accent-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-current .step-dot {
+    animation: none;
+  }
+}
+
+.reading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.reading-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.reading-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reading-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.reading-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reading-page,
+.reading-more {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* --- The answer's footer -------------------------------------------------- */
+
+.answer-summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.answer-model {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.answer-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.answer-actions .icon-button {
+  color: var(--text-3);
+}
+
+.answer-actions .icon-button:hover {
+  color: var(--text);
+}
+
+.answer-degraded {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius);
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.answer-degraded .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.abstention-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.followup {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.followup:hover {
+  background: var(--accent-soft);
+}
+
+.followup:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.feedback-wrap {
+  display: grid;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.feedback-comment {
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+}
+
+.feedback-comment-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.feedback-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* --- Failed and stopped turns -------------------------------------------- */
+
+.turn-failed {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.turn-stopped {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-2);
+}
+
+/* --- Thread and composer ---------------------------------------------------- */
+
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 150px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  transform: translateX(-50%);
+  cursor: pointer;
+}
+
+.jump-latest-icon {
+  transform: rotate(180deg);
+}
+
+.composer-editing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 13px;
+}
+
+.composer-editing span {
+  flex: 1;
+}
+
+.capacity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.composer-busy {
+  color: var(--warning);
+  font-weight: 500;
+}
+
+@media (max-width: 560px) {
+  .capacity-chip {
+    white-space: normal;
+    height: auto;
+    padding: 4px 10px;
+  }
+
+  .jump-latest {
+    bottom: 170px;
+  }
+
+  .feedback-wrap {
+    margin-left: 0;
+  }
+}

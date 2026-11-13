@@ -966,19 +966,31 @@ class Gateway:
         # parameter they do not implement, and usage is worth less than an
         # answer that arrives at all.
         parts, finish_reason, usage, served_by, last = [], "", None, "", None
-        for chunk in client.chat.completions.create(**request, stream=True):
-            last = chunk
-            usage = getattr(chunk, "usage", None) or usage
-            served_by = getattr(chunk, "model", "") or served_by
-            choices = getattr(chunk, "choices", None)
-            if not choices:
-                continue
-            delta = getattr(choices[0], "delta", None)
-            piece = getattr(delta, "content", None) or ""
-            if piece:
-                parts.append(piece)
-                on_delta(piece)
-            finish_reason = getattr(choices[0], "finish_reason", None) or finish_reason
+        stream = client.chat.completions.create(**request, stream=True)
+        try:
+            for chunk in stream:
+                last = chunk
+                usage = getattr(chunk, "usage", None) or usage
+                served_by = getattr(chunk, "model", "") or served_by
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                piece = getattr(delta, "content", None) or ""
+                if piece:
+                    parts.append(piece)
+                    on_delta(piece)
+                finish_reason = (
+                    getattr(choices[0], "finish_reason", None) or finish_reason
+                )
+        finally:
+            # Closed whether it finished or not: a reader who pressed Stop
+            # (on_delta raised streaming.Cancelled) should stop the
+            # provider generating, and an abandoned stream holds a
+            # connection until it is collected.
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
         if not parts and not finish_reason:
             # The streamed form of OpenRouter's HTTP 200 with an `error`
             # body and no choices.
