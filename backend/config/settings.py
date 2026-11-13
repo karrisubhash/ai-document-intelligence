@@ -1074,6 +1074,19 @@ CELERY_RESULT_BACKEND = os.getenv(
     "redis://redis:6379/1",
 )
 
+# The suite never talks to a broker. A test that runs commit hooks (a
+# TransactionTestCase that finishes a processing job, which now queues the
+# document's brief) otherwise dialled the default "redis" host, which CI does
+# not have, and Celery's Redis result backend then retried its subscription
+# forever and hung the whole run. Inside a compose stack it was worse: test
+# job ids landed in the development worker's real queue. An in-memory
+# transport accepts the message and nothing consumes it - exactly an unrun
+# queue. Tests of a broker outage patch .delay() and are unaffected; the
+# queue-depth and health probes report a non-Redis broker as not probed.
+if RUNNING_TESTS:
+    CELERY_BROKER_URL = "memory://"
+    CELERY_RESULT_BACKEND = "cache+memory://"
+
 # --- Workload separation (spec §22 stage 3, NFR-02) ------------------------
 # Ingestion is CPU-bound (OCR, PDF rendering) and re-indexing is
 # embedding-bound. On one shared queue the only way to make a bulk re-index
