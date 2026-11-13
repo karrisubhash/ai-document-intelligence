@@ -30,6 +30,9 @@ What makes such an account safe to hand to anyone:
   the defaults keep THROTTLE_DEMO_GLOBAL x DEMO_GUEST_TTL_HOURS within the
   ceiling, so not even guests kept busy can fill it (accounts.checks warns
   about a configuration that can).
+* It ends with the demo. With DEMO_ENABLED off, a guest's session ends on
+  its next request, reads included (GuestReadOnlyMiddleware), and
+  purge_all_guests (`purge_demo_guests --all`) deletes every guest at once.
 
 Guests are identified by UserProfile.is_guest, never by their name: the
 "guest-" prefix only makes them recognisable in an audit trail, and sign-up
@@ -315,6 +318,24 @@ def purge_expired_guests(*, limit: int | None = None, trigger: str = "command") 
     return deleted
 
 
+def purge_all_guests(*, trigger: str = "command") -> int:
+    """Delete every guest, whatever its age; how many went.
+
+    For ending the demo now (`purge_demo_guests --all`) rather than a TTL
+    later. With DEMO_ENABLED off a guest's session already ends on its next
+    request; this also removes the accounts and what they made. With the
+    demo still on, new visitors can start one again straight away.
+    """
+    everyone = (
+        get_user_model()
+        .objects.filter(profile__is_guest=True)
+        .order_by("date_joined", "pk")
+    )
+    deleted = _delete_guests(everyone)
+    _record_purge(deleted, reason="all", trigger=trigger)
+    return deleted
+
+
 def _delete_guests(candidates, *, limit: int | None = None) -> int:
     """Delete the accounts `candidates` lists, in its order and at most
     `limit` of them; how many went.
@@ -347,7 +368,7 @@ def _delete_guests(candidates, *, limit: int | None = None) -> int:
 
 def _record_purge(deleted: int, **details) -> None:
     """One GUEST_PURGE audit row for a sweep that deleted anything: how many,
-    which guests (`reason`: expired or idle) and which door asked
+    which guests (`reason`: expired, idle or all) and which door asked
     (`trigger`: the command, or a demo start)."""
     if not deleted:
         return

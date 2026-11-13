@@ -22,14 +22,19 @@ The allowlist is matched on URL NAMES, so it holds for /api/v1/ and its
 /api/ alias alike and cannot be dodged by spelling a path differently: the
 decision is about which view would run.
 
-A guest's reads are looked at as well, which is why reads are not simply
-waved through: each request a guest makes is noted (demo.note_activity), so
-that at DEMO_MAX_GUESTS the guests nobody is using make way for new visitors.
+Two things apply to a guest's reads as well, which is why reads are not
+simply waved through: with DEMO_ENABLED off, a guest's session ends on its
+next request of any kind - turning the demo off must stop the guests already
+inside, not only new ones - and while it is on, each request is noted
+(demo.note_activity), so that at DEMO_MAX_GUESTS the guests nobody is using
+make way for new visitors.
 """
 
 import math
 import re
 
+from django.conf import settings
+from django.contrib.auth import logout
 from django.http import JsonResponse
 
 from . import demo
@@ -90,6 +95,11 @@ READ_ONLY_DETAIL = (
     "your own documents."
 )
 
+DEMO_ENDED_DETAIL = (
+    "The demo has ended here. Sign in with your account, or request one to "
+    "work with your own documents."
+)
+
 
 def _throttled(scope: str, wait: float) -> JsonResponse:
     seconds = max(1, math.ceil(wait))
@@ -108,6 +118,14 @@ def _throttled(scope: str, wait: float) -> JsonResponse:
     response = JsonResponse({"detail": detail, "code": "demo_throttled"}, status=429)
     response["Retry-After"] = str(seconds)
     return response
+
+
+def _demo_ended(request) -> JsonResponse:
+    # Ended, not merely refused: the session goes, so the browser lands
+    # signed out (any 401 does that in the interface) and turning the demo
+    # on again does not bring it back.
+    logout(request)
+    return JsonResponse({"detail": DEMO_ENDED_DETAIL, "code": "demo_ended"}, status=401)
 
 
 class GuestReadOnlyMiddleware:
@@ -135,6 +153,11 @@ class GuestReadOnlyMiddleware:
         name = request.resolver_match.url_name if request.resolver_match else None
         if name in PUBLIC_DOORS:
             return None
+        if not settings.DEMO_ENABLED:
+            # Signing out still works as itself, and is audited as itself.
+            if name == "auth-logout":
+                return None
+            return _demo_ended(request)
         demo.note_activity(user)
         if reading:
             return None

@@ -110,8 +110,14 @@
     ratings, notifications and tokens; the delete re-checks the guest flag, so nothing else
     can be removed. Their audit rows stay with the account cleared, as for any deleted
     account; each sweep that deleted something writes one `GUEST_PURGE` row, whose
-    `reason` says which guests went (`expired`, or `idle` at the cap). A guest's
+    `reason` says which guests went (`expired`, `idle` at the cap, or `all`). A guest's
     session never outlives its account.
+  - *Over when it is turned off.* With `DEMO_ENABLED=False`, a guest's next request - a
+    read as much as a question - ends its session (**401** `demo_ended`); only the public
+    doors and signing out still answer it. Guests' reads are checked without costing
+    members anything: only an account named like a guest (every guest is, and nobody else
+    may choose such a name) has its profile loaded, and the flag decides.
+    `purge_demo_guests --all` deletes every guest at once.
   - The demo is offered only once its department holds a Ready document, and the sample
     library's documents belong to an inactive `sample-library` account, so a visitor never
     learns an administrator's username from "owner" or "uploaded by". Owning a document

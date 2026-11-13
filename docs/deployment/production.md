@@ -185,7 +185,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-de
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `DEMO_ENABLED` | `False` | Offer the one-click demo |
+| `DEMO_ENABLED` | `False` | Offer the one-click demo. Off, existing guests' sessions end too (below) |
 | `DEMO_DEPARTMENT` | `Demo` | Where guests live and `seed_demo` puts the samples |
 | `DEMO_GUEST_TTL_HOURS` | `3` | Guests older than this are deleted; sessions end no later |
 | `DEMO_GUEST_IDLE_MINUTES` | `30` | At the ceiling, a guest idle this long makes way for a new visitor (at least 10) |
@@ -207,6 +207,21 @@ the guest that has gone longest without a request, once that is `DEMO_GUEST_IDLE
 guests kept busy can fill it. Raise one of these and keep that product within
 `DEMO_MAX_GUESTS`: `manage.py check` (and `migrate`) warns when it is not (`accounts.W001`),
 and when even guests nobody uses could fill it within the idle time (`accounts.W002`).
+
+**Turning the demo off.** Set `DEMO_ENABLED=False` and recreate backend. The landing page
+stops offering it and new starts get **404**; every guest still signed in is signed out
+on their next request - a read as much as a question - with **401** `code: "demo_ended"`,
+so the switch stops the guests already inside, not only new ones. To delete every guest
+account and its conversations now rather than as they expire:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-deps backend \
+    python manage.py purge_demo_guests --all      # --dry-run first to count them
+```
+
+With the demo still on, `--all` signs every guest out and new visitors can start again at
+once. Deactivating the demo department also stops new starts, but not the guests inside:
+use `--all` for those.
 
 On a server whose answerer is a hosted model with a daily quota, guests' questions draw on
 the same quota as members'; `THROTTLE_GUEST_CHAT_GLOBAL` is what bounds their share. Lower

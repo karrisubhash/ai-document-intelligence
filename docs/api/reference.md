@@ -61,7 +61,9 @@ extra password hash, whoever holds the name.
 **Demo guests** (`capabilities.is_guest`). An account made by `POST /api/auth/demo/`: named
 `guest-` and eight random characters, no usable password, STUDENT in `DEMO_DEPARTMENT`,
 deleted after `DEMO_GUEST_TTL_HOURS` - or sooner, at `DEMO_MAX_GUESTS`, once it has made no
-request for `DEMO_GUEST_IDLE_MINUTES`. Every request a guest makes other than GET, HEAD and
+request for `DEMO_GUEST_IDLE_MINUTES`. With `DEMO_ENABLED` off, a guest's next request of any
+kind, other than the public doors and sign-out below, signs it out and is **401**
+`{detail, code: "demo_ended"}`. Every request a guest makes other than GET, HEAD and
 OPTIONS is **403** `{detail, code: "demo_read_only"}` - before the view runs - except:
 `POST /api/chat/`, `POST /api/chat/stream/`, `POST /api/search/`,
 `POST /api/messages/{id}/feedback/`, `POST /api/notifications/{id}/read/`,

@@ -174,6 +174,7 @@ class DemoEndpointTests(DemoCase):
         self.assertEqual(full.json()["code"], "demo_full")
         self.assertEqual(UserProfile.objects.filter(is_guest=True).count(), 1)
 
+    @override_settings(**DEMO_ON)
     def test_me_reports_who_is_a_guest(self):
         member = make_user("asha", Role.STUDENT)
         client = APIClient()
@@ -188,6 +189,7 @@ class DemoEndpointTests(DemoCase):
         )
 
 
+@override_settings(**DEMO_ON)
 class GuestGuardTests(DemoCase):
     """Every class of write a member can make, refused for a guest - by the
     guard, not by whichever check the view happens to have."""
@@ -425,6 +427,7 @@ class GuestGuardTests(DemoCase):
         self.assertEqual(rated.status_code, status.HTTP_404_NOT_FOUND)
 
 
+@override_settings(**DEMO_ON)
 class GuestBudgetTests(DemoCase):
     def test_a_guest_s_questions_have_a_budget_a_member_does_not_share(self):
         _, guest = self.guest_client()
@@ -460,6 +463,7 @@ class GuestBudgetTests(DemoCase):
         self.assertIn("busy", refused.json()["detail"])
 
 
+@override_settings(**DEMO_ON)
 class PurgeTests(DemoCase):
     def age(self, user, hours):
         User.objects.filter(pk=user.pk).update(
@@ -539,6 +543,37 @@ class PurgeTests(DemoCase):
         self.assertFalse(
             AuditLog.objects.filter(action=AuditLog.Action.GUEST_PURGE).exists()
         )
+
+    def test_all_deletes_every_guest_now_and_nothing_else(self):
+        """For ending the demo at once rather than a TTL later."""
+        guests = [self.guest_client()[0] for _ in range(3)]
+        asked = self.guest_client()[1].post(
+            "/api/v1/chat/", {"question": "Attendance?"}, format="json"
+        )
+        veteran = make_user("veteran", Role.STUDENT, "Demo")
+        lookalike = make_user("guest-ravi", Role.STUDENT, "Demo")  # not a guest
+
+        out = StringIO()
+        call_command("purge_demo_guests", "--all", "--dry-run", stdout=out)
+        self.assertIn("4 demo guest account(s)", out.getvalue())
+        self.assertEqual(UserProfile.objects.filter(is_guest=True).count(), 4)
+
+        out = StringIO()
+        call_command("purge_demo_guests", "--all", stdout=out)
+
+        self.assertFalse(UserProfile.objects.filter(is_guest=True).exists())
+        self.assertFalse(User.objects.filter(pk__in=[g.pk for g in guests]).exists())
+        self.assertFalse(
+            Conversation.objects.filter(pk=asked.json()["conversation_id"]).exists()
+        )
+        for member in (veteran, lookalike, self.curator):
+            self.assertTrue(User.objects.filter(pk=member.pk).exists())
+        self.assertTrue(Document.objects.filter(pk=self.sample.pk).exists())
+        self.assertIn("Deleted 4 demo guest account(s)", out.getvalue())
+        purge = AuditLog.objects.get(action=AuditLog.Action.GUEST_PURGE)
+        self.assertEqual(purge.metadata["deleted"], 4)
+        self.assertEqual(purge.metadata["reason"], "all")
+        self.assertEqual(purge.metadata["trigger"], "command")
 
 
 @override_settings(**DEMO_ON)
@@ -685,6 +720,65 @@ class CapacityTests(DemoCase):
             self.assertEqual(client.get("/api/v1/documents/").status_code, 200)
         looked.assert_not_called()
         self.assertIsNone(UserProfile.objects.get(user=member).last_seen_at)
+
+
+class DemoOffTests(DemoCase):
+    """DEMO_ENABLED=False is the off switch for guests already inside, not
+    only for new ones: until it was, every guest cookie issued that day kept
+    reading the demo and spending the shared answer quota."""
+
+    def test_turning_the_demo_off_ends_every_guest_session(self):
+        _, reader = self.guest_client()
+        _, asker = self.guest_client()
+
+        with override_settings(DEMO_ENABLED=False):
+            read = reader.get("/api/v1/documents/")
+            asked = asker.post(
+                "/api/v1/chat/", {"question": "Attendance?"}, format="json"
+            )
+            again = reader.get(reverse("me"))
+
+        for response in (read, asked):
+            self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+            self.assertEqual(response.json()["code"], "demo_ended")
+        self.assertFalse(Message.objects.exists())
+        # Ended, not refused: the session itself is gone, so turning the
+        # demo back on does not bring it back.
+        self.assertEqual(again.status_code, status.HTTP_401_UNAUTHORIZED)
+        with override_settings(**DEMO_ON):
+            self.assertEqual(
+                asker.get(reverse("me")).status_code, status.HTTP_401_UNAUTHORIZED
+            )
+
+    def test_a_guest_can_still_sign_in_or_out(self):
+        make_user("asha", Role.STUDENT)
+        _, leaving = self.guest_client()
+        _, client = self.guest_client()
+        with override_settings(DEMO_ENABLED=False):
+            signed_out = leaving.post("/api/v1/auth/logout/")
+            signed_in = client.post(
+                "/api/v1/auth/login/",
+                {"username": "asha", "password": STRONG},
+                format="json",
+            )
+            me = client.get(reverse("me"))
+        self.assertEqual(signed_out.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(signed_in.status_code, status.HTTP_200_OK)
+        self.assertEqual(me.json()["username"], "asha")
+
+    def test_members_are_untouched(self):
+        member = make_user("ravi", Role.FACULTY, "Demo")
+        # Named like a guest - made before the prefix was reserved - but not one.
+        lookalike = make_user("guest-ravi", Role.STUDENT, "Demo")
+        for user in (member, lookalike):
+            client = APIClient()
+            client.force_login(user)
+            with self.subTest(user.username), override_settings(DEMO_ENABLED=False):
+                self.assertEqual(client.get("/api/v1/documents/").status_code, 200)
+                searched = client.post(
+                    "/api/v1/search/", {"query": "attendance"}, format="json"
+                )
+                self.assertEqual(searched.status_code, status.HTTP_200_OK)
 
 
 class GuestAdministrationTests(DemoCase):
