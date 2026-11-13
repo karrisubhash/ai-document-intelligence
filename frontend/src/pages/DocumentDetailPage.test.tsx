@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { DocumentDetail, DocumentStatus, Me, ProcessingJob } from "../api/types";
 import App from "../App";
 import { AuthProvider } from "../auth/AuthContext";
@@ -137,5 +137,120 @@ describe("DocumentDetailPage", () => {
     await waitFor(() =>
       expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).not.toBeInTheDocument(),
     );
+  });
+});
+
+describe("Edit details", () => {
+  /** The same document once the type detector has made it a circular. */
+  function circular(status: DocumentStatus = "COMPLETED"): DocumentDetail {
+    return {
+      ...document(status),
+      document_type: "CIRCULAR",
+      document_type_source: "auto",
+      type_confidence: 0.92,
+    };
+  }
+
+  async function openEditDialog(user: ReturnType<typeof userEvent.setup>) {
+    render(
+      <MemoryRouter initialEntries={["/documents/7"]}>
+        <AuthProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit details" }));
+    return screen.findByRole("dialog", { name: "Edit details" });
+  }
+
+  it("saves a title without the type, though the detector typed the document while the form was open", async () => {
+    vi.spyOn(api, "document")
+      .mockResolvedValueOnce({ ...document("PROCESSING"), document_type_source: "default" })
+      .mockResolvedValue(circular());
+    // The run settles while the form is open, and the page reloads the document.
+    vi.spyOn(api, "processing").mockResolvedValue([job("COMPLETED")]);
+    const update = vi
+      .spyOn(api, "updateDocument")
+      .mockImplementation(async (_id, patch) => ({ ...circular(), title: patch.title ?? "" }));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    const dialog = await openEditDialog(user);
+    const type = within(dialog).getByRole("combobox", { name: "Type" });
+    expect(type).toHaveValue("GENERAL");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_500);
+    });
+    // Untouched, the list shows the type the document has now.
+    await waitFor(() => expect(type).toHaveValue("CIRCULAR"));
+
+    const title = within(dialog).getByRole("textbox", { name: "Title" });
+    await user.clear(title);
+    await user.type(title, "Bus pass circular");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    // No type at all: sending back the one the form opened with recorded
+    // that stale General as a person's choice, which the detector never
+    // overrides.
+    expect(update.mock.calls[0][1]).toEqual({ title: "Bus pass circular" });
+  });
+
+  it("sends a type the person picked with the type it was picked over", async () => {
+    vi.spyOn(api, "document").mockResolvedValue(document("COMPLETED"));
+    vi.spyOn(api, "processing").mockResolvedValue([job("COMPLETED")]);
+    const update = vi.spyOn(api, "updateDocument").mockResolvedValue({
+      ...document("COMPLETED"),
+      document_type: "POLICY",
+      document_type_source: "user",
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    const dialog = await openEditDialog(user);
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Type" }), "POLICY");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][1]).toEqual({
+      title: "Hostel circular",
+      document_type: "POLICY",
+      expected_document_type: "GENERAL",
+    });
+  });
+
+  it("after a refusal because the type moved, shows why and the type it has now", async () => {
+    vi.spyOn(api, "document")
+      .mockResolvedValueOnce(document("COMPLETED"))
+      .mockResolvedValue(circular());
+    vi.spyOn(api, "processing").mockResolvedValue([job("COMPLETED")]);
+    const message =
+      "The type was changed to Circular while this form was open, so nothing was saved. " +
+      "Check the type and save again.";
+    const update = vi
+      .spyOn(api, "updateDocument")
+      .mockRejectedValueOnce(new ApiError(409, "Conflict", { document_type: [message] }))
+      .mockResolvedValueOnce({ ...circular(), document_type: "POLICY", document_type_source: "user" });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    const dialog = await openEditDialog(user);
+    const type = within(dialog).getByRole("combobox", { name: "Type" });
+    await user.selectOptions(type, "POLICY");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(await within(dialog).findByText(message)).toBeInTheDocument();
+    await waitFor(() => expect(type).toHaveValue("CIRCULAR"));
+
+    // Chosen again, knowing what it is now: sent against the current type.
+    await user.selectOptions(type, "POLICY");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1][1]).toEqual({
+      title: "Hostel circular",
+      document_type: "POLICY",
+      expected_document_type: "CIRCULAR",
+    });
   });
 });

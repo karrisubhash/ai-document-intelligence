@@ -8,6 +8,7 @@ from django.utils import timezone
 from django.utils.http import http_date
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import APIException
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
@@ -80,6 +81,25 @@ def _live_content(version):
 
 def _conflict(message):
     return Response({"detail": message}, status=status.HTTP_409_CONFLICT)
+
+
+class TypeChangedMeanwhile(APIException):
+    """409: a new type chosen against a type the document no longer has."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "type_changed"
+
+    def __init__(self, current):
+        label = dict(Document.DocumentType.choices).get(current, current)
+        # On the field, so the edit form shows it under the type it is about.
+        super().__init__(
+            {
+                "document_type": [
+                    f"The type was changed to {label} while this form was open, "
+                    "so nothing was saved. Check the type and save again."
+                ]
+            }
+        )
 
 
 def _query_number(raw):
@@ -220,26 +240,44 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """A changed type is a person's decision: recorded, and acted on.
 
-        Only a CHANGE counts. The edit form sends the type with every save,
-        so treating an unchanged value as a choice would pin the upload
-        default (or the detector's guess) every time someone fixed a title.
+        Decided against the row as it is now, locked until this edit
+        commits. The type detector sets the type - one conditional UPDATE -
+        while the document is processing, so what get_object() read a moment
+        ago may already be out of date, and saving that read in full put the
+        detector's type back the way it was.
+
+        Only a CHANGE counts: a client that sends the type it already has
+        changes nothing, or fixing a title would pin the upload default (or
+        the detector's guess). A change sent with `expected_document_type` -
+        the type the form showed when the person chose - is refused (409)
+        if the type has moved since: that choice was made against a type the
+        document no longer has, and recorded as a person's it would keep the
+        detector from ever correcting it. The edit form sends the type only
+        when the person changed it, and always with the type it was changed
+        from.
         """
         document = serializer.instance
-        new_type = serializer.validated_data.get("document_type")
-        if new_type is None or new_type == document.document_type:
-            serializer.save()
-            return
+        expected = serializer.validated_data.pop("expected_document_type", None)
+        with transaction.atomic():
+            document.refresh_from_db(from_queryset=Document.objects.select_for_update())
+            new_type = serializer.validated_data.get("document_type")
+            if new_type is None or new_type == document.document_type:
+                serializer.save()
+                return
+            if expected is not None and expected != document.document_type:
+                raise TypeChangedMeanwhile(document.document_type)
 
-        serializer.save(
-            document_type_source=Document.TypeSource.USER, type_confidence=None
-        )
-        if document.current_version_id:
-            # Fields under the new type's schema, and a brief whose questions
-            # follow them - not a reprocess: OCR and indexing are unchanged.
-            version_id = document.current_version_id
-            transaction.on_commit(
-                lambda: enqueue_enrichment(version_id, Reason.TYPE_CHANGED)
+            serializer.save(
+                document_type_source=Document.TypeSource.USER, type_confidence=None
             )
+            if document.current_version_id:
+                # Fields under the new type's schema, and a brief whose
+                # questions follow them - not a reprocess: OCR and indexing
+                # are unchanged.
+                version_id = document.current_version_id
+                transaction.on_commit(
+                    lambda: enqueue_enrichment(version_id, Reason.TYPE_CHANGED)
+                )
 
     def create(self, request, *args, **kwargs):
         serializer = DocumentCreateSerializer(
@@ -493,7 +531,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def extraction(self, request, pk=None):
-        """Every field-extraction pass recorded for the current version."""
+        """The fields of the document as it stands now, newest first.
+
+        Extractions of the live pass under the document's current type - the
+        ones `counts.fields_found` and the brief describe - and no others.
+        An extraction under a type the document no longer has (a person
+        corrected the type, or a reprocess put back General) lists another
+        schema's fields as this document's, and an earlier pass's spans
+        point into text the reader no longer sees. Empty when the current
+        type has no schema or has not been extracted yet, and for a
+        quarantined version, whose text is withdrawn.
+        """
         document = self.get_object()
         version = document.current_version
 
@@ -503,7 +551,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        results = version.extraction_results.prefetch_related("extracted_fields")
+        content = _live_content(version)
+        if content is None:
+            return Response([])
+        results = content.extraction_results.filter(
+            document_type=document.document_type
+        ).prefetch_related("extracted_fields")
         return Response(ExtractionResultSerializer(results, many=True).data)
 
     @action(detail=True, methods=["get"])

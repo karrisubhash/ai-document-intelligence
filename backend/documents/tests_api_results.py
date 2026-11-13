@@ -113,6 +113,11 @@ class ResultEndpointTests(AuthenticatedAPITestCase):
 
     def test_extraction_returns_fields_that_were_not_found_too(self):
         """A NOT_FOUND row is the denominator recall needs."""
+        # The extraction listed is the one under the document's own type
+        # (tests_insights_api: fields are those of the current type).
+        Document.objects.filter(pk=self.document.pk).update(
+            document_type=Document.DocumentType.REGULATION
+        )
         result = ExtractionResult.objects.create(
             document_version=self.version,
             document_content=self.content,

@@ -6,20 +6,27 @@ document is a 404 identical to a missing one, and never appears in another
 document's related list, the corpus suggestions or the deadlines.
 """
 
+import math
+import random
 from unittest import mock
 
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework.throttling import SimpleRateThrottle
 
 from accounts.models import UserProfile
+from documents.api import insights as briefs
+from documents.api.views import DocumentViewSet
 from documents.models import (
     AuditLog,
     ClassificationResult,
     Collection,
     Document,
+    DocumentCentroid,
+    DocumentContent,
     DocumentInsight,
     ExtractionResult,
     ProcessingJob,
@@ -236,6 +243,87 @@ class RelatedEndpointTests(InsightsApiTestCase):
         ids = [row["id"] for row in response.data["results"]]
         self.assertEqual(ids[0], similar.pk)
         self.assertGreater(response.data["results"][0]["similarity"], 0.9)
+
+    def semantic_neighbours_behind_a_crowd(self, crowd=250):
+        """A readable neighbour, and `crowd` centroids nearer still that the
+        caller may not read.
+
+        The crowd is what a larger institution's index holds in front of a
+        small department's documents: other departments' documents, earlier
+        passes, other models' vectors. Here they are passes of a Physics
+        document, each a hair from `first` - all nearer than the readable
+        neighbour, and more of them than the index's 200-candidate probe.
+        """
+        reset_provider_cache()
+        self.addCleanup(reset_provider_cache)
+        first = self.document(self.upload_text(HOSTEL, title="Hostel A"))
+        similar = self.document(
+            self.upload_text(HOSTEL.replace("Visitors", "Guests"), title="Hostel B")
+        )
+        self.as_outsider()
+        hidden = self.document(self.upload_text(CIRCULAR, title="Physics circular"))
+        self.client.force_authenticate(user=self.user)
+
+        mine = DocumentCentroid.objects.get(
+            document_content=first.current_version.current_content, semantic=True
+        )
+        version = hidden.current_version
+        passes = DocumentContent.objects.bulk_create(
+            DocumentContent(document_version=version, processing_version="earlier")
+            for _ in range(crowd)
+        )
+        noise = random.Random(7)
+        rows = []
+        for content in passes:
+            vector = [value + noise.uniform(-1e-3, 1e-3) for value in mine.embedding]
+            norm = math.sqrt(sum(value * value for value in vector))
+            rows.append(
+                DocumentCentroid(
+                    document_content=content,
+                    document_version=version,
+                    model_name=mine.model_name,
+                    model_version=mine.model_version,
+                    dimensions=len(vector),
+                    semantic=True,
+                    chunk_count=1,
+                    embedding=[value / norm for value in vector],
+                )
+            )
+        DocumentCentroid.objects.bulk_create(rows)
+
+        # Planned as a table of real size is planned: through the
+        # nearest-neighbour index. A test table is small enough that sorting
+        # every row costs less, and that plan never shows what the index does.
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL enable_seqscan = off")
+            cursor.execute("SET LOCAL enable_sort = off")
+        return first, similar
+
+    @override_settings(DOCUMENT_EMBEDDING_PROVIDER=SEMANTIC)
+    def test_a_readable_neighbour_is_found_behind_nearer_ones_the_caller_cannot_read(
+        self,
+    ):
+        first, similar = self.semantic_neighbours_behind_a_crowd()
+
+        response = self.client.get(f"/api/v1/documents/{first.pk}/related/")
+        self.assertEqual(response.data["method"], "semantic")
+        self.assertEqual([row["id"] for row in response.data["results"]], [similar.pk])
+
+    @override_settings(DOCUMENT_EMBEDDING_PROVIDER=SEMANTIC)
+    def test_past_the_exact_limit_the_index_scan_goes_on_until_it_finds_them(self):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
+            )
+            installed = tuple(int(part) for part in cursor.fetchone()[0].split(".")[:2])
+        if installed < (0, 8):
+            self.skipTest("iterative index scans need pgvector 0.8")
+        first, similar = self.semantic_neighbours_behind_a_crowd()
+
+        with mock.patch.object(briefs, "RELATED_EXACT_MAX", 0):
+            response = self.client.get(f"/api/v1/documents/{first.pk}/related/")
+        self.assertEqual(response.data["method"], "semantic")
+        self.assertEqual([row["id"] for row in response.data["results"]], [similar.pk])
 
     def test_related_is_throttled_as_an_insights_read(self):
         first = self.document(self.upload_text(HOSTEL))
@@ -457,6 +545,123 @@ class DocumentShapeTests(InsightsApiTestCase):
             format="multipart",
         )
         self.assertEqual(response.data["document_type_source"], "auto")
+
+    def test_a_type_chosen_against_a_type_that_has_since_moved_is_refused(self):
+        # The edit form opened on General; the detector has since made the
+        # document a circular. The person picked Policy over "General" - a
+        # type the document no longer has - so it is not recorded as theirs.
+        document = self.document(self.upload_text(CIRCULAR))
+        with self.captureOnCommitCallbacks(execute=True) as queued:
+            response = self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {
+                    "title": "Renamed",
+                    "document_type": "POLICY",
+                    "expected_document_type": "GENERAL",
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Circular", response.data["document_type"][0])
+        self.assertEqual(queued, [])
+        document.refresh_from_db()
+        self.assertEqual(document.title, "Doc")
+        self.assertEqual(document.document_type, "CIRCULAR")
+        self.assertEqual(document.document_type_source, "auto")
+        self.assertIsNotNone(document.type_confidence)
+
+    def test_a_type_chosen_against_the_current_type_is_a_persons_choice(self):
+        document = self.document(self.upload_text(CIRCULAR))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {"document_type": "POLICY", "expected_document_type": "CIRCULAR"},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["document_type"], "POLICY")
+        self.assertEqual(response.data["document_type_source"], "user")
+        self.assertNotIn("expected_document_type", response.data)
+
+    def test_a_title_edit_never_writes_back_a_type_read_before_the_detector_set_it(
+        self,
+    ):
+        document = self.document(self.upload_text(CIRCULAR))
+        # What the request read a moment before the detector's UPDATE
+        # committed: the upload default.
+        stale = Document.objects.get(pk=document.pk)
+        stale.document_type = Document.DocumentType.GENERAL
+        stale.document_type_source = Document.TypeSource.DEFAULT
+        stale.type_confidence = None
+        with mock.patch.object(DocumentViewSet, "get_object", return_value=stale):
+            response = self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {"title": "Renamed"},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertEqual(document.title, "Renamed")
+        self.assertEqual(document.document_type, "CIRCULAR")
+        self.assertEqual(document.document_type_source, "auto")
+        self.assertIsNotNone(document.type_confidence)
+
+    def test_fields_are_those_of_the_current_type_after_a_change_to_one_with_none(
+        self,
+    ):
+        document = self.document(self.upload_text(CIRCULAR))
+        url = f"/api/v1/documents/{document.pk}/extraction/"
+        self.assertEqual(
+            [row["document_type"] for row in self.client.get(url).data], ["CIRCULAR"]
+        )
+
+        # OTHER has no schema in the bundled pack: nothing is extracted.
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {"document_type": "OTHER"},
+                format="multipart",
+            )
+
+        self.assertEqual(self.client.get(url).data, [])
+        detail = self.client.get(f"/api/v1/documents/{document.pk}/").data
+        self.assertEqual(detail["counts"]["fields_found"], 0)
+
+    def test_fields_are_those_of_the_live_pass_only(self):
+        # An earlier pass's spans point into text the reader no longer sees.
+        document = self.document(self.upload_text(CIRCULAR))
+        version = document.current_version
+        live = version.current_content
+        earlier = DocumentContent.objects.create(
+            document_version=version, processing_version="earlier"
+        )
+        ExtractionResult.objects.create(
+            document_version=version,
+            document_content=earlier,
+            model_name="rule-extractor",
+            model_version="v0",
+            schema_name="institutional",
+            schema_version="v0",
+            document_type="CIRCULAR",
+        )
+
+        data = self.client.get(f"/api/v1/documents/{document.pk}/extraction/").data
+        self.assertTrue(data)
+        self.assertEqual({row["document_content"] for row in data}, {live.pk})
+
+    def test_a_quarantined_version_lists_no_fields(self):
+        document = self.document(self.upload_text(CIRCULAR))
+        ProcessingJob.objects.create(
+            document_version=document.current_version,
+            status=ProcessingJob.Status.FAILED,
+            error_code=ErrorCode.MALWARE_DETECTED,
+        )
+        response = self.client.get(f"/api/v1/documents/{document.pk}/extraction/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
 
     def test_the_source_cannot_be_written_directly(self):
         document = self.document(self.upload_text("Minutes of the meeting."))

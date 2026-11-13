@@ -91,7 +91,7 @@ the caller is refused.
 | GET | `/api/documents/` | read | Paginated (50); each row carries `can_manage`. `search`, `status`, `document_type`, `department`, `owner` (id or `me`), `created_after/before`, `updated_after/before`, `ordering` (≤3 of `id,title,status,document_type,created_at,updated_at`, `-` for descending), `archived` = `false` (default) / `true` / `all` |
 | POST | `/api/documents/` | any signed-in user | multipart `title`, `document_type`, `file`, and `department` (system admins only; must be a registered department). **202** — processing is asynchronous |
 | GET | `/api/documents/{id}/` | read | Includes `current_version`, `owner_username`, `is_archived`, `can_manage` |
-| PATCH | `/api/documents/{id}/` | manage | multipart `title`, `document_type` |
+| PATCH | `/api/documents/{id}/` | manage | multipart `title`, `document_type`, and optionally `expected_document_type`: the type the change is made from. **409** `{"document_type": [...]}`, saving nothing, when the stored type is no longer that one |
 | DELETE | `/api/documents/{id}/` | manage | Permanent: versions, content, index and files |
 | POST | `/api/documents/bulk-delete/` | manage (each) | JSON, exactly one of `{"ids": [...]}` (≤100) or `{"all": true, "filters": {<listing parameters>}, "as_of"?, "preview"?}`. Unknown keys, inside `filters` too, are **400** - never ignored. **200** `{deleted, forbidden, not_found, failed}`, each a list of ids; a document the caller cannot see is `not_found`; `failed` means its delete itself failed (e.g. still being processed) and the rest of the batch went on. `all` deletes at most 100 per request, only documents created by `as_of`, and adds `remaining` (repeat, sending back `as_of`, until 0), `skipped` (matching and visible, but not the caller's to delete) and `as_of` (the snapshot; now, if none was sent). `preview: true` deletes nothing and answers those counts. Throttled (`THROTTLE_BULK_DELETE`, 300/hour). Audited per document as `DOCUMENT_DELETE` with `bulk: true` |
 | POST | `/api/documents/{id}/archive/` · `/restore/` | manage | Archived documents leave search, answers and the default listing |
@@ -101,7 +101,7 @@ the caller is refused.
 | GET | `/api/documents/{id}/processing/` | read | Every job with its stage events |
 | GET | `/api/documents/{id}/content/` | read | Page texts of the live extraction pass |
 | GET | `/api/documents/{id}/classification/` | read | Every verdict, with model and version |
-| GET | `/api/documents/{id}/extraction/` | read | Every field-extraction pass; one row per declared field, including NOT_FOUND and CONFLICTED |
+| GET | `/api/documents/{id}/extraction/` | read | The field extractions of the live extraction pass under the document's current type, newest first; one row per declared field, including NOT_FOUND and CONFLICTED. Empty when that type has no schema or has not been extracted yet, and for a quarantined version |
 | GET | `/api/documents/{id}/tables/` · `/figures/` | read | Detected tables (cells + span) and located figures |
 | GET | `/api/documents/{id}/chunks/` | read | Indexed chunks with page, span and embedding identity (paginated) |
 | GET | `/api/documents/{id}/source/?chunk=C` | read | The page text of the pass chunk C came from, its span, and `is_current` |
@@ -139,7 +139,11 @@ that changes `document_type`, share the per-user `insights` throttle (`THROTTLE_
 `current_version.file` (the storage key) is no longer returned anywhere. A **PATCH** that
 *changes* `document_type` sets `document_type_source` to `user`, clears `type_confidence`
 and queues re-extraction under the new type plus a new brief (not a reprocess); sending the
-unchanged type with a title edit changes nothing. **POST `/api/documents/`** (and its
+unchanged type with a title edit changes nothing. Sent with `expected_document_type` (the
+type the client showed when the person chose), a change is refused with **409** if the
+stored type has moved since - the type detector sets it while a document is processing - and
+nothing is saved; the web client sends `document_type` only when the person changed it, and
+always with `expected_document_type`. **POST `/api/documents/`** (and its
 idempotent replay) adds `possible_duplicates`: `[{"id", "title", "status", "is_archived",
 "is_current_version"}]` — other documents the uploader can read that hold a file with the
 same SHA-256 (at most 5). It never blocks the upload. **GET `.../classification/`** rows add
@@ -183,8 +187,11 @@ unknown`. `ai` is reserved for an on-demand AI brief: `{"summary", "questions", 
 "semantic" | "lexical" | "unavailable"}`. At most 5, readable, live (processed, not
 quarantined) and not archived. `semantic`: cosine between document centroids (mean chunk
 vectors of a semantic embedding model), below `DOCUMENT_RELATED_MIN_SIMILARITY` (0.5) not
-shown. `lexical` (no semantic vectors): harmonic mean of key-phrase overlap both ways, below
-0.2 not shown. `near_duplicate`: similarity ≥ `DOCUMENT_NEAR_DUPLICATE_SIMILARITY` (0.97), or
+shown; ranked only among the live passes of documents the caller can read - exactly, up
+to 5,000 of them, and past that through the HNSW index with an iterative scan (pgvector
+0.8+), so documents the caller cannot read never crowd readable ones out. `lexical` (no
+semantic vectors): harmonic mean of key-phrase overlap both ways, below 0.2 not shown.
+`near_duplicate`: similarity ≥ `DOCUMENT_NEAR_DUPLICATE_SIMILARITY` (0.97), or
 the same file (SHA-256) or the same text.
 
 **`GET /api/v1/documents/{id}/thumbnail/`** → the image (`image/webp`, or `image/png`), ~320

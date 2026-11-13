@@ -10,7 +10,7 @@ import hashlib
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import connection, transaction
+from django.db import DatabaseError, connection, transaction
 from django.db.models import Case, F, IntegerField, Value, When
 from django.utils import timezone
 from pgvector.django import CosineDistance
@@ -33,6 +33,10 @@ IN_FLIGHT = (
     Document.Status.PROCESSING,
 )
 RELATED_LIMIT = 5
+# Up to this many readable documents, related documents are ranked by their
+# exact distance to every one of them; past it, through the HNSW index. See
+# _nearest_centroids.
+RELATED_EXACT_MAX = 5000
 # Weighted key-phrase overlap below this is not "related" (lexical method).
 LEXICAL_MIN_SIMILARITY = 0.2
 LEXICAL_PHRASES = 12
@@ -189,6 +193,78 @@ def _exact_twins(document, version, content, candidates):
     return twins
 
 
+class _ExactCosineDistance(CosineDistance):
+    """`embedding <=> vector`, written as the function that operator calls.
+
+    The same number, in a form the HNSW index cannot order by: Postgres
+    computes it for every row the filter kept and sorts those, exactly,
+    instead of walking the index and filtering what the walk returned.
+    """
+
+    function = "cosine_distance"
+    arg_joiner = ", "
+
+
+def _iterative_scan(cursor):
+    """Let an HNSW scan go on past its first `ef_search` candidates until
+    enough rows pass the filter (pgvector 0.8+; bounded by
+    `hnsw.max_scan_tuples`). An older pgvector does not know the setting,
+    and the query then runs as before, on the larger ef_search alone."""
+    try:
+        with transaction.atomic():
+            cursor.execute("SET LOCAL hnsw.iterative_scan = strict_order")
+    except DatabaseError:
+        pass
+
+
+def _nearest_centroids(centroid, candidates):
+    """Centroids of the readable documents' live passes, nearest first.
+
+    Authorization first: what is ranked is the live pass of each document
+    the caller can read, and a nearer row they cannot read can neither
+    appear nor push one they can out of the list. The second half is the
+    hard part. An HNSW scan returns at most `hnsw.ef_search` rows and
+    filters only those, so where the caller reads a small share of the
+    index - one department of many, beside every earlier pass and other
+    models' vectors - the nearest 200 were often all someone else's, and
+    Related came back empty beside close documents the caller can read.
+
+    So up to RELATED_EXACT_MAX readable documents the ranking is exact: an
+    indexed lookup and one distance per live pass, ordered by a distance the
+    index cannot serve (and by id between equals). At that size it costs
+    little, and finds every neighbour. A larger readable set - an
+    administrator, a large department - is a large share of the index and
+    is ranked through it, with an iterative scan that goes on past
+    ef_search until enough rows pass the filter.
+    """
+    rows = DocumentCentroid.objects.filter(
+        model_name=centroid.model_name,
+        model_version=centroid.model_version,
+        document_content__in=candidates.values("current_version__current_content"),
+    ).select_related("document_version__document")
+    limit = RELATED_LIMIT * 3
+
+    readable = candidates.values("pk")[: RELATED_EXACT_MAX + 1].count()
+    if readable <= RELATED_EXACT_MAX:
+        return list(
+            rows.annotate(
+                distance=_ExactCosineDistance("embedding", centroid.embedding)
+            ).order_by("distance", "pk")[:limit]
+        )
+
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            # More candidates per probe, and more probes when they are not
+            # enough (see _iterative_scan).
+            cursor.execute("SET LOCAL hnsw.ef_search = 200")
+            _iterative_scan(cursor)
+        return list(
+            rows.annotate(
+                distance=CosineDistance("embedding", centroid.embedding)
+            ).order_by("distance")[:limit]
+        )
+
+
 def related_documents(user, document):
     """(results, method). method: semantic | lexical | unavailable."""
     version = document.current_version
@@ -207,26 +283,8 @@ def related_documents(user, document):
     )
     if centroid is not None:
         minimum = getattr(settings, "DOCUMENT_RELATED_MIN_SIMILARITY", 0.5)
-        with transaction.atomic():
-            # More candidates per index probe: the authorization filter is
-            # applied after the approximate search, and the default 40 could
-            # return fewer than five readable neighbours.
-            with connection.cursor() as cursor:
-                cursor.execute("SET LOCAL hnsw.ef_search = 200")
-            rows = list(
-                DocumentCentroid.objects.filter(
-                    model_name=centroid.model_name,
-                    model_version=centroid.model_version,
-                    document_version__document__in=candidates.values("pk"),
-                    document_version=F("document_version__document__current_version"),
-                    document_content=F("document_version__current_content"),
-                )
-                .annotate(distance=CosineDistance("embedding", centroid.embedding))
-                .select_related("document_version__document")
-                .order_by("distance")[: RELATED_LIMIT * 3]
-            )
         results, seen = [], set()
-        for row in rows:
+        for row in _nearest_centroids(centroid, candidates):
             related = row.document_version.document
             similarity = max(0.0, 1.0 - float(row.distance))
             if related.pk in seen or (similarity < minimum and related.pk not in twins):

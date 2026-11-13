@@ -6,7 +6,7 @@ import { usePolling, useResource } from "../../api/hooks";
 import type { DocumentDetail, ExtractedField, ProcessingJob } from "../../api/types";
 import { formatDateTime, formatDuration, formatPercent, formatRelative } from "../../lib/format";
 import { extensionOf, isPreviewable } from "../../lib/files";
-import { EVENT_TONE, STAGE_LABEL, humanize } from "../../lib/labels";
+import { EVENT_TONE, STAGE_LABEL, TYPE_LABEL, humanize } from "../../lib/labels";
 import PageText from "../PageText";
 import { Icon } from "../icons";
 import { Alert, Badge, Button, EmptyState, ErrorState, Skeleton, Spinner } from "../ui";
@@ -220,19 +220,28 @@ function fieldLink(documentId: number, field: ExtractedField) {
 }
 
 export function FieldsPanel({ document }: { document: DocumentDetail }) {
-  const results = useResource(() => api.extraction(document.id), [document.id, document.status]);
+  // Loaded again when the type changes: a document's fields are those of
+  // its type's schema, and a new type replaces them.
+  const results = useResource(
+    () => api.extraction(document.id),
+    [document.id, document.status, document.document_type],
+  );
 
   if (results.loading && !results.data) return <Skeleton lines={6} />;
   if (results.error && results.status !== 404) {
     return <ErrorState error={results.error} onRetry={results.reload} />;
   }
-  const latest = results.data?.[0];
+  // The newest extraction under the type the document has now. The API
+  // lists only those; checked here too, so a list loaded under the old type
+  // is never shown as this one's while the new one loads.
+  const latest = results.data?.find((result) => result.document_type === document.document_type);
   if (!latest) {
     return (
       <EmptyState title="No fields extracted" icon="list-checks">
-        Field extraction has not run on this version, or is not enabled on this
-        installation. When it runs, every declared field is listed here — including the
-        ones it could not find.
+        Nothing has been extracted under this document's type ({TYPE_LABEL[document.document_type]}).
+        Some types have no fields to extract. For the others, extraction runs after processing and
+        again whenever the type is changed — where it is enabled on this installation — and lists
+        every declared field, including the ones it could not find.
       </EmptyState>
     );
   }
