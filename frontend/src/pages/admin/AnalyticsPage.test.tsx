@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,6 +108,12 @@ function report(empty = false): AnalyticsReport {
   };
 }
 
+/** A report that asked `questions` questions, to tell one from another on screen. */
+function withQuestions(questions: number): AnalyticsReport {
+  const base = report();
+  return { ...base, kpis: { ...base.kpis, questions: kpi([questions, 0, 0, 0, 0, 0, 0], 10) } };
+}
+
 const FLAG: FeedbackItem = {
   id: 3,
   rating: "INCORRECT",
@@ -188,6 +194,30 @@ describe("AnalyticsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(load).toHaveBeenLastCalledWith("90d", true);
     expect(await screen.findByText(/Refreshed several times already/)).toBeInTheDocument();
+  });
+
+  it("puts a refreshed report only on the period it was asked for", async () => {
+    let deliver: (value: AnalyticsReport) => void = () => undefined;
+    const recomputed = new Promise<AnalyticsReport>((resolve) => (deliver = resolve));
+    const load = vi
+      .spyOn(analyticsApi, "report")
+      .mockImplementation((range, fresh) =>
+        fresh ? recomputed : Promise.resolve(range === "7d" ? withQuestions(723) : report()),
+      );
+    renderAt();
+    await heading();
+    expect(await screen.findByText("16")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(load).toHaveBeenLastCalledWith("30d", true);
+    // The recompute is slow and throttled; the period changes meanwhile.
+    await userEvent.click(within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: "7 days" }));
+    expect(await screen.findByText("723")).toBeInTheDocument();
+    await act(async () => deliver(withQuestions(99)));
+
+    // The 30-day figures are not shown under "7 days".
+    expect(screen.getByText("723")).toBeInTheDocument();
+    expect(screen.queryByText("99")).not.toBeInTheDocument();
   });
 
   it("looks intentional on a new installation", async () => {
