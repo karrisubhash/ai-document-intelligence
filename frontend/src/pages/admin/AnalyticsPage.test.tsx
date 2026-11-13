@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import type { Me } from "../../api/types";
 import App from "../../App";
 import { AuthProvider } from "../../auth/AuthContext";
 import { ToastProvider } from "../../components/ui";
+import { formatLongDay } from "../../lib/format";
 
 const ADMIN: Me = {
   id: 1,
@@ -107,13 +108,17 @@ function report(empty = false): AnalyticsReport {
   };
 }
 
+/** A report that asked `questions` questions, to tell one from another on screen. */
+function withQuestions(questions: number): AnalyticsReport {
+  const base = report();
+  return { ...base, kpis: { ...base.kpis, questions: kpi([questions, 0, 0, 0, 0, 0, 0], 10) } };
+}
+
 const FLAG: FeedbackItem = {
   id: 3,
   rating: "INCORRECT",
   comment: "It closes at 8.",
-  created_at: new Date().toISOString(),
-  message_id: 40,
-  answered_at: new Date().toISOString(),
+  rated_on: "2026-11-07",
   department: "Computer Science",
   question: null,
   answer_excerpt: "The lab closes at 6 pm. [1]",
@@ -191,6 +196,30 @@ describe("AnalyticsPage", () => {
     expect(await screen.findByText(/Refreshed several times already/)).toBeInTheDocument();
   });
 
+  it("puts a refreshed report only on the period it was asked for", async () => {
+    let deliver: (value: AnalyticsReport) => void = () => undefined;
+    const recomputed = new Promise<AnalyticsReport>((resolve) => (deliver = resolve));
+    const load = vi
+      .spyOn(analyticsApi, "report")
+      .mockImplementation((range, fresh) =>
+        fresh ? recomputed : Promise.resolve(range === "7d" ? withQuestions(723) : report()),
+      );
+    renderAt();
+    await heading();
+    expect(await screen.findByText("16")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(load).toHaveBeenLastCalledWith("30d", true);
+    // The recompute is slow and throttled; the period changes meanwhile.
+    await userEvent.click(within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: "7 days" }));
+    expect(await screen.findByText("723")).toBeInTheDocument();
+    await act(async () => deliver(withQuestions(99)));
+
+    // The 30-day figures are not shown under "7 days".
+    expect(screen.getByText("723")).toBeInTheDocument();
+    expect(screen.queryByText("99")).not.toBeInTheDocument();
+  });
+
   it("looks intentional on a new installation", async () => {
     vi.spyOn(analyticsApi, "report").mockResolvedValue(report(true));
     renderAt();
@@ -207,6 +236,10 @@ describe("AnalyticsPage", () => {
     expect(await screen.findByText("“It closes at 8.”", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("The lab closes at 6 pm. [1]")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Lab rules" })).toHaveAttribute("href", "/documents/12");
+    // Dated to the day it was rated: the queue is sent no time to show.
+    expect(document.querySelector('.feedback-item time[datetime="2026-11-07"]')).toHaveTextContent(
+      formatLongDay("2026-11-07"),
+    );
     expect(screen.getByText(/Questions are visible to system administrators only/)).toBeInTheDocument();
     expect(screen.getByText("Nothing relevant enough")).toBeInTheDocument();
     expect(await screen.findByText("No benchmark runs yet")).toBeInTheDocument();

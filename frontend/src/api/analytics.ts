@@ -34,9 +34,11 @@ export interface FeedbackItem {
   id: number;
   rating: FeedbackRating;
   comment: string;
-  created_at: string;
-  message_id: number;
-  answered_at: string;
+  /**
+   * "YYYY-MM-DD", the day it was rated, in the analytics time zone. Never a
+   * time: the audit log's CHAT row for the answer would name the rater.
+   */
+  rated_on: string;
   department: string;
   /** Only for a system administrator, and only on a flag; null otherwise. */
   question: string | null;

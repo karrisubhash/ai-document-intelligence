@@ -175,6 +175,14 @@
   font-size: 12.5px;
 }
 
+.onboarding-control {
+  margin-top: var(--space-1-5);
+}
+
+.onboarding-control .input {
+  max-width: 100%;
+}
+
 /* --- Upcoming dates --------------------------------------------------------- */
 
 .deadline-list {

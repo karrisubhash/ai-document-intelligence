@@ -4,6 +4,7 @@ activity block (documents.operations.analytics / .feedback)."""
 import json
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from django.contrib import admin
 from django.core.cache import cache
@@ -433,6 +434,18 @@ class FeedbackAnalyticsTests(AnalyticsTestCase):
         self.assertIsNone(department_view["feedback"]["flagged"][0]["question"])
         self.assertNotIn("hostel curfew", json.dumps(department_view))
 
+    def test_a_flagged_answer_is_dated_to_the_day_only(self):
+        # Built like a review-queue item, so dated like one: nothing to
+        # match against the audit log's CHAT rows (see FeedbackQueueTests).
+        rate(ask(self.physics), Feedback.Rating.INCORRECT)
+
+        for user in (self.root, self.physics_admin):
+            with self.subTest(user=user.username):
+                item = self.report(user, range="7d")["feedback"]["flagged"][0]
+                self.assertEqual(item["rated_on"], day_of(0))
+                for field in ("created_at", "answered_at", "message_id"):
+                    self.assertNotIn(field, item)
+
 
 class DocumentAnalyticsTests(AnalyticsTestCase):
     def test_uploads_runs_failures_and_stage_durations(self):
@@ -783,6 +796,68 @@ class FeedbackQueueTests(AnalyticsTestCase):
         item = next(i for i in self.items(self.physics_admin) if i["id"] == feedback.id)
         self.assertLessEqual(len(item["answer_excerpt"]), 281)
         self.assertTrue(item["answer_excerpt"].endswith("…"))
+
+    def test_nothing_dates_a_rating_closer_than_its_day(self):
+        # ChatView writes a CHAT audit row under the asker's name within
+        # milliseconds of every answer, an administrator reads those rows,
+        # and only the asker can rate the answer: an exact answer or rating
+        # time here named the rater. The answer's id is a clock as well -
+        # ids are handed out in order, and the reader's own messages say when.
+        exact = at_noon(0) + timedelta(seconds=7, microseconds=512331)
+        Message.objects.filter(pk=self.wrong.message_id).update(created_at=exact)
+        Feedback.objects.filter(pk=self.wrong.pk).update(
+            created_at=exact + timedelta(seconds=4)
+        )
+
+        for user in (self.physics_admin, self.root):
+            with self.subTest(user=user.username):
+                items = self.items(user)
+                item = next(i for i in items if i["id"] == self.wrong.id)
+                self.assertEqual(item["rated_on"], day_of(0))
+                for field in ("created_at", "answered_at", "message_id"):
+                    self.assertNotIn(field, item)
+                # No time of day anywhere on the page.
+                self.assertNotRegex(json.dumps(items), r"\d\d:\d\d")
+
+    def test_since_names_a_day_not_an_instant(self):
+        # A bound to the second, asked again a little later each time, would
+        # tell to the second when an answer was rated: the time the items
+        # no longer carry.
+        just_after = (at_noon(0) + timedelta(seconds=1)).isoformat()
+        self.assertIn(
+            self.wrong.id,
+            [item["id"] for item in self.items(self.physics_admin, since=just_after)],
+        )
+        late_yesterday = (at_noon(1) + timedelta(hours=11)).isoformat()
+        self.assertEqual(
+            [
+                item["id"]
+                for item in self.items(self.physics_admin, since=late_yesterday)
+            ],
+            [self.wrong.id, self.good.id],
+        )
+        # An instant with no day in the analytics time zone is refused, not
+        # a 500.
+        response = client_for(self.root).get(
+            FEEDBACK_URL, {"since": "0001-01-01T00:00:00+05:00"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_the_day_is_the_analytics_time_zones(self):
+        zone = ZoneInfo("Asia/Kolkata")
+        with override_settings(ANALYTICS_TIME_ZONE="Asia/Kolkata"):
+            # 02:00 in India is 20:30 the day before in UTC.
+            day = timezone.localdate(timezone.now(), zone)
+            Feedback.objects.filter(pk=self.wrong.pk).update(
+                created_at=datetime.combine(day, time(2), tzinfo=zone)
+            )
+            item = next(i for i in self.items(self.root) if i["id"] == self.wrong.id)
+            self.assertEqual(item["rated_on"], day.isoformat())
+            # The same day as `since`: a bare date starts at midnight there.
+            self.assertIn(
+                self.wrong.id,
+                [item["id"] for item in self.items(self.root, since=day.isoformat())],
+            )
 
     def test_the_page_costs_the_same_queries_however_long(self):
         def count():

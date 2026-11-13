@@ -200,31 +200,56 @@ export function useDebouncedValue<T>(value: T, delayMs = 300): T {
 
 /**
  * An explicit outcome, because `undefined` cannot tell a failed call from a
- * successful one that returns nothing (a 204 DELETE).
+ * successful one that returns nothing (a 204 DELETE). `superseded`: the
+ * action is `latest` and a later call started before this one settled, so
+ * this outcome is not to be used.
  */
-export type ActionResult<R> = { ok: true; value: R } | { ok: false; error: unknown };
+export type ActionResult<R> =
+  | { ok: true; value: R }
+  | { ok: false; error: unknown; superseded?: boolean };
+
+export interface ActionOptions {
+  /**
+   * Only the latest call counts. A call that settles after a later one
+   * started returns `{ok: false, superseded: true}`, whatever the server
+   * said, and leaves `pending` and `error` to the later call - for an action
+   * started again as its inputs change (a search re-run on each filter),
+   * where an older, slower answer must never replace a newer one.
+   */
+  latest?: boolean;
+}
 
 /**
  * Runs an async action with pending and error state, for buttons and forms.
  * The error is returned rather than thrown into React, so the caller decides
  * whether it belongs inline, in a toast, or on a field.
  */
-export function useAction<A extends unknown[], R>(action: (...args: A) => Promise<R>) {
+export function useAction<A extends unknown[], R>(
+  action: (...args: A) => Promise<R>,
+  options: ActionOptions = {},
+) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const actionRef = useRef(action);
   actionRef.current = action;
+  const latestOnly = useRef(options.latest ?? false);
+  latestOnly.current = options.latest ?? false;
+  const calls = useRef(0);
 
   const run = useCallback(async (...args: A): Promise<ActionResult<R>> => {
+    const call = ++calls.current;
+    const counts = () => !latestOnly.current || call === calls.current;
     setPending(true);
     setError(null);
     try {
-      return { ok: true, value: await actionRef.current(...args) };
+      const value = await actionRef.current(...args);
+      return counts() ? { ok: true, value } : { ok: false, error: null, superseded: true };
     } catch (caught) {
+      if (!counts()) return { ok: false, error: caught, superseded: true };
       setError(caught);
       return { ok: false, error: caught };
     } finally {
-      setPending(false);
+      if (counts()) setPending(false);
     }
   }, []);
 

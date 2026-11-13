@@ -4,7 +4,7 @@
  * see their department; system administrators see everything. Range and
  * tab live in the URL, so a view can be bookmarked or shared.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { analyticsApi, type AnalyticsRange, type AnalyticsReport, type Kpi } from "../../api/analytics";
@@ -443,6 +443,9 @@ export default function AnalyticsPage() {
   const range = (RANGES.find(([key]) => key === params.get("range"))?.[0] ?? "30d") as AnalyticsRange;
   const tab = TABS.find((item) => item.id === params.get("tab"))?.id ?? "overview";
   const report = useResource(() => analyticsApi.report(range), [range]);
+  // The period on screen now, for a refresh to check when it comes back.
+  const shown = useRef(range);
+  shown.current = range;
   const [refreshing, setRefreshing] = useState(false);
   const data = report.data;
   const days = RANGES.find(([key]) => key === range)?.[1] ?? "";
@@ -455,9 +458,15 @@ export default function AnalyticsPage() {
   };
 
   const refresh = async () => {
+    const requested = range;
     setRefreshing(true);
     try {
-      report.setData(await analyticsApi.report(range, true));
+      const recomputed = await analyticsApi.report(requested, true);
+      // Only onto the period it was asked for. The recompute is slow, and
+      // another period chosen meanwhile (a button, the address) has its own
+      // report on screen by now: setData would put these figures under that
+      // label, and remember them as that period's.
+      if (shown.current === requested) report.setData(recomputed);
     } catch (caught) {
       toast(
         caught instanceof ApiError && caught.status === 429
