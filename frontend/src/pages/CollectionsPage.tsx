@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import { useAction, useResource } from "../api/hooks";
+import { collectionsApi } from "../api/collections";
 import type { Collection } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Icon } from "../components/icons";
@@ -165,6 +166,92 @@ function NewCollectionDialog({
   );
 }
 
+/** Rename a collection or change its description (the server audits it). */
+function EditCollectionDialog({
+  collection,
+  onClose,
+  onSaved,
+}: {
+  collection: Collection;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [name, setName] = useState(collection.name);
+  const [description, setDescription] = useState(collection.description);
+  const save = useAction(() =>
+    collectionsApi.update(collection.id, { name: name.trim(), description }),
+  );
+  const errors = save.error instanceof ApiError ? save.error.fieldErrors() : {};
+  const [missingName, setMissingName] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!name.trim()) {
+      setMissingName(true);
+      return;
+    }
+    const result = await save.run();
+    if (result.ok) {
+      toast(`Collection “${result.value.name}” saved.`);
+      onSaved();
+    }
+  };
+  const close = () => {
+    if (!save.pending) onClose();
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={close}
+      title={`Edit ${collection.name}`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={close} disabled={save.pending}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" form="collection-edit-form" loading={save.pending}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <form id="collection-edit-form" className="stack" onSubmit={submit} noValidate>
+        <Field
+          label="Name"
+          error={errors.name ?? (missingName && !name.trim() ? "Give the collection a name." : null)}
+          required
+        >
+          {(props) => (
+            <input
+              {...props}
+              className="input"
+              value={name}
+              maxLength={120}
+              onChange={(event) => setName(event.target.value)}
+            />
+          )}
+        </Field>
+        <Field label="Description" error={errors.description} hint="Optional. Shown on the collection.">
+          {(props) => (
+            <textarea
+              {...props}
+              className="input"
+              rows={3}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          )}
+        </Field>
+        {save.error && !Object.keys(errors).length ? (
+          <Alert tone="danger">{errorMessage(save.error)}</Alert>
+        ) : null}
+      </form>
+    </Dialog>
+  );
+}
+
 function CollectionCard({
   collection,
   selected,
@@ -195,6 +282,8 @@ function CollectionCard({
   );
   const [pick, setPick] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const navigate = useNavigate();
   const addSelect = useRef<HTMLSelectElement>(null);
   const modeButton = useRef<HTMLButtonElement>(null);
   const change = useAction((ids: number[], add: boolean) =>
@@ -274,19 +363,56 @@ function CollectionCard({
       }
       description={collection.department || undefined}
       actions={
-        collection.can_manage ? (
-          <IconButton
-            icon="trash"
-            size="sm"
-            label={`Delete ${collection.name}`}
-            onClick={() => {
-              remove.clearError();
-              setConfirmingDelete(true);
-            }}
-          />
-        ) : null
+        <>
+          {collection.document_count ? (
+            <>
+              {/* The scope travels in history state, as quick find's does. */}
+              <IconButton
+                icon="search"
+                size="sm"
+                label={`Search in ${collection.name}`}
+                onClick={() => navigate("/search", { state: { collectionId: collection.id } })}
+              />
+              <IconButton
+                icon="sparkles"
+                size="sm"
+                label={`Ask about ${collection.name}`}
+                onClick={() => navigate("/ask", { state: { collectionId: collection.id } })}
+              />
+            </>
+          ) : null}
+          {collection.can_manage ? (
+            <>
+              <IconButton
+                icon="pencil"
+                size="sm"
+                label={`Edit ${collection.name}`}
+                onClick={() => setEditing(true)}
+              />
+              <IconButton
+                icon="trash"
+                size="sm"
+                label={`Delete ${collection.name}`}
+                onClick={() => {
+                  remove.clearError();
+                  setConfirmingDelete(true);
+                }}
+              />
+            </>
+          ) : null}
+        </>
       }
     >
+      {editing ? (
+        <EditCollectionDialog
+          collection={collection}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            onChanged();
+          }}
+        />
+      ) : null}
       {collection.description ? (
         <p className="collection-description">{collection.description}</p>
       ) : null}

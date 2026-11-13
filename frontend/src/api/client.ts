@@ -419,6 +419,8 @@ export interface SearchInput {
   collection_id?: number | null;
   /** Also return passages scored below the relevance floor, after the rest. */
   include_below_floor?: boolean;
+  /** "document": the response also carries `groups`, one per document. */
+  group_by?: "document";
 }
 
 export interface ChatInput {

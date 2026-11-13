@@ -38,6 +38,15 @@ class SearchRequestSerializer(serializers.Serializer):
     # `limit` caps the passages above the floor; every weaker one is
     # appended, so a response can hold more than `limit` passages.
     include_below_floor = serializers.BooleanField(required=False, default=False)
+    # "document": the response also carries `groups` - the passages above
+    # the floor, one entry per document (search.presentation). `results`
+    # is returned either way.
+    group_by = serializers.ChoiceField(
+        choices=[("", "none"), ("document", "document")],
+        required=False,
+        allow_blank=True,
+        default="",
+    )
 
     def validate_limit(self, value):
         ceiling = max_limit()

@@ -88,6 +88,11 @@ class SearchResponse:
     semantic: bool = False
     embedding_model: str = ""
     notes: list = field(default_factory=list)
+    # The same situations as `notes`, as {code, params} for a client to word
+    # for its reader: the notes are diagnostics written for an operator
+    # ("re-process the documents, or check the worker"), and were shown
+    # verbatim to every user. Codes are listed in docs/api/reference.md.
+    notices: list = field(default_factory=list)
     # How the endpoint ordered and selected the hits (`ranking.rank`).
     # Empty/None when nothing was reranked.
     reranker: str = ""
@@ -139,8 +144,18 @@ def authorized_chunks(user):
     ), documents
 
 
-def _why_nothing_is_searchable(user, documents) -> str:
-    """Say which of three different situations produced no results.
+def notice(code: str, **params) -> dict:
+    return {"code": code, "params": params}
+
+
+def _why_nothing_is_searchable(documents, *, everything=None) -> tuple[str, dict]:
+    """Say which of three different situations produced no results, as a
+    note and as a notice.
+
+    `everything` is the caller's authorized documents before their own
+    filters; when they can read something and the filters excluded all of
+    it, the notice says so (FILTERS_EXCLUDE_ALL) - the note keeps its old
+    wording, which said "match the filters" for both.
 
     The note here used to read "no authorized documents match the filters"
     whenever the CHUNK queryset was empty, which conflates a permission
@@ -156,7 +171,13 @@ def _why_nothing_is_searchable(user, documents) -> str:
     """
     visible = documents.count()
     if not visible:
-        return "no authorized documents match the filters"
+        filtered_out = everything is not None and everything.exists()
+        return (
+            "no authorized documents match the filters",
+            notice(
+                "FILTERS_EXCLUDE_ALL" if filtered_out else "NO_ACCESSIBLE_DOCUMENTS"
+            ),
+        )
 
     # Same documents, without the "current version, current pass" bound.
     existing = DocumentChunk.objects.filter(
@@ -166,14 +187,16 @@ def _why_nothing_is_searchable(user, documents) -> str:
     if not existing:
         return (
             f"{visible} authorized document(s), but none of them has been "
-            f"indexed - the INDEXING stage produced no chunks"
+            f"indexed - the INDEXING stage produced no chunks",
+            notice("NOTHING_INDEXED", documents=visible),
         )
 
     return (
         f"{visible} authorized document(s) with {existing} chunk(s), none of "
         f"which belongs to the current version's current extraction pass. "
         f"Re-process the documents, or check that the worker is running the "
-        f"same code as the API"
+        f"same code as the API",
+        notice("STALE_INDEX", documents=visible),
     )
 
 
@@ -369,7 +392,12 @@ def search(
     response = SearchResponse(query=query, authorized_documents=documents.count())
 
     if not queryset.exists():
-        response.notes.append(_why_nothing_is_searchable(user, in_scope))
+        filtered = bool(document_type or department or document_id or collection_id)
+        note, why = _why_nothing_is_searchable(
+            in_scope, everything=documents if filtered else None
+        )
+        response.notes.append(note)
+        response.notices.append(why)
         return response
 
     # The query's embedding needs nothing from the database, so it is started
@@ -388,6 +416,14 @@ def search(
     vector_hits = []
     if provider_note:
         response.notes.append(provider_note)
+        response.notices.append(
+            notice(
+                "MEANING_UNAVAILABLE",
+                reason="unavailable"
+                if provider_note.startswith("embedding provider unavailable")
+                else "not_configured",
+            )
+        )
 
     if provider is not None:
         response.semantic = provider.semantic
@@ -397,6 +433,7 @@ def search(
                 "embeddings are a lexical hashing baseline, not semantic - "
                 "vector results reflect vocabulary overlap, not meaning"
             )
+            response.notices.append(notice("LEXICAL_BASELINE"))
 
         # Embedding the QUERY is a second, separate failure point from
         # loading the provider, and it was unguarded. That cost nothing
@@ -421,6 +458,7 @@ def search(
                 f"query could not be embedded ({type(exc).__name__}) - "
                 f"lexical results only"
             )
+            response.notices.append(notice("MEANING_UNAVAILABLE", reason="failed"))
             response.semantic = False
             logger.warning(
                 "search.query_embedding_failed",

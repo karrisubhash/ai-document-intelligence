@@ -3,8 +3,12 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import { useResource, type Resource } from "../api/hooks";
+<<<<<<< HEAD
 import type { Citation, ConversationSummary, Paginated } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+=======
+import type { Citation, ConversationSummary, DocumentType, Paginated } from "../api/types";
+>>>>>>> v2-search
 import {
   Answer,
   SourceDialog,
@@ -31,6 +35,7 @@ import {
 } from "../components/ui";
 import { EXAMPLE_QUESTIONS } from "../lib/examples";
 import { formatRelative } from "../lib/format";
+import { TYPE_LABEL } from "../lib/labels";
 import { Markdown } from "../lib/markdown";
 
 function fitComposer(box: HTMLTextAreaElement | null) {
@@ -372,6 +377,10 @@ export default function ChatPage() {
     question?: string;
     documentId?: number;
     documentTitle?: string;
+    // From Search: the scope its results came from.
+    collectionId?: number;
+    documentType?: string;
+    department?: string;
   };
   const [scope, setScope] = useState<{ id: number; title: string } | null>(
     handoff.documentId ? { id: handoff.documentId, title: handoff.documentTitle ?? "" } : null,
@@ -379,7 +388,12 @@ export default function ChatPage() {
   // Narrows retrieval to one collection (spec 14) when no single document
   // is in scope. The server re-applies the reader's permissions first.
   const collections = useResource(() => api.collections(), []);
-  const [collectionId, setCollectionId] = useState("");
+  const [collectionId, setCollectionId] = useState(handoff.collectionId ? String(handoff.collectionId) : "");
+  // A type or department a search was narrowed to, until cleared.
+  const [narrowing, setNarrowing] = useState({
+    document_type: handoff.documentType ?? "",
+    department: handoff.department ?? "",
+  });
 
   // Every page loaded so far, newest first. Only the first 50 were ever
   // reachable before; older conversations simply could not be opened.
@@ -523,6 +537,12 @@ export default function ChatPage() {
             : collectionId
               ? { collection_id: Number(collectionId) }
               : {}),
+          ...(scope
+            ? {}
+            : {
+                ...(narrowing.document_type ? { document_type: narrowing.document_type } : {}),
+                ...(narrowing.department ? { department: narrowing.department } : {}),
+              }),
         },
         {
           onDelta: (piece) => patch((turn) => ({ ...turn, streaming: (turn.streaming ?? "") + piece })),
@@ -779,6 +799,30 @@ export default function ChatPage() {
                         ))}
                       </select>
                     </>
+                  ) : null}
+                  {!scope && (narrowing.document_type || narrowing.department) ? (
+                    <span className="scope-chip">
+                      <Icon name="filter" size={14} />
+                      <span className="scope-chip-text">
+                        Only{" "}
+                        <strong>
+                          {[
+                            narrowing.document_type
+                              ? (TYPE_LABEL[narrowing.document_type as DocumentType] ?? narrowing.document_type)
+                              : "",
+                            narrowing.department,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </strong>
+                      </span>
+                      <IconButton
+                        icon="x"
+                        size="sm"
+                        label="Stop narrowing by type and department"
+                        onClick={() => setNarrowing({ document_type: "", department: "" })}
+                      />
+                    </span>
                   ) : null}
                 </div>
                 <Button

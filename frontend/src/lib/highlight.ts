@@ -203,3 +203,94 @@ export function unwrapLines(text: string): string {
   }
   return out.join("\n");
 }
+
+interface Cell {
+  character: string;
+  on: boolean;
+}
+
+/**
+ * unwrapLines, keeping track of which characters were highlighted: the
+ * search highlights the server computes are offsets into the passage as
+ * stored, and unwrapping removes and adds characters. `spans` are UTF-16
+ * offsets into `text`; a space put in where two lines were joined is
+ * highlighted when the words on both sides are.
+ */
+export function unwrapSegments(text: string, spans: [number, number][]): Segment[] {
+  const marked = new Uint8Array(text.length);
+  for (const [start, end] of spans) {
+    for (let index = Math.max(0, start); index < Math.min(end, text.length); index += 1) marked[index] = 1;
+  }
+
+  const lines: Cell[][] = [];
+  let previous = "";
+  let lineStart = 0;
+  for (let index = 0; index <= text.length; index += 1) {
+    if (index < text.length && text[index] !== "\n") continue;
+    let lineEnd = index;
+    if (lineEnd > lineStart && text[lineEnd - 1] === "\r") lineEnd -= 1;
+    const line = text.slice(lineStart, lineEnd);
+    const lead = line.length - line.trimStart().length;
+    const next = line.slice(lead);
+    const last = lines[lines.length - 1];
+    const head = last ? last.map((cell) => cell.character).join("").trimEnd() : "";
+    const joins =
+      // The line before stopped mid-sentence: it is not blank and does not
+      // end with a full stop, colon, semicolon or other sentence end ...
+      /[^.:;!?]$/.test(head) &&
+      // ... and this one carries the sentence on.
+      /^[a-z0-9(]/.test(next) &&
+      !ITEM_START.test(next) &&
+      !COLUMN_GAP.test(previous.trim()) &&
+      !COLUMN_GAP.test(next);
+    if (joins) {
+      while (last.length && /\s/.test(last[last.length - 1].character)) last.pop();
+      const before = last[last.length - 1];
+      const firstOn = Boolean(marked[lineStart + lead]);
+      if (!head.endsWith("-")) last.push({ character: " ", on: Boolean(before?.on && firstOn) });
+      for (let offset = 0; offset < next.length; offset += 1) {
+        last.push({ character: next[offset], on: Boolean(marked[lineStart + lead + offset]) });
+      }
+    } else {
+      lines.push(
+        Array.from(line, (_, offset) => ({ character: line[offset], on: Boolean(marked[lineStart + offset]) })),
+      );
+    }
+    previous = line;
+    lineStart = index + 1;
+  }
+
+  const segments: Segment[] = [];
+  lines.forEach((cells, number) => {
+    const all = number ? [{ character: "\n", on: false }, ...cells] : cells;
+    for (const cell of all) {
+      const tail = segments[segments.length - 1];
+      if (tail && tail.highlighted === cell.on) tail.text += cell.character;
+      else segments.push({ text: cell.character, highlighted: cell.on });
+    }
+  });
+  return segments;
+}
+
+/**
+ * A search passage ready to show: the server's snippet window of `text`,
+ * unwrapped, with the server's highlights. Offsets are code points (API);
+ * `clippedStart`/`clippedEnd` say whether text was cut on either side.
+ */
+export function passageSegments(
+  text: string,
+  highlights: { start: number; end: number }[],
+  snippet?: { start: number; end: number },
+): { segments: Segment[]; clippedStart: boolean; clippedEnd: boolean } {
+  const from = snippet ? toUtf16Offset(text, snippet.start) : 0;
+  const to = snippet ? toUtf16Offset(text, snippet.end) : text.length;
+  const window = text.slice(from, to);
+  const spans = highlights
+    .map(({ start, end }) => [toUtf16Offset(text, start) - from, toUtf16Offset(text, end) - from] as [number, number])
+    .filter(([start, end]) => end > 0 && start < window.length);
+  return {
+    segments: unwrapSegments(window, spans),
+    clippedStart: from > 0,
+    clippedEnd: to < text.length,
+  };
+}
