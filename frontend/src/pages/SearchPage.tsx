@@ -378,7 +378,11 @@ export default function SearchPage() {
   // editing the box or a filter without submitting replaced the list with a
   // different search.
   const [submitted, setSubmitted] = useState<SearchRequest | null>(null);
-  const search = useAction(api.search);
+  // Only the latest search lands. A filter applies at once (changeFilters),
+  // so a new search can start while the last is running, and a reranked
+  // search can take longer than the one after it: the older answer, its
+  // failure and its end of "busy" are dropped, not shown over the newer.
+  const search = useAction(api.search, { latest: true });
 
   /** `limit` undefined: a new search, at the server's default page size. */
   const run = async (request: SearchRequest, limit?: number): Promise<boolean> => {
@@ -419,7 +423,8 @@ export default function SearchPage() {
   };
 
   // A filter applies at once to the search on screen - the results never
-  // show one set of filters while the controls show another.
+  // show one set of filters while the controls show another (a search still
+  // running for older filters is superseded; see `search`).
   const changeFilters = (patch: Partial<Filters>) => {
     const next = { ...filters, ...patch };
     setFilters(next);

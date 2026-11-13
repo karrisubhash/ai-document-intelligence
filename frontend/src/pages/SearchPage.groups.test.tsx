@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { Collection, Me, SearchHit, SearchResponse } from "../api/types";
 import App from "../App";
 import { AuthProvider } from "../auth/AuthContext";
@@ -104,6 +104,26 @@ function response(extra: Partial<SearchResponse> = {}): SearchResponse {
     server_ms: 420,
     ...extra,
   };
+}
+
+/** One document's results, a page of one that has room for more. */
+function titled(title: string, documentId: number): SearchResponse {
+  const base = response();
+  return response({
+    limit: 1,
+    results: [{ ...HIT, document_id: documentId, document_title: title }],
+    groups: base.groups!.map((group) => ({ ...group, document_id: documentId, document_title: title })),
+  });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 const COLLECTION = {
@@ -262,6 +282,62 @@ describe("search results by document", () => {
       expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ query: "fees", document_type: "" })),
     );
     expect(screen.queryByRole("button", { name: /Remove filter/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the latest filters' results when an older, slower search answers last", async () => {
+    vi.spyOn(api, "collections").mockResolvedValue({ count: 1, next: null, previous: null, results: [COLLECTION] });
+    const typeOnly = deferred<SearchResponse>();
+    const typeAndCollection = deferred<SearchResponse>();
+    const search = vi
+      .spyOn(api, "search")
+      .mockResolvedValueOnce(response())
+      .mockReturnValueOnce(typeOnly.promise)
+      .mockReturnValueOnce(typeAndCollection.promise)
+      .mockResolvedValue(titled("In the collection", 11));
+    renderSearch();
+    await searchFor("fees");
+    await screen.findByRole("link", { name: "Fee Rules" });
+
+    // A reranked search can take longer than the one after it.
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Type" }), "POLICY");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Collection" }), "5");
+    await act(async () => typeAndCollection.resolve(titled("In the collection", 11)));
+    expect(await screen.findByRole("link", { name: "In the collection" })).toBeInTheDocument();
+    await act(async () => typeOnly.resolve(titled("Any policy", 12)));
+
+    expect(screen.getByRole("link", { name: "In the collection" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Any policy" })).not.toBeInTheDocument();
+    // More of the search on screen - the one the controls show.
+    await userEvent.click(screen.getByRole("button", { name: "Show more results" }));
+    expect(search).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: "fees", document_type: "POLICY", collection_id: 5, limit: 2 }),
+    );
+  });
+
+  it("stays busy, and says nothing of an older search's failure, until the latest answers", async () => {
+    vi.spyOn(api, "collections").mockResolvedValue({ count: 1, next: null, previous: null, results: [COLLECTION] });
+    const typeOnly = deferred<SearchResponse>();
+    const typeAndCollection = deferred<SearchResponse>();
+    vi.spyOn(api, "search")
+      .mockResolvedValueOnce(response())
+      .mockReturnValueOnce(typeOnly.promise)
+      .mockReturnValueOnce(typeAndCollection.promise);
+    renderSearch();
+    await searchFor("fees");
+    await screen.findByRole("link", { name: "Fee Rules" });
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Type" }), "POLICY");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Collection" }), "5");
+    await act(async () => typeOnly.reject(new ApiError(503, "The server had a problem handling this request.", null)));
+
+    expect(document.querySelector(".search-results")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
+    expect(screen.queryByText("Search failed")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Fee Rules" })).toBeInTheDocument();
+
+    await act(async () => typeAndCollection.resolve(titled("In the collection", 11)));
+    expect(await screen.findByRole("link", { name: "In the collection" })).toBeInTheDocument();
+    expect(document.querySelector(".search-results")).toHaveAttribute("aria-busy", "false");
   });
 
   it("offers no department filter to someone who reads one department", async () => {
