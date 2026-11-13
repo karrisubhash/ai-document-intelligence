@@ -15,6 +15,7 @@ from django.urls import reverse
 from rest_framework.throttling import SimpleRateThrottle
 
 from accounts.models import UserProfile
+from documents.api.views import DocumentViewSet
 from documents.models import (
     AuditLog,
     ClassificationResult,
@@ -457,6 +458,69 @@ class DocumentShapeTests(InsightsApiTestCase):
             format="multipart",
         )
         self.assertEqual(response.data["document_type_source"], "auto")
+
+    def test_a_type_chosen_against_a_type_that_has_since_moved_is_refused(self):
+        # The edit form opened on General; the detector has since made the
+        # document a circular. The person picked Policy over "General" - a
+        # type the document no longer has - so it is not recorded as theirs.
+        document = self.document(self.upload_text(CIRCULAR))
+        with self.captureOnCommitCallbacks(execute=True) as queued:
+            response = self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {
+                    "title": "Renamed",
+                    "document_type": "POLICY",
+                    "expected_document_type": "GENERAL",
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Circular", response.data["document_type"][0])
+        self.assertEqual(queued, [])
+        document.refresh_from_db()
+        self.assertEqual(document.title, "Doc")
+        self.assertEqual(document.document_type, "CIRCULAR")
+        self.assertEqual(document.document_type_source, "auto")
+        self.assertIsNotNone(document.type_confidence)
+
+    def test_a_type_chosen_against_the_current_type_is_a_persons_choice(self):
+        document = self.document(self.upload_text(CIRCULAR))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {"document_type": "POLICY", "expected_document_type": "CIRCULAR"},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["document_type"], "POLICY")
+        self.assertEqual(response.data["document_type_source"], "user")
+        self.assertNotIn("expected_document_type", response.data)
+
+    def test_a_title_edit_never_writes_back_a_type_read_before_the_detector_set_it(
+        self,
+    ):
+        document = self.document(self.upload_text(CIRCULAR))
+        # What the request read a moment before the detector's UPDATE
+        # committed: the upload default.
+        stale = Document.objects.get(pk=document.pk)
+        stale.document_type = Document.DocumentType.GENERAL
+        stale.document_type_source = Document.TypeSource.DEFAULT
+        stale.type_confidence = None
+        with mock.patch.object(DocumentViewSet, "get_object", return_value=stale):
+            response = self.client.patch(
+                f"/api/v1/documents/{document.pk}/",
+                {"title": "Renamed"},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertEqual(document.title, "Renamed")
+        self.assertEqual(document.document_type, "CIRCULAR")
+        self.assertEqual(document.document_type_source, "auto")
+        self.assertIsNotNone(document.type_confidence)
 
     def test_the_source_cannot_be_written_directly(self):
         document = self.document(self.upload_text("Minutes of the meeting."))

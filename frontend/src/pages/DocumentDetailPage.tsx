@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { ApiError, api, saveBlob } from "../api/client";
+import { ApiError, api, saveBlob, type DocumentPatch } from "../api/client";
 import { useAction, usePolling, useResource } from "../api/hooks";
 import { DOCUMENT_TYPES, type DocumentDetail, type DocumentType } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -82,23 +82,49 @@ function EditDialog({
   open,
   onClose,
   onSaved,
+  onStale,
 }: {
   document: DocumentDetail;
   open: boolean;
   onClose: () => void;
   onSaved: (document: DocumentDetail) => void;
+  /** The document changed under the form: load it again. */
+  onStale: () => void;
 }) {
   const [title, setTitle] = useState(document.title);
-  const [type, setType] = useState<DocumentType>(document.document_type);
-  const save = useAction((next: { title: string; document_type: DocumentType }) =>
-    api.updateDocument(document.id, next),
+  // The type the person picked, and the one the list showed when they did -
+  // null until they touch it. Until then the list shows the type the
+  // document has now, following the page as it reloads, and a save sends no
+  // type at all. The type detector sets the type while a document is
+  // processing; a form that sent back the type it opened with turned that
+  // stale value into "chosen by a person", which the detector never
+  // overrides again.
+  const [picked, setPicked] = useState<{ type: DocumentType; from: DocumentType } | null>(
+    null,
   );
+  const type = picked?.type ?? document.document_type;
+  const save = useAction((next: DocumentPatch) => api.updateDocument(document.id, next));
   const fieldErrors = save.error instanceof ApiError ? save.error.fieldErrors() : {};
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const result = await save.run({ title: title.trim(), document_type: type });
-    if (result.ok) onSaved(result.value);
+    const result = await save.run({
+      title: title.trim(),
+      // A change only, and with the type it was made from: the server
+      // refuses it if the type has moved since.
+      ...(picked && picked.type !== picked.from
+        ? { document_type: picked.type, expected_document_type: picked.from }
+        : {}),
+    });
+    if (result.ok) {
+      onSaved(result.value);
+    } else if (result.error instanceof ApiError && result.error.status === 409) {
+      // Refused: the type changed while the form was open. The list goes
+      // back to showing the document's type - reloaded now - so a second
+      // choice is made knowing what it replaces. The message says why.
+      setPicked(null);
+      onStale();
+    }
   };
 
   return (
@@ -136,7 +162,12 @@ function EditDialog({
               {...props}
               className="input"
               value={type}
-              onChange={(event) => setType(event.target.value as DocumentType)}
+              onChange={(event) =>
+                setPicked({
+                  type: event.target.value as DocumentType,
+                  from: picked?.from ?? document.document_type,
+                })
+              }
             >
               {DOCUMENT_TYPES.map((value) => (
                 <option key={value} value={value}>
@@ -504,6 +535,7 @@ export default function DocumentDetailPage() {
             resource.setData({ ...document, ...saved });
             toast("Details saved.");
           }}
+          onStale={resource.reload}
         />
       ) : null}
 

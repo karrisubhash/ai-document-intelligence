@@ -418,6 +418,18 @@ export interface UploadInput {
   file: File;
 }
 
+/** PATCH /documents/{id}/ - only what is being changed. */
+export interface DocumentPatch {
+  title?: string;
+  document_type?: DocumentType;
+  /**
+   * The type the change is made from. The server refuses the change (409,
+   * on `document_type`) when the document no longer has it - the type
+   * detector can set it while the edit form is open.
+   */
+  expected_document_type?: DocumentType;
+}
+
 export interface SearchInput {
   query: string;
   limit?: number;
@@ -593,11 +605,14 @@ export const api = {
     form.append("file", file);
     return uploadWithProgress<DocumentVersion>(doc(id, "versions/"), form, onProgress);
   },
-  updateDocument: (id: number, patch: { title?: string; document_type?: DocumentType }) => {
+  updateDocument: (id: number, patch: DocumentPatch) => {
     // The viewset parses multipart only, so a PATCH is form-encoded.
     const form = new FormData();
     if (patch.title !== undefined) form.append("title", patch.title);
     if (patch.document_type !== undefined) form.append("document_type", patch.document_type);
+    if (patch.expected_document_type !== undefined) {
+      form.append("expected_document_type", patch.expected_document_type);
+    }
     return request<DocumentDetail>(doc(id), { method: "PATCH", body: form });
   },
   deleteDocument: (id: number) => request<void>(doc(id), { method: "DELETE" }),

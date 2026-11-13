@@ -230,6 +230,12 @@ class DocumentSerializer(DocumentFactsMixin, serializers.ModelSerializer):
     # Detail only: what the tabs hold, so empty ones can say so up front.
     counts = serializers.SerializerMethodField()
     collections = serializers.SerializerMethodField()
+    # PATCH only, optional: the type the editing form showed when the person
+    # chose a new one. A change made against a type the document no longer
+    # has is refused (DocumentViewSet.perform_update). Never returned.
+    expected_document_type = serializers.ChoiceField(
+        choices=Document.DocumentType.choices, required=False, write_only=True
+    )
 
     class Meta:
         model = Document
@@ -254,6 +260,7 @@ class DocumentSerializer(DocumentFactsMixin, serializers.ModelSerializer):
             "can_manage",
             "created_at",
             "updated_at",
+            "expected_document_type",
         ]
         read_only_fields = [
             "id",
