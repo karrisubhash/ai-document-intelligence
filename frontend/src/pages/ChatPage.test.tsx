@@ -4,7 +4,14 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
-import type { ChatMessage, ChatResponse, Conversation, Me } from "../api/types";
+import type {
+  ChatMessage,
+  ChatResponse,
+  Collection,
+  Conversation,
+  Me,
+  SearchResponse,
+} from "../api/types";
 import App from "../App";
 import { AuthProvider } from "../auth/AuthContext";
 import { ToastProvider } from "../components/ui";
@@ -88,8 +95,22 @@ function answer(conversationId: number, text: string): ChatResponse {
   };
 }
 
+function abstained(conversationId: number): ChatResponse {
+  return {
+    ...answer(conversationId, "Not enough evidence to answer."),
+    abstained: true,
+    abstention_reason: "no_relevant_passages",
+  };
+}
+
 function LocationProbe() {
-  return <output data-testid="location">{useLocation().pathname}</output>;
+  const location = useLocation();
+  return (
+    <>
+      <output data-testid="location">{location.pathname}</output>
+      <output data-testid="query-string">{location.search}</output>
+    </>
+  );
 }
 
 function renderAt(path: string) {
@@ -174,6 +195,62 @@ describe("ChatPage", () => {
     open(HOSTEL);
     expect(await screen.findByText("What is the hostel fee?")).toBeInTheDocument();
     expect(screen.getByLabelText("Your question")).toBeEnabled();
+  });
+});
+
+describe("ChatPage Search instead", () => {
+  const QUESTION = "What is the parking fee for visiting parents?";
+  const NOTHING_FOUND: SearchResponse = {
+    query: QUESTION,
+    count: 0,
+    limit: 20,
+    max_limit: 50,
+    semantic: true,
+    embedding_model: "",
+    retrieval: { lexical_candidates: 0, vector_candidates: 0, authorized_documents: 0 },
+    ranking: { reranker: "", degraded: false, relevance_floor: null, reranked: 0, below_floor: 0 },
+    notes: [],
+    results: [],
+  };
+
+  it("hands the question to Search without putting it in the address", async () => {
+    vi.spyOn(api, "chatStream").mockResolvedValue(abstained(3));
+    const search = vi.spyOn(api, "search").mockResolvedValue(NOTHING_FOUND);
+    renderAt("/ask");
+    await userEvent.type(await screen.findByLabelText("Your question"), `${QUESTION}{Enter}`);
+    await userEvent.click(await screen.findByRole("link", { name: "Search instead" }));
+
+    // Search has the question, and runs it...
+    expect(await screen.findByLabelText("Search documents")).toHaveValue(QUESTION);
+    await waitFor(() =>
+      expect(search).toHaveBeenCalledWith(expect.objectContaining({ query: QUESTION })),
+    );
+    // ...and the address has not: what people ask stays out of browser
+    // history, and out of the access log a reload would write.
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/search$/);
+    expect(screen.getByTestId("query-string")).toBeEmptyDOMElement();
+  });
+
+  it("searches within the collection the question was asked in", async () => {
+    const examPack = { id: 5, name: "Exam pack" } as unknown as Collection;
+    vi.spyOn(api, "collections").mockResolvedValue({
+      count: 1,
+      next: null,
+      previous: null,
+      results: [examPack],
+    });
+    vi.spyOn(api, "chatStream").mockResolvedValue(abstained(3));
+    const search = vi.spyOn(api, "search").mockResolvedValue(NOTHING_FOUND);
+    renderAt("/ask");
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Ask within" }), "5");
+    await userEvent.type(screen.getByLabelText("Your question"), `${QUESTION}{Enter}`);
+    await userEvent.click(await screen.findByRole("link", { name: "Search instead" }));
+
+    await waitFor(() =>
+      expect(search).toHaveBeenCalledWith(
+        expect.objectContaining({ query: QUESTION, collection_id: 5 }),
+      ),
+    );
   });
 });
 

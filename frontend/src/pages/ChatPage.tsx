@@ -850,6 +850,11 @@ export default function ChatPage() {
                               latest && turn.answer.abstained
                                 ? {
                                     searchFor: turn.question,
+                                    // The collection asked within, which
+                                    // Search can narrow to as well (one
+                                    // document in scope, it cannot).
+                                    collectionId:
+                                      !scope && collectionId ? Number(collectionId) : undefined,
                                     askEverywhere: scoped
                                       ? () => {
                                           setScope(null);
