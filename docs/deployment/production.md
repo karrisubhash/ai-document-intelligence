@@ -154,7 +154,13 @@ must be running for them to become Ready. `--department NAME` fills another depa
 (created if missing). Safe to run again: what a department already holds, by checksum, is
 skipped. A system administrator can do the same from the API for any department
 (`POST /api/v1/admin/samples/`), which is how an empty installation gets something to
-show. The samples are owned by an inactive `sample-library` account.
+show. The samples are owned by an inactive `sample-library` account, made on first use
+with no password. Owning a document grants reading and managing it in every department,
+so the name is reserved (sign-up, account creation and approval refuse it, in any case
+or width), and loading the samples refuses - `seed_demo` with an error, the API with
+**409** - when an account that can sign in, or has a role or department, already holds
+it: one made before the name was reserved, or in the Django admin. Rename or delete that
+account there, then load the samples again.
 
 **Turning the demo on** (off by default):
 

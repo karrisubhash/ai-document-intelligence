@@ -42,7 +42,10 @@ class Command(BaseCommand):
         except ValueError as exc:
             raise CommandError(str(exc)) from exc
 
-        outcome = samples.seed(department.name, actor=None, via="seed_demo")
+        try:
+            outcome = samples.seed(department.name, actor=None, via="seed_demo")
+        except samples.LibraryAccountTaken as exc:
+            raise CommandError(str(exc)) from exc
         self.stdout.write(
             self.style.SUCCESS(
                 f"Queued {len(outcome.queued)} sample document(s) for processing in "

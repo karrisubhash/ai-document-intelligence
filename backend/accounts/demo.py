@@ -31,6 +31,7 @@ and account creation refuse it so no member can look like one.
 
 import secrets
 import string
+import unicodedata
 from datetime import timedelta
 
 from django.conf import settings
@@ -254,5 +255,10 @@ def purge_expired_guests(*, limit: int | None = None, trigger: str = "command") 
 
 
 def username_reserved(username: str) -> bool:
-    """Whether a name is one only guests may have."""
-    return username.strip().lower().startswith(GUEST_USERNAME_PREFIX)
+    """Whether a name is one only guests may have.
+
+    Compared as a person reading a listing would: NFKC-normalised and
+    case-folded, so neither "Guest-x" nor its full-width spelling passes.
+    """
+    folded = unicodedata.normalize("NFKC", username).strip().casefold()
+    return folded.startswith(GUEST_USERNAME_PREFIX)

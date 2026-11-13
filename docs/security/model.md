@@ -104,7 +104,11 @@
     session never outlives its account.
   - The demo is offered only once its department holds a Ready document, and the sample
     library's documents belong to an inactive `sample-library` account, so a visitor never
-    learns an administrator's username from "owner" or "uploaded by".
+    learns an administrator's username from "owner" or "uploaded by". Owning a document
+    grants reading and managing it in every department, so that name is reserved for sign-up,
+    account creation and approval (compared NFKC-normalised and case-folded, as the `guest-`
+    prefix is), and the samples are never given to an existing account that can sign in or
+    has a role or department - loading them refuses instead.
   - *Not covered:* guests' questions use whatever answerer is configured. With a hosted
     model, the all-guest chat budget is what bounds how much of its quota visitors can use.
 

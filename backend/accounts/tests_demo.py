@@ -580,3 +580,17 @@ class GuestAdministrationTests(DemoCase):
         )
         self.assertEqual(applied.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("username", applied.json())
+
+        # Account creation keeps a name as typed: its full-width spelling
+        # would read as "guest-..." in every listing.
+        lookalike = self.client.post(
+            "/api/v1/admin/users/",
+            {
+                "username": "ｇｕｅｓｔ-imposter",
+                "password": STRONG,
+                "department": "Physics",
+            },
+            format="json",
+        )
+        self.assertEqual(lookalike.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", lookalike.json())

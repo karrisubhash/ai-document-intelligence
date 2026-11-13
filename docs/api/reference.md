@@ -71,8 +71,9 @@ per guest `THROTTLE_GUEST_CHAT` (20/hour), `THROTTLE_GUEST_CHAT_BURST` (5/minute
 `THROTTLE_GUEST_SEARCH` (60/hour); for all guests together `THROTTLE_GUEST_CHAT_GLOBAL`
 (120/hour) and `THROTTLE_GUEST_SEARCH_GLOBAL` (600/hour). Past one: **429**
 `{detail, code: "demo_throttled"}` with `Retry-After`. A guest's API token is refused
-(**401**). Usernames beginning `guest-` are refused by sign-up and account creation
-(**400** on `username`).
+(**401**). Usernames beginning `guest-`, and `sample-library` (the sample library's owner),
+are refused by sign-up and account creation (**400** on `username`), compared
+NFKC-normalised and case-folded; approving a waiting request for one is **409**.
 
 ## Documents
 
@@ -265,7 +266,7 @@ change their own role or deactivate themselves.
 | GET · PATCH | `/api/admin/users/{id}/` | admins, scoped | Username immutable. Deactivation deletes the account's sessions and tokens. Superusers can be edited only by superusers; staff accounts not by department admins |
 | POST | `/api/admin/users/{id}/set-password/` | admins, scoped | Ends the user's sessions and tokens |
 | GET | `/api/admin/users/roles/` | admins | Roles this admin may assign |
-| POST | `/api/admin/samples/` | system admins | `{department}` - a registered, active department, matched case-insensitively. Loads the sample library into it through the upload path: **202** `{queued, skipped}` - samples created and queued for processing, and samples the department already held (any version of any document there with the same checksum, archived ones included). Owned by the inactive `sample-library` account. **400** on `department`. Throttled as `samples` (`THROTTLE_SAMPLES`, 10/hour). Audited: one `SAMPLES_LOAD` (`department`, `queued`, `skipped`, `via: "api"`) and a `DOCUMENT_CREATE` per sample, naming the administrator |
+| POST | `/api/admin/samples/` | system admins | `{department}` - a registered, active department, matched case-insensitively. Loads the sample library into it through the upload path: **202** `{queued, skipped}` - samples created and queued for processing, and samples the department already held (any version of any document there with the same checksum, archived ones included). Owned by the inactive `sample-library` account. **400** on `department`. **409** `{detail, code: "sample_library_account_taken"}` when an account that can sign in, or has a role or department, holds that name - the samples are never given to it. Throttled as `samples` (`THROTTLE_SAMPLES`, 10/hour). Audited: one `SAMPLES_LOAD` (`department`, `queued`, `skipped`, `via: "api"`) and a `DOCUMENT_CREATE` per sample, naming the administrator |
 
 Demo guests are not listed by, and cannot be edited or given a password through, the user
 endpoints (**404**), and are not counted in a department's `member_count`.
