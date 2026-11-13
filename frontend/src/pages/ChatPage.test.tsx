@@ -129,6 +129,16 @@ function abstained(conversationId: number): ChatResponse {
   };
 }
 
+/** A turn still being answered, until the reader presses Stop. */
+function untilStopped(...args: Parameters<typeof api.chatStream>): Promise<ChatResponse> {
+  const signal = args[2];
+  return new Promise((_, reject) => {
+    signal?.addEventListener("abort", () =>
+      reject(new DOMException("The user aborted a request.", "AbortError")),
+    );
+  });
+}
+
 function LocationProbe() {
   const location = useLocation();
   return (
@@ -277,6 +287,132 @@ describe("ChatPage Search instead", () => {
         expect.objectContaining({ query: QUESTION, collection_id: 5 }),
       ),
     );
+  });
+});
+
+describe("ChatPage turns that end without an answer", () => {
+  const KEPT = /The hostel fee is 60000/;
+  const EDITED = "What is the hostel fee per semester?";
+
+  it("puts the answer back when its regenerate is stopped, and an edit still replaces it", async () => {
+    const stream = vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Regenerate answer" }));
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    // The server removes an answer only when its replacement is saved, so
+    // it still holds this one, and the page shows it.
+    expect(await screen.findByText(KEPT)).toBeInTheDocument();
+    expect(screen.queryByText(/You stopped this answer/)).not.toBeInTheDocument();
+
+    // An edit sent now still replaces it, instead of adding a second pair.
+    await userEvent.click(screen.getByRole("button", { name: "Edit question" }));
+    const box = screen.getByLabelText("Your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, `${EDITED}{Enter}`);
+    expect(stream).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: EDITED, conversation_id: 7, replaces: 2 }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("gives a stopped edit back to the composer, still replacing the answer", async () => {
+    const stream = vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    const box = screen.getByLabelText("Your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, `${EDITED}{Enter}`);
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    // The turn as the server still holds it, and the edit ready to resend.
+    expect(await screen.findByText(KEPT)).toBeInTheDocument();
+    expect(screen.getByText("What is the hostel fee?")).toBeInTheDocument();
+    expect(box).toHaveValue(EDITED);
+    await userEvent.click(screen.getByRole("button", { name: "Ask again" }));
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(stream).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: EDITED, replaces: 2 }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("keeps the answer when its regenerate is refused, and says why", async () => {
+    vi.spyOn(api, "chatStream").mockRejectedValue(
+      new ApiError(429, "Too many requests.", { detail: "Too many requests." }),
+    );
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Regenerate answer" }));
+
+    expect(
+      await screen.findByText(
+        "You have asked a lot of questions in a short time. Wait a few minutes and try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(KEPT)).toBeInTheDocument();
+    expect(screen.queryByText("No answer")).not.toBeInTheDocument();
+  });
+
+  it("shows what the server kept when a stopped regenerate was saved after all", async () => {
+    vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    let held = HOSTEL;
+    vi.spyOn(api, "conversation").mockImplementation(async () => held);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Regenerate answer" }));
+    // The server learns of a Stop only when a write to the closed
+    // connection fails: this one saved the new answer, and removed the
+    // one it replaced, first.
+    held = {
+      ...HOSTEL,
+      messages: [
+        message(3, "USER", "What is the hostel fee?"),
+        message(4, "ASSISTANT", "The hostel fee is 65000."),
+      ],
+    };
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("The hostel fee is 65000.")).toBeInTheDocument();
+    expect(screen.queryByText(KEPT)).not.toBeInTheDocument();
+    expect(screen.queryByText(/You stopped this answer/)).not.toBeInTheDocument();
+  });
+
+  it("does not give back a stopped edit that was saved after all", async () => {
+    vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    let held = HOSTEL;
+    vi.spyOn(api, "conversation").mockImplementation(async () => held);
+    renderAt("/ask/7");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit question" }));
+    const box = screen.getByLabelText("Your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, `${EDITED}{Enter}`);
+    // Saved, and the answer it replaced removed, before the Stop arrived.
+    held = {
+      ...HOSTEL,
+      messages: [message(3, "USER", EDITED), message(4, "ASSISTANT", "It is 30000 a semester.")],
+    };
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("It is 30000 a semester.")).toBeInTheDocument();
+    expect(screen.queryByText(KEPT)).not.toBeInTheDocument();
+    // Not in the composer to be sent a second time.
+    expect(box).toHaveValue("");
+    expect(screen.queryByText(/Editing your last question/)).not.toBeInTheDocument();
+  });
+
+  it("does not claim a stopped question went unsaved, and reloads the list in case", async () => {
+    vi.spyOn(api, "chatStream").mockImplementation(untilStopped);
+    renderAt("/ask");
+    await userEvent.type(await screen.findByLabelText("Your question"), "Pending question{Enter}");
+    await waitFor(() => expect(api.conversations).toHaveBeenCalled());
+    const listed = vi.mocked(api.conversations).mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("You stopped this answer.")).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing was saved/)).not.toBeInTheDocument();
+    // Saved after all, its new conversation is listed.
+    await waitFor(() => expect(api.conversations).toHaveBeenCalledTimes(listed + 1));
   });
 });
 
