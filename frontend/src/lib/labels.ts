@@ -86,7 +86,8 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   DEPARTMENT_UPDATE: "Updated department",
   JOB_RETRY: "Retried processing",
   AI_PROVIDER_TEST: "Tested an AI provider",
-  GUEST_PURGE: "Cleared expired demo guests",
+  // Expired, idle at the ceiling, or all at once: the row's `reason` says which.
+  GUEST_PURGE: "Cleared demo guests",
   SAMPLES_LOAD: "Loaded sample documents",
 };
 

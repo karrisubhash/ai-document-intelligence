@@ -9,6 +9,7 @@ from accounts import demo, permissions
 from accounts.models import Department, SignupRequest, UserProfile
 from accounts.services import (
     UnknownDepartment,
+    reserved_username,
     resolve_department,
     username_unavailable,
 )
@@ -193,8 +194,10 @@ class AdminUserSerializer(serializers.ModelSerializer):
             # Renaming changes what the audit trail's past rows appear to
             # say about who did what, and the username is the login.
             raise serializers.ValidationError("Usernames cannot be changed.")
-        if self.instance is None and demo.username_reserved(value):
-            raise serializers.ValidationError(USERNAME_RESERVED)
+        if self.instance is None:
+            reserved = reserved_username(value)
+            if reserved is not None:
+                raise serializers.ValidationError(reserved)
         return value
 
     def validate(self, attrs):
@@ -314,11 +317,6 @@ class SetPasswordSerializer(serializers.Serializer):
 # --- Self-service sign-up -----------------------------------------------------
 
 USERNAME_UNAVAILABLE = "This username is taken. Choose another."
-# Demo guests are named "guest-…" (accounts.demo). A member with such a name
-# would look like an anonymous visitor in every listing and audit row.
-USERNAME_RESERVED = (
-    "Usernames beginning “guest-” are kept for demo visitors. Choose another."
-)
 
 # What an applicant may ask to be. Administrative roles are granted, never
 # requested: offering them would only put a "make me an administrator"
@@ -377,8 +375,11 @@ class SignupSerializer(serializers.Serializer):
             ASCIIUsernameValidator()(value)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages)) from exc
-        if demo.username_reserved(value):
-            raise serializers.ValidationError(USERNAME_RESERVED)
+        # Names kept for demo guests and the sample library (said plainly:
+        # which names those are is no secret).
+        reserved = reserved_username(value)
+        if reserved is not None:
+            raise serializers.ValidationError(reserved)
         # The same answer whether an account or a waiting request holds the
         # name: which of the two it is is nobody else's business.
         if username_unavailable(value):

@@ -96,15 +96,35 @@
     department's row, so the cap is exact). Guests' chat and search spend per-guest and
     all-guest budgets on top of the views' own throttles; members are never counted
     against them, so a busy demo cannot slow the people the installation is for.
+  - *A ceiling nobody can hold shut.* A start needs only a CSRF cookie, and addresses are
+    cheap, so the cap must not be reachable by guests nobody uses. At the cap a new visitor
+    takes the place of the guest idle longest, once that is `DEMO_GUEST_IDLE_MINUTES`
+    (each guest request is noted, to within five minutes, in `last_seen_at`; one that never
+    made a request counts from its start): a script that starts demos and walks away holds
+    each place for minutes, not until it expires. And `THROTTLE_DEMO_GLOBAL` ×
+    `DEMO_GUEST_TTL_HOURS` (60/hour × 3 h = 180) stays within the cap (200), so not even
+    guests kept busy can fill it; `manage.py check` warns about settings that break either
+    bound (`accounts.W001`, `accounts.W002`).
   - *Ephemeral.* `manage.py purge_demo_guests` (and a sweep of up to 20 on every new demo)
     deletes guests older than `DEMO_GUEST_TTL_HOURS` with their conversations, messages,
     ratings, notifications and tokens; the delete re-checks the guest flag, so nothing else
     can be removed. Their audit rows stay with the account cleared, as for any deleted
-    account; each sweep that deleted something writes one `GUEST_PURGE` row. A guest's
+    account; each sweep that deleted something writes one `GUEST_PURGE` row, whose
+    `reason` says which guests went (`expired`, `idle` at the cap, or `all`). A guest's
     session never outlives its account.
+  - *Over when it is turned off.* With `DEMO_ENABLED=False`, a guest's next request - a
+    read as much as a question - ends its session (**401** `demo_ended`); only the public
+    doors and signing out still answer it. Guests' reads are checked without costing
+    members anything: only an account named like a guest (every guest is, and nobody else
+    may choose such a name) has its profile loaded, and the flag decides.
+    `purge_demo_guests --all` deletes every guest at once.
   - The demo is offered only once its department holds a Ready document, and the sample
     library's documents belong to an inactive `sample-library` account, so a visitor never
-    learns an administrator's username from "owner" or "uploaded by".
+    learns an administrator's username from "owner" or "uploaded by". Owning a document
+    grants reading and managing it in every department, so that name is reserved for sign-up,
+    account creation and approval (compared NFKC-normalised and case-folded, as the `guest-`
+    prefix is), and the samples are never given to an existing account that can sign in or
+    has a role or department - loading them refuses instead.
   - *Not covered:* guests' questions use whatever answerer is configured. With a hosted
     model, the all-guest chat budget is what bounds how much of its quota visitors can use.
 

@@ -23,19 +23,34 @@ What makes such an account safe to hand to anyone:
 * It expires. purge_expired_guests deletes guests older than
   DEMO_GUEST_TTL_HOURS with everything they made, and a few expired ones
   are swept each time a new guest arrives.
+* It cannot hold the demo full. Starting one takes nothing but a CSRF
+  cookie, so DEMO_MAX_GUESTS must never be a door that guests nobody uses
+  can keep shut. At the ceiling a new visitor takes the place of the guest
+  idle longest, once that is DEMO_GUEST_IDLE_MINUTES (create_guest), and
+  the defaults keep THROTTLE_DEMO_GLOBAL x DEMO_GUEST_TTL_HOURS within the
+  ceiling, so not even guests kept busy can fill it (accounts.checks warns
+  about a configuration that can).
+* It ends with the demo. With DEMO_ENABLED off, a guest's session ends on
+  its next request, reads included (GuestReadOnlyMiddleware), and
+  purge_all_guests (`purge_demo_guests --all`) deletes every guest at once.
 
 Guests are identified by UserProfile.is_guest, never by their name: the
 "guest-" prefix only makes them recognisable in an audit trail, and sign-up
-and account creation refuse it so no member can look like one.
+and account creation refuse it so no member can look like one. (The guard
+reads the name only to wave members' reads through without a query -
+named_like_guest; the flag is what decides.)
 """
 
 import secrets
 import string
+import unicodedata
 from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
+from django.db.models import Q
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from .models import Department, UserProfile
@@ -54,6 +69,10 @@ OPPORTUNISTIC_PURGE_LIMIT = 20
 # Accounts deleted per transaction by a sweep, so a large backlog is not one
 # long-held lock.
 _PURGE_BATCH = 200
+# How precisely a guest's last request is written down. Idleness is judged
+# in tens of minutes (DEMO_GUEST_IDLE_MINUTES, at least 10), so a guest who
+# is browsing costs one UPDATE every few minutes, not one per request.
+SEEN_RESOLUTION = timedelta(minutes=5)
 
 DEMO_DEPARTMENT_DESCRIPTION = (
     "Sample documents for the one-click demo. Demo visitors read and ask "
@@ -78,8 +97,42 @@ def is_guest(user) -> bool:
     return bool(getattr(profile, "is_guest", False))
 
 
+def named_like_guest(user) -> bool:
+    """Whether `user` could be a guest, judged without a query.
+
+    Never False for a guest: every one is named "guest-..." (_new_guest), and
+    a guest's name cannot be changed - not through the API, not in the Django
+    admin (ProfileAwareUserAdmin). It can be True for a member
+    - one made before the prefix was reserved, or by hand in the Django
+    admin - so it only says whether to look closer. is_guest() decides.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    return username_reserved(user.get_username())
+
+
+def note_activity(user) -> None:
+    """Write down that guest `user` has just made a request.
+
+    At most once every SEEN_RESOLUTION: what is judged is idleness over tens
+    of minutes, and a guest browsing should cost an UPDATE every few
+    minutes, not one per request.
+    """
+    profile = user.profile
+    now = timezone.now()
+    seen = profile.last_seen_at
+    if seen is not None and now - seen < SEEN_RESOLUTION:
+        return
+    UserProfile.objects.filter(pk=profile.pk).update(last_seen_at=now)
+    profile.last_seen_at = now
+
+
 def guest_ttl() -> timedelta:
     return timedelta(hours=settings.DEMO_GUEST_TTL_HOURS)
+
+
+def idle_window() -> timedelta:
+    return timedelta(minutes=settings.DEMO_GUEST_IDLE_MINUTES)
 
 
 def session_seconds() -> int:
@@ -157,7 +210,8 @@ def create_guest():
     """A new guest account in the demo department, ready to be signed in.
 
     Raises DemoUnavailable when the demo is not on offer, and DemoFull when
-    DEMO_MAX_GUESTS guests already exist.
+    DEMO_MAX_GUESTS guests already exist and none of them can make way
+    (_make_room).
     """
     if not is_available():
         raise DemoUnavailable()
@@ -176,9 +230,44 @@ def create_guest():
         )
         if department is None or not department.is_active:
             raise DemoUnavailable()
-        if live_guests().count() >= settings.DEMO_MAX_GUESTS:
-            raise DemoFull()
-        return _new_guest(department.name)
+        over = live_guests().count() - settings.DEMO_MAX_GUESTS + 1
+        if over <= 0 or _make_room(over) >= over:
+            return _new_guest(department.name)
+    # Raised outside the block, so whatever room was made is kept: those are
+    # the same guests the next arrival would have to clear.
+    raise DemoFull()
+
+
+def _make_room(needed: int) -> int:
+    """At the ceiling: delete up to `needed` guests nobody is using; how
+    many went.
+
+    Those idle for DEMO_GUEST_IDLE_MINUTES - counted from their last request
+    (last_seen_at), or from the demo's start for one that never made any -
+    and any past DEMO_GUEST_TTL_HOURS that a sweep has not reached yet. The
+    longest idle go first, and never more than needed: an idle visitor may
+    still come back, and below the ceiling nobody is displaced. So a guest
+    started and abandoned - by a person, or by a script starting them in a
+    loop - holds its place for minutes, not until it expires.
+    """
+    now = timezone.now()
+    idle = Q(seen__lt=now - idle_window())
+    expired = Q(date_joined__lt=now - guest_ttl())
+    candidates = (
+        get_user_model()
+        .objects.filter(profile__is_guest=True)
+        .alias(seen=Coalesce("profile__last_seen_at", "date_joined"))
+        .filter(idle | expired)
+        .order_by("seen", "pk")
+    )
+    deleted = _delete_guests(candidates, limit=needed)
+    _record_purge(
+        deleted,
+        reason="idle",
+        trigger="demo",
+        idle_minutes=settings.DEMO_GUEST_IDLE_MINUTES,
+    )
+    return deleted
 
 
 def _new_guest(department: str):
@@ -209,27 +298,61 @@ def _new_guest(department: str):
 def purge_expired_guests(*, limit: int | None = None, trigger: str = "command") -> int:
     """Delete guests older than DEMO_GUEST_TTL_HOURS; how many went.
 
+    One GUEST_PURGE audit row per sweep that deleted anything, as for every
+    way guests are deleted (_delete_guests).
+    """
+    expired = (
+        get_user_model()
+        .objects.filter(
+            profile__is_guest=True, date_joined__lt=timezone.now() - guest_ttl()
+        )
+        .order_by("date_joined", "pk")
+    )
+    deleted = _delete_guests(expired, limit=limit)
+    _record_purge(
+        deleted,
+        reason="expired",
+        trigger=trigger,
+        ttl_hours=settings.DEMO_GUEST_TTL_HOURS,
+    )
+    return deleted
+
+
+def purge_all_guests(*, trigger: str = "command") -> int:
+    """Delete every guest, whatever its age; how many went.
+
+    For ending the demo now (`purge_demo_guests --all`) rather than a TTL
+    later. With DEMO_ENABLED off a guest's session already ends on its next
+    request; this also removes the accounts and what they made. With the
+    demo still on, new visitors can start one again straight away.
+    """
+    everyone = (
+        get_user_model()
+        .objects.filter(profile__is_guest=True)
+        .order_by("date_joined", "pk")
+    )
+    deleted = _delete_guests(everyone)
+    _record_purge(deleted, reason="all", trigger=trigger)
+    return deleted
+
+
+def _delete_guests(candidates, *, limit: int | None = None) -> int:
+    """Delete the accounts `candidates` lists, in its order and at most
+    `limit` of them; how many went.
+
     Each takes with it what it owned: its conversations and their messages,
     its answer ratings, its notifications and any session token (all
     CASCADE). Its audit rows stay, with the account cleared, as for any
     deleted account - the trail is the institution's, not the visitor's.
     Only guests: the flag is checked again in the DELETE itself, so nothing
-    else this query could ever match is removed.
-
-    One GUEST_PURGE audit row per sweep that deleted anything.
+    else a query could ever match is removed. In batches, so a large backlog
+    is not one long-held lock.
     """
-    from documents.audit import record_event
-    from documents.models import AuditLog
-
     User = get_user_model()
-    expired = User.objects.filter(
-        profile__is_guest=True, date_joined__lt=timezone.now() - guest_ttl()
-    ).order_by("date_joined", "pk")
-
     deleted = 0
     while limit is None or deleted < limit:
         size = _PURGE_BATCH if limit is None else min(_PURGE_BATCH, limit - deleted)
-        ids = list(expired.values_list("pk", flat=True)[:size])
+        ids = list(candidates.values_list("pk", flat=True)[:size])
         if not ids:
             break
         with transaction.atomic():
@@ -240,19 +363,32 @@ def purge_expired_guests(*, limit: int | None = None, trigger: str = "command") 
         deleted += removed
         if removed == 0 or len(ids) < size:
             break
-
-    if deleted:
-        record_event(
-            user=None,
-            action=AuditLog.Action.GUEST_PURGE,
-            result=AuditLog.Result.ALLOWED,
-            deleted=deleted,
-            ttl_hours=settings.DEMO_GUEST_TTL_HOURS,
-            trigger=trigger,
-        )
     return deleted
 
 
+def _record_purge(deleted: int, **details) -> None:
+    """One GUEST_PURGE audit row for a sweep that deleted anything: how many,
+    which guests (`reason`: expired, idle or all) and which door asked
+    (`trigger`: the command, or a demo start)."""
+    if not deleted:
+        return
+    from documents.audit import record_event
+    from documents.models import AuditLog
+
+    record_event(
+        user=None,
+        action=AuditLog.Action.GUEST_PURGE,
+        result=AuditLog.Result.ALLOWED,
+        deleted=deleted,
+        **details,
+    )
+
+
 def username_reserved(username: str) -> bool:
-    """Whether a name is one only guests may have."""
-    return username.strip().lower().startswith(GUEST_USERNAME_PREFIX)
+    """Whether a name is one only guests may have.
+
+    Compared as a person reading a listing would: NFKC-normalised and
+    case-folded, so neither "Guest-x" nor its full-width spelling passes.
+    """
+    folded = unicodedata.normalize("NFKC", username).strip().casefold()
+    return folded.startswith(GUEST_USERNAME_PREFIX)

@@ -405,7 +405,11 @@ class DemoView(APIView):
         except demo.DemoUnavailable as exc:
             raise exceptions.NotFound("The demo is not available here.") from exc
         except demo.DemoFull as exc:
-            raise DemoFullError() from exc
+            # The code in the body, not only on the exception: the landing
+            # page reads it to tell "full" from the throttles' 429s.
+            raise DemoFullError(
+                {"detail": DemoFullError.default_detail, "code": "demo_full"}
+            ) from exc
 
         # No password was checked, so the backend is named; login() rotates
         # the session key as for any sign-in, and replaces whatever session

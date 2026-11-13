@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
 
+from . import demo
 from .models import SignupRequest, UserProfile
 
 User = get_user_model()
@@ -12,8 +13,9 @@ class UserProfileInline(admin.StackedInline):
     can_delete = False
     # Set only by accounts.demo when it makes a guest. Ticking it here would
     # make a member read-only; unticking it would leave an anonymous,
-    # passwordless account outside the guest guard and the purge.
-    readonly_fields = ("is_guest",)
+    # passwordless account outside the guest guard and the purge. The guard
+    # keeps last_seen_at for guests.
+    readonly_fields = ("is_guest", "last_seen_at")
 
 
 class ProfileAwareUserAdmin(UserAdmin):
@@ -28,6 +30,15 @@ class ProfileAwareUserAdmin(UserAdmin):
         # or department was filled in. Django's add flow continues on the
         # change page, where the inline edits the profile the signal made.
         return self.inlines if obj is not None else []
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = super().get_readonly_fields(request, obj)
+        # A guest keeps its "guest-..." name: the guard picks out a guest's
+        # reads by it before loading any profile (demo.named_like_guest), and
+        # a renamed guest's reads would slip past it.
+        if obj is not None and demo.is_guest(obj):
+            return (*fields, "username")
+        return fields
 
     @admin.display(description="Role")
     def role(self, user):

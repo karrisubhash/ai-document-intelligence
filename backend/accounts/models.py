@@ -75,6 +75,12 @@ class UserProfile(models.Model):
     # previous release keeps serving after `migrate` commits, and its
     # INSERTs (every new account makes a profile) do not name this column.
     is_guest = models.BooleanField(default=False, db_default=False)
+    # When a demo guest last made a request, to within a few minutes
+    # (accounts.demo.note_activity): at DEMO_MAX_GUESTS, the guest idle
+    # longest makes way for a new visitor. Null for a guest that has made no
+    # request since its demo started - and for every member, whose requests
+    # are never noted.
+    last_seen_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         indexes = [

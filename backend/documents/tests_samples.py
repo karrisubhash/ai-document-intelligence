@@ -5,14 +5,16 @@ from io import StringIO
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from django.core.cache import cache
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework.throttling import SimpleRateThrottle
 
-from accounts.models import Department, UserProfile
+from accounts.models import Department, SignupRequest, UserProfile
 from documents import samples
 from documents.models import AuditLog, Document, DocumentVersion
 from documents.processing.stages.ingestion import EXTENSION_TYPES
@@ -20,10 +22,11 @@ from documents.processing.stages.ingestion import EXTENSION_TYPES
 User = get_user_model()
 Role = UserProfile.Role
 URL = "/api/v1/admin/samples/"
+STRONG = "x-long-enough-pass-1"
 
 
 def make_user(username, role, department=""):
-    user = User.objects.create_user(username=username, password="x-long-enough-pass-1")
+    user = User.objects.create_user(username=username, password=STRONG)
     user.profile.role = role
     user.profile.department = department
     user.profile.save()
@@ -195,3 +198,91 @@ class SamplesEndpointTests(TestCase):
             )
             again = self.client.post(URL, {"department": "Physics"}, format="json")
         self.assertEqual(again.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+class LibraryAccountTests(TestCase):
+    """The samples belong to LIBRARY_USERNAME, and owning a document grants
+    reading and managing it in every department - so that name must never
+    be a person's, and an account a person can use is never adopted."""
+
+    def setUp(self):
+        cache.clear()
+        Department.objects.create(name="Physics")
+        self.admin = make_user("root", Role.SYSTEM_ADMIN)
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+
+    def test_no_one_can_take_the_library_s_name(self):
+        for name in ("sample-library", "Sample-Library", "ｓａｍｐｌｅ-ｌｉｂｒａｒｙ"):
+            with self.subTest(name):
+                made = self.client.post(
+                    "/api/v1/admin/users/",
+                    {"username": name, "password": STRONG, "department": "Physics"},
+                    format="json",
+                )
+                self.assertEqual(made.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("username", made.json())
+
+        applied = APIClient().post(
+            reverse("auth-signup"),
+            {
+                "username": "sample-library",
+                "email": "x@example.edu",
+                "first_name": "X",
+                "password": STRONG,
+                "department": "Physics",
+            },
+            format="json",
+        )
+        self.assertEqual(applied.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", applied.json())
+        self.assertFalse(SignupRequest.objects.exists())
+        self.assertEqual(User.objects.count(), 1)
+
+    def test_a_request_filed_before_the_name_was_kept_cannot_be_approved(self):
+        signup = SignupRequest.objects.create(
+            username="sample-library",
+            email="x@example.edu",
+            first_name="X",
+            password=make_password(STRONG),
+            department="Physics",
+        )
+        response = self.client.post(
+            reverse("admin-signup-request-approve", args=[signup.id]), {}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertFalse(User.objects.filter(username="sample-library").exists())
+        signup.refresh_from_db()
+        self.assertEqual(signup.status, SignupRequest.Status.PENDING)
+
+    def test_an_account_someone_can_use_is_never_given_the_samples(self):
+        """Approved, or made by hand, before the name was kept."""
+        squatter = make_user("sample-library", Role.STUDENT, "Physics")
+
+        refused = self.client.post(URL, {"department": "Physics"}, format="json")
+        self.assertEqual(refused.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(refused.json()["code"], "sample_library_account_taken")
+        with self.assertRaisesMessage(CommandError, "sample-library"):
+            call_command("seed_demo", "--department", "Physics", stdout=StringIO())
+        # Switched off, it still has a password - and its department.
+        squatter.is_active = False
+        squatter.save()
+        with self.assertRaises(samples.LibraryAccountTaken):
+            samples.seed("Physics", actor=None, via="test")
+
+        self.assertFalse(Document.objects.exists())
+        self.assertFalse(
+            AuditLog.objects.filter(action=AuditLog.Action.SAMPLES_LOAD).exists()
+        )
+
+    def test_the_library_s_own_account_is_used_again(self):
+        samples.seed("Physics", actor=None, via="test")
+        owner = User.objects.get(username=samples.LIBRARY_USERNAME)
+        Department.objects.create(name="Chemistry")
+
+        samples.seed("Chemistry", actor=None, via="test")
+
+        self.assertEqual(User.objects.filter(username="sample-library").count(), 1)
+        self.assertEqual(
+            set(Document.objects.values_list("owner_id", flat=True)), {owner.pk}
+        )

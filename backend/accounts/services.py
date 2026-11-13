@@ -18,7 +18,20 @@ from django.db.models.functions import Lower
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
+from . import demo
 from .models import Department, SignupRequest, UserProfile
+
+# Names no member may have. Demo guests are "guest-..." (accounts.demo): a
+# member so named would look like an anonymous visitor in every listing and
+# audit row. The sample library's documents belong to "sample-library"
+# (documents.samples), and owning a document grants reading and managing it
+# in every department.
+USERNAME_KEPT_FOR_GUESTS = (
+    "Usernames beginning “guest-” are kept for demo visitors. Choose another."
+)
+USERNAME_KEPT_FOR_SAMPLES = (
+    "This username is kept for the sample library. Choose another."
+)
 
 
 class UnknownDepartment(ValueError):
@@ -159,6 +172,22 @@ def same_name(queryset, username: str):
     )
 
 
+def reserved_username(username: str) -> str | None:
+    """Why no member may have `username`, or None when one may.
+
+    Checked wherever a member's name is chosen - sign-up, account creation
+    and approval. Both comparisons are NFKC-normalised and case-folded,
+    since a name that merely looks like a reserved one misleads as much.
+    """
+    from documents.samples import is_library_username
+
+    if demo.username_reserved(username):
+        return USERNAME_KEPT_FOR_GUESTS
+    if is_library_username(username):
+        return USERNAME_KEPT_FOR_SAMPLES
+    return None
+
+
 def username_unavailable(username: str) -> bool:
     """Whether a sign-up may not ask for `username`.
 
@@ -199,6 +228,14 @@ def approve_signup(
     serializer); this does what approval means once it is allowed.
     """
     signup = _lock_pending(signup)
+    if reserved_username(signup.username) is not None:
+        # Sign-up refuses these names; a request filed before one was
+        # reserved is refused here.
+        raise UsernameTaken(
+            f"The username {signup.username!r} is reserved and cannot be given "
+            f"to an account. Decline the request and ask them to choose another "
+            f"username."
+        )
     User = get_user_model()
     if same_name(User.objects.all(), signup.username).exists():
         raise UsernameTaken(

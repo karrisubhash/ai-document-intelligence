@@ -47,7 +47,7 @@ already in progress, an archived document). **429** is a rate limit.
 | GET | `/api/auth/signup/` | anyone | `{enabled, departments, roles, email_domains}` for the sign-up form: active departments `{id, name, code}`, the roles an applicant may ask for, and the `SIGNUP_EMAIL_DOMAINS` allowlist (empty: any address). With `SIGNUP_ENABLED=False`, `enabled: false` and empty lists. Unthrottled |
 | POST | `/api/auth/signup/` | anyone | `{username, email, first_name, last_name?, password, department?, role?, note?}` files a request - it creates no account. **201** `{status: "PENDING"}`. CSRF enforced; password validated and stored only as a hash; the username is NFKC-normalised, must be ASCII, and is refused (**400**, one message either way) when an account or a waiting request holds it, case-insensitively; the email's domain is lower-cased and must match the allowlist if one is set (subdomains count); `role` is FACULTY, STAFF or STUDENT. **403** when turned off; **429** with `SIGNUP_MAX_PENDING` requests waiting (`code` `signup_queue_full`), or past `THROTTLE_SIGNUP` (100/hour per address - counting attempts that pass CSRF, the switch and the queue check, failed ones included). Audited (`SIGNUP_REQUEST`) |
 | GET | `/api/auth/demo/` | anyone | `{enabled}`: whether the one-click demo is offered - `DEMO_ENABLED` on, its `DEMO_DEPARTMENT` active and holding at least one Ready document. Unthrottled (read on every landing-page visit) |
-| POST | `/api/auth/demo/` | anyone | No body. Makes a fresh demo guest (see below), signs it in with a session and answers **201** with exactly the body of `POST /api/auth/login/`. CSRF enforced. **404** when the demo is not offered; **429** past `THROTTLE_DEMO` (10/hour per address) or `THROTTLE_DEMO_GLOBAL` (60/hour, all addresses), or with `DEMO_MAX_GUESTS` guests existing (`code` `demo_full`). Refused requests (CSRF, demo off) spend no budget. Audited (`LOGIN`, `method: "demo"`); sweeps up to 20 expired guests first (`GUEST_PURGE`) |
+| POST | `/api/auth/demo/` | anyone | No body. Makes a fresh demo guest (see below), signs it in with a session and answers **201** with exactly the body of `POST /api/auth/login/`. CSRF enforced. **404** when the demo is not offered; **429** past `THROTTLE_DEMO` (10/hour per address) or `THROTTLE_DEMO_GLOBAL` (60/hour, all addresses), or with `DEMO_MAX_GUESTS` guests existing and none idle for `DEMO_GUEST_IDLE_MINUTES` (`code` `demo_full`). Refused requests (CSRF, demo off) spend no budget. Audited (`LOGIN`, `method: "demo"`); sweeps up to 20 expired guests first (`GUEST_PURGE`, `reason: "expired"`), and at the ceiling deletes the guest idle longest, if one has been idle that long, to make room (`GUEST_PURGE`, `reason: "idle"`) |
 | GET | `/api/auth/me/` | signed in | Profile, role, department and `capabilities`, which include `is_guest` (true for a demo guest) |
 | GET | `/api/departments/` | signed in | Active departments `{id, name, code}` |
 | GET | `/api/dashboard/` | signed in | Counts and lists over the caller's visible documents; `pending_signup_requests` - how many requests this administrator reviews - is null for non-administrators; `activity` - uploads by week, the caller's questions by day, the library by type and department, and for administrators an `org` week of headline numbers (cached 60 s; shape in [analytics.md](analytics.md#dashboard-activity)) |
@@ -60,7 +60,10 @@ extra password hash, whoever holds the name.
 
 **Demo guests** (`capabilities.is_guest`). An account made by `POST /api/auth/demo/`: named
 `guest-` and eight random characters, no usable password, STUDENT in `DEMO_DEPARTMENT`,
-deleted after `DEMO_GUEST_TTL_HOURS`. Every request a guest makes other than GET, HEAD and
+deleted after `DEMO_GUEST_TTL_HOURS` - or sooner, at `DEMO_MAX_GUESTS`, once it has made no
+request for `DEMO_GUEST_IDLE_MINUTES`. With `DEMO_ENABLED` off, a guest's next request of any
+kind, other than the public doors and sign-out below, signs it out and is **401**
+`{detail, code: "demo_ended"}`. Every request a guest makes other than GET, HEAD and
 OPTIONS is **403** `{detail, code: "demo_read_only"}` - before the view runs - except:
 `POST /api/chat/`, `POST /api/chat/stream/`, `POST /api/search/`,
 `POST /api/messages/{id}/feedback/`, `POST /api/notifications/{id}/read/`,
@@ -71,8 +74,9 @@ per guest `THROTTLE_GUEST_CHAT` (20/hour), `THROTTLE_GUEST_CHAT_BURST` (5/minute
 `THROTTLE_GUEST_SEARCH` (60/hour); for all guests together `THROTTLE_GUEST_CHAT_GLOBAL`
 (120/hour) and `THROTTLE_GUEST_SEARCH_GLOBAL` (600/hour). Past one: **429**
 `{detail, code: "demo_throttled"}` with `Retry-After`. A guest's API token is refused
-(**401**). Usernames beginning `guest-` are refused by sign-up and account creation
-(**400** on `username`).
+(**401**). Usernames beginning `guest-`, and `sample-library` (the sample library's owner),
+are refused by sign-up and account creation (**400** on `username`), compared
+NFKC-normalised and case-folded; approving a waiting request for one is **409**.
 
 ## Documents
 
@@ -265,7 +269,7 @@ change their own role or deactivate themselves.
 | GET · PATCH | `/api/admin/users/{id}/` | admins, scoped | Username immutable. Deactivation deletes the account's sessions and tokens. Superusers can be edited only by superusers; staff accounts not by department admins |
 | POST | `/api/admin/users/{id}/set-password/` | admins, scoped | Ends the user's sessions and tokens |
 | GET | `/api/admin/users/roles/` | admins | Roles this admin may assign |
-| POST | `/api/admin/samples/` | system admins | `{department}` - a registered, active department, matched case-insensitively. Loads the sample library into it through the upload path: **202** `{queued, skipped}` - samples created and queued for processing, and samples the department already held (any version of any document there with the same checksum, archived ones included). Owned by the inactive `sample-library` account. **400** on `department`. Throttled as `samples` (`THROTTLE_SAMPLES`, 10/hour). Audited: one `SAMPLES_LOAD` (`department`, `queued`, `skipped`, `via: "api"`) and a `DOCUMENT_CREATE` per sample, naming the administrator |
+| POST | `/api/admin/samples/` | system admins | `{department}` - a registered, active department, matched case-insensitively. Loads the sample library into it through the upload path: **202** `{queued, skipped}` - samples created and queued for processing, and samples the department already held (any version of any document there with the same checksum, archived ones included). Owned by the inactive `sample-library` account. **400** on `department`. **409** `{detail, code: "sample_library_account_taken"}` when an account that can sign in, or has a role or department, holds that name - the samples are never given to it. Throttled as `samples` (`THROTTLE_SAMPLES`, 10/hour). Audited: one `SAMPLES_LOAD` (`department`, `queued`, `skipped`, `via: "api"`) and a `DOCUMENT_CREATE` per sample, naming the administrator |
 
 Demo guests are not listed by, and cannot be edited or given a password through, the user
 endpoints (**404**), and are not counted in a department's `member_count`.
