@@ -37,25 +37,25 @@ CELL_SEPARATOR = " | "
 
 # A literal pipe inside a cell would be read as a column boundary by anything
 # that re-parses the row. The broken bar is the same glyph to a reader.
-PIPE_IN_CELL = "¦"
+PIPE_IN_CELL = "\u00a6"
 
 MIN_ROWS = detector.MIN_ROWS
 MIN_COLUMNS = detector.MIN_COLUMNS
 
 _TRANSLATE = {
-    ord("­"): None,  # soft hyphen
-    ord("​"): None,  # zero-width space
-    ord("﻿"): None,  # byte-order mark / zero-width no-break space
-    ord(" "): " ",  # no-break space
-    ord(" "): " ",  # narrow no-break space
-    ord(" "): " ",  # figure space
-    ord("ﬀ"): "ff",
-    ord("ﬁ"): "fi",
-    ord("ﬂ"): "fl",
-    ord("ﬃ"): "ffi",
-    ord("ﬄ"): "ffl",
-    ord("ﬅ"): "st",
-    ord("ﬆ"): "st",
+    ord("\u00ad"): None,  # soft hyphen
+    ord("\u200b"): None,  # zero-width space
+    ord("\ufeff"): None,  # byte-order mark / zero-width no-break space
+    ord("\u00a0"): " ",  # no-break space
+    ord("\u202f"): " ",  # narrow no-break space
+    ord("\u2007"): " ",  # figure space
+    ord("\ufb00"): "ff",
+    ord("\ufb01"): "fi",
+    ord("\ufb02"): "fl",
+    ord("\ufb03"): "ffi",
+    ord("\ufb04"): "ffl",
+    ord("\ufb05"): "st",
+    ord("\ufb06"): "st",
 }
 
 # C0 and C1 controls other than tab and newline. A form feed from a PDF

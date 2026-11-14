@@ -1,6 +1,9 @@
+from django.conf import settings
+
 from documents.models import PageContent
 from documents.processing.context import ExtractedPage, FileType, StageResult
 from documents.processing.extractors import docx, pdf, plain_text
+from documents.processing.extractors import ocr as ocr_extractor
 from documents.processing.normalize import strip_nul
 
 
@@ -42,7 +45,16 @@ def _extract_plain_text(context) -> StageResult:
 
 
 def _extract_pdf_text(context) -> StageResult:
-    results = pdf.extract_page_results(context.file_path)
+    pictures = settings.OCR_EMBEDDED_IMAGES and settings.OCR_EMBEDDED_IMAGES_MAX > 0
+    results = pdf.extract_page_results(
+        context.file_path,
+        # Pictures inside a page that has a text layer: a screenshot of a
+        # table, a pasted scan. The page's own words and the picture's are
+        # read together, so a table in a picture is a table.
+        region_ocr=ocr_extractor.read_words if pictures else None,
+        max_regions=settings.OCR_EMBEDDED_IMAGES_MAX if pictures else 0,
+        dpi=settings.OCR_DPI,
+    )
 
     for index, result in enumerate(results, start=1):
         # Decided on the text that will be stored: a text layer of nothing
@@ -151,9 +163,19 @@ def _extract_docx_text(context) -> StageResult:
 
 
 def _defer_image_to_ocr(context) -> StageResult:
-    context.pages = [ExtractedPage(page_number=1)]
+    # One page per frame. Almost every image has one; a multi-page TIFF is a
+    # scanned document and reading only its first page would silently drop
+    # the rest.
+    frames = ocr_extractor.image_frame_count(context.file_path)
+    context.pages = [
+        ExtractedPage(page_number=number) for number in range(1, frames + 1)
+    ]
 
     return StageResult(
-        message="Image has no text layer; deferred to OCR.",
-        metadata={"pages": 1, "pages_needing_ocr": 1},
+        message=(
+            "Image has no text layer; deferred to OCR."
+            if frames == 1
+            else f"Image has {frames} frames, no text layer; deferred to OCR."
+        ),
+        metadata={"pages": frames, "pages_needing_ocr": frames},
     )

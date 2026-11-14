@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from celery.exceptions import Retry
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import OperationalError
 from django.test import SimpleTestCase, override_settings
@@ -268,7 +269,7 @@ class OcrPathTests(IngestionTestCase):
 
         self.assertEqual(page.extraction_method, PageContent.ExtractionMethod.OCR)
         self.assertTrue(page.text.strip())
-        self.assertEqual(page.metadata["dpi"], 200)
+        self.assertEqual(page.metadata["dpi"], settings.OCR_DPI)
 
     def test_text_and_ocr_are_separately_measurable(self):
         response = self.upload(

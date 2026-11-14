@@ -83,6 +83,11 @@ _CID = re.compile(r"\(cid:\d+\)")
 # text-layer word sits on it. A scanned page that already carries an OCR text
 # layer has many words over its image and is left alone.
 MIN_IMAGE_PAGE_SHARE = 0.10
+
+# A picture covering this much of the page IS the page: a scan. It is not read
+# here as an insert but deferred to page-level OCR, which also turns a sideways
+# page upright and records the page as OCR - not as a text layer.
+SCANNED_PAGE_SHARE = 0.80
 MAX_WORDS_OVER_IMAGE = 3
 MIN_IMAGE_PIXELS = 60
 
@@ -134,6 +139,22 @@ def page_count(file_path: str) -> int:
 def extract_pages(file_path: str) -> list[str]:
     """Text layer per page, index 0 = page 1. Blank where there is none."""
     return [page.text for page in extract_page_results(file_path)]
+
+
+def extract_pages_pypdf(file_path: str) -> list[str]:
+    """The previous engine, kept as a named baseline for the benchmark.
+
+    Not used by the pipeline: it is what `extract_pages` returned before
+    pdfplumber, so a comparison against it measures what changed.
+    """
+    reader = open_reader(file_path)
+    try:
+        return [page.extract_text() or "" for page in reader.pages]
+    except Exception as exc:
+        raise StageError(
+            f"PDF text extraction failed: {exc}",
+            code=ErrorCode.EXTRACTION_FAILED,
+        ) from exc
 
 
 def extract_page_results(
@@ -204,6 +225,12 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
     unreadable = _garbled(upright, ruled)
     if unreadable:
         return PdfPage(needs_ocr=True, metadata={"ocr_reason": unreadable})
+
+    if _is_scan(page, upright):
+        return PdfPage(
+            needs_ocr=True,
+            metadata={"ocr_reason": "scanned page: a picture with no text layer"},
+        )
 
     if region_ocr is not None:
         upright += _ocr_pictures(page, upright, region_ocr, budget, dpi, metadata)
@@ -336,8 +363,8 @@ def _garbled(words, ruled) -> str:
     if not size:
         return ""
 
-    replaced = glyphs.count("�")
-    private = sum(1 for char in glyphs if "" <= char <= "")
+    replaced = glyphs.count("\ufffd")
+    private = sum(1 for char in glyphs if "\ue000" <= char <= "\uf8ff")
     reasons = (
         (unmapped, "unmapped glyphs in the text layer"),
         (replaced, "replacement characters in the text layer"),
@@ -364,6 +391,28 @@ def _garbled(words, ruled) -> str:
 # -- pictures ---------------------------------------------------------------
 
 
+def _is_scan(page, words) -> bool:
+    """A page that is one picture with (almost) no text over it."""
+    area = float(page.width * page.height)
+    for picture in _pictures(page, area):
+        covered = (picture["x1"] - picture["x0"]) * (picture["bottom"] - picture["top"])
+        if covered < SCANNED_PAGE_SHARE * area:
+            continue
+        box = (picture["x0"], picture["top"], picture["x1"], picture["bottom"])
+        if _words_over(words, box) <= MAX_WORDS_OVER_IMAGE:
+            return True
+    return False
+
+
+def _words_over(words, box) -> int:
+    return sum(
+        1
+        for word in words
+        if box[0] <= (word.x0 + word.x1) / 2 <= box[2]
+        and box[1] <= (word.top + word.bottom) / 2 <= box[3]
+    )
+
+
 def _ocr_pictures(page, words, region_ocr, budget, dpi, metadata) -> list:
     """Words read out of large pictures that have no text over them."""
     page_area = float(page.width * page.height)
@@ -372,13 +421,7 @@ def _ocr_pictures(page, words, region_ocr, budget, dpi, metadata) -> list:
 
     for picture in _pictures(page, page_area):
         box = (picture["x0"], picture["top"], picture["x1"], picture["bottom"])
-        over = sum(
-            1
-            for word in words
-            if box[0] <= (word.x0 + word.x1) / 2 <= box[2]
-            and box[1] <= (word.top + word.bottom) / 2 <= box[3]
-        )
-        if over > MAX_WORDS_OVER_IMAGE:
+        if _words_over(words, box) > MAX_WORDS_OVER_IMAGE:
             continue
         if not budget.take():
             continue

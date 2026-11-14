@@ -251,8 +251,8 @@ class UnusableTextLayerTests(SimpleTestCase):
         self.assertEqual(result.metadata["ocr_reason"], "no text layer")
 
     def test_replacement_and_private_use_characters_are_unreadable(self):
-        replaced = [geometry.Word("�" * 12, 0, 10, 0, 10)]
-        private = [geometry.Word("" * 12, 0, 10, 0, 10)]
+        replaced = [geometry.Word("\ufffd" * 12, 0, 10, 0, 10)]
+        private = [geometry.Word("\ue001" * 12, 0, 10, 0, 10)]
         fine = [geometry.Word("Registrar of examinations", 0, 10, 0, 10)]
 
         self.assertIn("replacement", pdf._garbled(replaced, []))

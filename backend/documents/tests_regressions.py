@@ -30,6 +30,7 @@ from documents.models import (
 )
 from documents.processing.classification import service as classification_service
 from documents.processing.errors import ErrorCode, StageError
+from documents.processing.extractors.ocr import OcrPage
 from documents.processing.field_extraction import service as extraction_service
 from documents.processing.field_extraction.matching import FOUND, INVALID, find_field
 from documents.processing.field_extraction.rule_extractor import DEFAULT_PACK
@@ -649,7 +650,7 @@ class PipelineInputRegressionTests(TestCase):
         must exist" check, and the document COMPLETED with a blank page."""
         with mock.patch(
             "documents.processing.extractors.ocr.ocr_pdf_page",
-            return_value="Notice recovered by OCR",
+            return_value=OcrPage(text="Notice recovered by OCR"),
         ) as ocr:
             page = self.stored_page(make_pdf_bytes(["\x00\x00\x00\x00"]), "nul.pdf")
 

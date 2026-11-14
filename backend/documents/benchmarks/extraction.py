@@ -95,10 +95,51 @@ def approach_ocr(path: str, file_type: str) -> list[PageResult]:
         return [PageResult(1, plain_text.read_text(path), "PLAIN_TEXT")]
 
     if file_type == FileType.IMAGE:
-        return [PageResult(1, ocr.ocr_image_file(path), "OCR")]
+        return [PageResult(1, ocr.ocr_image_file(path).text, "OCR")]
 
     return [
-        PageResult(number, ocr.ocr_pdf_page(path, number, settings.OCR_DPI), "OCR")
+        PageResult(number, ocr.ocr_pdf_page(path, number, settings.OCR_DPI).text, "OCR")
+        for number in range(1, pdf.page_count(path) + 1)
+    ]
+
+
+def approach_pypdf_text(path: str, file_type: str) -> list[PageResult]:
+    """The text layer through pypdf - the engine used before pdfplumber."""
+    if file_type == FileType.TXT:
+        return [PageResult(1, plain_text.read_text(path), "PLAIN_TEXT")]
+
+    if file_type != FileType.PDF:
+        raise StageError(
+            "Approach only handles PDF/TXT.", code=ErrorCode.UNSUPPORTED_FILE_TYPE
+        )
+
+    return [
+        PageResult(index, text, "PDF_TEXT")
+        for index, text in enumerate(pdf.extract_pages_pypdf(path), start=1)
+    ]
+
+
+def approach_ocr_plain(path: str, file_type: str) -> list[PageResult]:
+    """OCR as plain Tesseract text at the old 200 DPI - the baseline."""
+    import pytesseract
+    from pdf2image import convert_from_path
+    from PIL import Image
+
+    if file_type == FileType.TXT:
+        return [PageResult(1, plain_text.read_text(path), "PLAIN_TEXT")]
+
+    if file_type == FileType.IMAGE:
+        with Image.open(path) as image:
+            return [PageResult(1, pytesseract.image_to_string(image), "OCR")]
+
+    return [
+        PageResult(
+            number,
+            pytesseract.image_to_string(
+                convert_from_path(path, dpi=200, first_page=number, last_page=number)[0]
+            ),
+            "OCR",
+        )
         for number in range(1, pdf.page_count(path) + 1)
     ]
 
@@ -109,7 +150,7 @@ def approach_auto(path: str, file_type: str) -> list[PageResult]:
         return [PageResult(1, plain_text.read_text(path), "PLAIN_TEXT")]
 
     if file_type == FileType.IMAGE:
-        return [PageResult(1, ocr.ocr_image_file(path), "OCR")]
+        return [PageResult(1, ocr.ocr_image_file(path).text, "OCR")]
 
     pages = []
     for number, text in enumerate(pdf.extract_pages(path), start=1):
@@ -118,7 +159,9 @@ def approach_auto(path: str, file_type: str) -> list[PageResult]:
         else:
             pages.append(
                 PageResult(
-                    number, ocr.ocr_pdf_page(path, number, settings.OCR_DPI), "OCR"
+                    number,
+                    ocr.ocr_pdf_page(path, number, settings.OCR_DPI).text,
+                    "OCR",
                 )
             )
     return pages
@@ -126,7 +169,9 @@ def approach_auto(path: str, file_type: str) -> list[PageResult]:
 
 APPROACHES = {
     "pdf_text": approach_pdf_text,
+    "pypdf_text": approach_pypdf_text,
     "ocr": approach_ocr,
+    "ocr_plain": approach_ocr_plain,
     "auto": approach_auto,
 }
 

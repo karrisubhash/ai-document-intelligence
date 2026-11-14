@@ -12,7 +12,27 @@ MAGIC_SIGNATURES = [
     (b"%PDF", FileType.PDF),
     (b"\x89PNG\r\n\x1a\n", FileType.IMAGE),
     (b"\xff\xd8\xff", FileType.IMAGE),
+    # TIFF, little- and big-endian. Often multi-page: a scanned document.
+    (b"II*\x00", FileType.IMAGE),
+    (b"MM\x00*", FileType.IMAGE),
 ]
+
+# Signatures that need more than a prefix to be sure of. Two bytes ("BM") is
+# also how a text file that begins with those letters starts, so a bitmap must
+# also carry a plausible DIB header; WebP is a RIFF container whose type sits
+# four bytes later.
+BMP_HEADER_SIZES = {12, 40, 52, 56, 64, 108, 124}
+
+
+def _is_bmp(header: bytes) -> bool:
+    if not header.startswith(b"BM") or len(header) < 18:
+        return False
+    return int.from_bytes(header[14:18], "little") in BMP_HEADER_SIZES
+
+
+def _is_webp(header: bytes) -> bool:
+    return header.startswith(b"RIFF") and header[8:12] == b"WEBP"
+
 
 # Every ZIP-based office format shares these bytes, so the signature alone
 # cannot identify a DOCX - the archive has to be opened and asked whether it
@@ -25,17 +45,24 @@ EXTENSION_TYPES = {
     ".png": FileType.IMAGE,
     ".jpg": FileType.IMAGE,
     ".jpeg": FileType.IMAGE,
+    ".tif": FileType.IMAGE,
+    ".tiff": FileType.IMAGE,
+    ".webp": FileType.IMAGE,
+    ".bmp": FileType.IMAGE,
     ".docx": FileType.DOCX,
 }
 
 
 def detect_file_type(file_path: str) -> str | None:
     with open(file_path, "rb") as handle:
-        header = handle.read(8)
+        header = handle.read(32)
 
     for signature, file_type in MAGIC_SIGNATURES:
         if header.startswith(signature):
             return file_type
+
+    if _is_webp(header) or _is_bmp(header):
+        return FileType.IMAGE
 
     if header.startswith(ZIP_SIGNATURES):
         # A .xlsx, .pptx or plain .zip reaches here too and must come back

@@ -22,9 +22,12 @@ def run(context) -> StageResult:
 
     for page in pending:
         if context.file_type == FileType.IMAGE:
-            text = ocr_extractor.ocr_image_file(context.file_path)
+            # One page per frame: a multi-page TIFF is a scanned document.
+            result = ocr_extractor.ocr_image_file(
+                context.file_path, frame=page.page_number - 1
+            )
         else:
-            text = ocr_extractor.ocr_pdf_page(
+            result = ocr_extractor.ocr_pdf_page(
                 context.file_path, page.page_number, settings.OCR_DPI
             )
 
@@ -32,12 +35,14 @@ def run(context) -> StageResult:
         # if the extractor said - OCR text is a different thing to trust.
         reason = page.metadata.get("ocr_reason")
 
-        page.text = text
+        page.text = result.text
+        page.tables = result.tables
         page.extraction_method = PageContent.ExtractionMethod.OCR
         page.metadata = {
             "extractor": "tesseract",
             "extractor_version": ocr_extractor.tesseract_version(),
             "dpi": settings.OCR_DPI if context.file_type == FileType.PDF else None,
+            **result.metadata,
             **({"ocr_reason": reason} if reason else {}),
         }
 

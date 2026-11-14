@@ -134,7 +134,7 @@ class PageBuilderTests(SimpleTestCase):
 
         text, tables = page.build()
 
-        self.assertEqual(tables[0].rows[1], ["A¦B", "two lines here"])
+        self.assertEqual(tables[0].rows[1], ["A\u00a6B", "two lines here"])
         self.assertEqual(len(_slice(text, tables[0]).split("\n")), 2)
 
     def test_the_header_is_the_first_row_when_it_is_clearly_not_data(self):
@@ -156,12 +156,12 @@ class PageBuilderTests(SimpleTestCase):
 
     def test_ligatures_and_invisible_characters_are_cleaned(self):
         page = compose.PageBuilder()
-        page.add_text("oﬃce ﬁle­name​ and more")
+        page.add_text("o\ufb03ce \ufb01le\u00adname\u200b and\u00a0more")
 
         self.assertEqual(page.build()[0], "office filename and more")
 
     def test_a_zero_width_joiner_is_kept_for_indic_scripts(self):
-        word = "क्‍ष"
+        word = "\u0915\u094d\u200d\u0937"
 
         page = compose.PageBuilder()
         page.add_text(word)

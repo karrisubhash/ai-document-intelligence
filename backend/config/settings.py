@@ -471,7 +471,33 @@ if AWS_STORAGE_BUCKET_NAME:
 # Ingestion limits, enforced by the VALIDATION pipeline stage.
 MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 500
-OCR_DPI = 200
+
+# OCR. Tesseract reads best when the x-height of the text is about 20 pixels,
+# which is 10pt text at 300 DPI; at the 200 it used to run at, small print
+# came back as guesses. Costs roughly twice the time per page, so a very
+# long scan is the case to watch against CELERY_TASK_SOFT_TIME_LIMIT.
+OCR_DPI = int(os.getenv("OCR_DPI", "300"))
+
+# Tesseract language packs, joined with "+" ("eng+hin"). A pack that is not
+# installed is dropped with the rest still used, and "eng" is the floor - the
+# image installs English and its orientation data only; more packs are a
+# build argument (TESSERACT_LANGS), because each is tens of megabytes.
+OCR_LANGUAGES = os.getenv("OCR_LANGUAGES", "eng")
+
+# Words Tesseract itself is below this percent sure of are dropped: speckle,
+# folds and halftone dots come out as confident-looking nonsense words at
+# 10-25, and real text is almost never under 40.
+OCR_MIN_WORD_CONFIDENCE = int(os.getenv("OCR_MIN_WORD_CONFIDENCE", "30"))
+
+# A scan or photo that reads poorly is checked for being sideways or upside
+# down and read again; the second reading is kept only if it is better.
+OCR_DETECT_ROTATION = os.getenv("OCR_DETECT_ROTATION", "True").lower() == "true"
+
+# A PDF page whose text layer has a big picture with no text over it (a
+# screenshot of a table, a scanned insert) has that picture OCR'd too, up to
+# this many per document so one image-heavy file cannot hold a worker.
+OCR_EMBEDDED_IMAGES = os.getenv("OCR_EMBEDDED_IMAGES", "True").lower() == "true"
+OCR_EMBEDDED_IMAGES_MAX = int(os.getenv("OCR_EMBEDDED_IMAGES_MAX", "20"))
 
 # Dotted path to a LAYOUT classifier (a DocumentClassifier). Empty means it
 # is not run - it never guesses a label. Its verdict is a page-layout class
