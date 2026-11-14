@@ -184,6 +184,9 @@ export const ANSWER_STAGE_LABEL: Record<string, string> = {
 export const FILE_KIND_LABEL: Record<string, string> = {
   PDF: "PDF",
   DOCX: "Word",
+  XLSX: "Excel",
+  CSV: "CSV",
+  PPTX: "PowerPoint",
   TXT: "Text",
   IMAGE: "Image",
   OTHER: "Other",

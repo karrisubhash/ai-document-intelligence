@@ -8,7 +8,22 @@
  */
 
 // Mirrors EXTENSION_TYPES in backend/documents/processing/stages/ingestion.py.
-export const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"];
+export const ACCEPTED_EXTENSIONS = [
+  ".pdf",
+  ".docx",
+  ".xlsx",
+  ".pptx",
+  ".csv",
+  ".tsv",
+  ".txt",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".tif",
+  ".tiff",
+  ".webp",
+  ".bmp",
+];
 
 export const ACCEPT_ATTRIBUTE = ACCEPTED_EXTENSIONS.join(",");
 
@@ -48,10 +63,18 @@ export function fileProblem(name: string, size: number): string | null {
 export const MIME_BY_EXTENSION: Record<string, string> = {
   ".pdf": "application/pdf",
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".csv": "text/csv",
+  ".tsv": "text/tab-separated-values",
   ".txt": "text/plain",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
 };
 
 /** A title from a filename: "exam_regulations-2024.pdf" -> "Exam regulations 2024". */
@@ -63,17 +86,31 @@ export function titleFromFilename(name: string): string {
 export function isPreviewable(mime: string, name: string): "pdf" | "image" | "text" | null {
   const ext = extensionOf(name);
   if (mime === "application/pdf" || ext === ".pdf") return "pdf";
-  if (mime.startsWith("image/") || [".png", ".jpg", ".jpeg"].includes(ext)) return "image";
-  if (mime.startsWith("text/") || ext === ".txt") return "text";
+  // A browser cannot draw a TIFF (only Safari can), so it has no preview.
+  if (ext === ".tif" || ext === ".tiff" || mime === "image/tiff") return null;
+  if (mime.startsWith("image/") || [".png", ".jpg", ".jpeg", ".webp", ".bmp"].includes(ext)) {
+    return "image";
+  }
+  // A delimited file is text: its rows are readable as they are.
+  if (mime.startsWith("text/") || [".txt", ".csv", ".tsv"].includes(ext)) return "text";
   return null;
 }
 
 const FORMAT_LABEL: Record<string, string> = {
   "application/pdf": "PDF document",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Excel workbook",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PowerPoint deck",
+  "text/csv": "CSV file",
+  "text/tab-separated-values": "TSV file",
+  // What Windows browsers report for a .csv when Excel is installed.
+  "application/vnd.ms-excel": "Spreadsheet",
   "text/plain": "Plain text",
   "image/png": "PNG image",
   "image/jpeg": "JPEG image",
+  "image/tiff": "TIFF image",
+  "image/webp": "WebP image",
+  "image/bmp": "BMP image",
 };
 
 /** "application/pdf" -> "PDF document"; an unknown type is shown as it is. */

@@ -607,9 +607,9 @@ function UploadForm({
               </>
             )}
             <p className="field-hint" id="upload-file-hint">
-              PDF, Word (.docx), plain text, or a PNG/JPEG scan, up to 50 MB each, or a .zip of
-              them. Up to {MAX_BATCH_FILES} files at a time. Every upload is scanned before it is
-              read.
+              PDF, Word, Excel, PowerPoint, CSV, plain text, or an image scan (PNG, JPEG, TIFF),
+              up to 50 MB each, or a .zip of them. Up to {MAX_BATCH_FILES} files at a time. Every
+              upload is scanned before it is read.
             </p>
           </div>
         ) : null}

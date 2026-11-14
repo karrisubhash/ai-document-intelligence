@@ -41,7 +41,12 @@ logger = logging.getLogger("adi.pipeline")
 
 # Bumped whenever the pipeline changes in a way that alters its output,
 # so stored content can be traced back to what produced it.
-PROCESSING_VERSION = "ingestion-v1"
+#
+#   v2  pdfplumber and layout reading for PDFs, OCR with word positions and
+#       orientation, DOCX read as XML, tables stored as the cells the
+#       extractor saw. `manage.py reprocess_documents` re-extracts what v1
+#       produced.
+PROCESSING_VERSION = "ingestion-v2"
 
 # Stages that build the normalized representation from the raw file.
 CONTENT_STAGES = [

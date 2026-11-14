@@ -625,14 +625,22 @@ const FILE_KIND: Record<string, string> = {
   ".pdf": "pdf",
   ".docx": "doc",
   ".doc": "doc",
+  ".xlsx": "xls",
+  ".csv": "xls",
+  ".tsv": "xls",
+  ".pptx": "ppt",
   ".txt": "txt",
   ".png": "img",
   ".jpg": "img",
   ".jpeg": "img",
+  ".tif": "img",
+  ".tiff": "img",
+  ".webp": "img",
+  ".bmp": "img",
 };
 
 /**
- * A tile naming the file's format - PDF, DOCX, TXT, PNG - in the colour
+ * A tile naming the file's format - PDF, DOCX, XLSX, PNG - in the colour
  * readers already associate with it. Decoration: the format is always
  * also written out nearby (the file name), so nothing relies on the colour.
  */

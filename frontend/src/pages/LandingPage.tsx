@@ -107,7 +107,7 @@ const FAQ: [string, ReactNode][] = [
   ],
   [
     "Which files can it read?",
-    "PDF, Word (.docx), plain text and images (PNG or JPEG), up to 50 MB and 500 pages each. Scanned pages are read by OCR.",
+    "PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), CSV and plain text, and images (PNG, JPEG, TIFF, WebP or BMP), up to 50 MB and 500 pages each. Tables are kept as tables, and scanned pages and pictures of text are read by OCR.",
   ],
   [
     "Can it make things up?",

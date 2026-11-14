@@ -171,7 +171,22 @@ describe("upload checks", () => {
     new File([new Uint8Array(size)], name, { type: "application/octet-stream" });
 
   it("accepts the formats the server accepts", () => {
-    for (const name of ["a.pdf", "b.docx", "c.txt", "d.png", "e.JPG"]) {
+    const accepted = [
+      "a.pdf",
+      "b.docx",
+      "c.txt",
+      "d.png",
+      "e.JPG",
+      "fees.xlsx",
+      "deck.pptx",
+      "marks.csv",
+      "marks.tsv",
+      "scan.tiff",
+      "scan.TIF",
+      "photo.webp",
+      "photo.bmp",
+    ];
+    for (const name of accepted) {
       expect(validateFile(file(name, 10))).toBeNull();
     }
   });
@@ -180,7 +195,10 @@ describe("upload checks", () => {
     expect(validateFile(file("a.pdf", 0))).toMatch(/empty/);
     expect(validateFile(file("a.pdf", 51 * 1024 * 1024))).toMatch(/50 MB/);
     expect(validateFile(file("macro.docm", 10))).toMatch(/Unsupported/);
-    expect(validateFile(file("scan.tiff", 10))).toMatch(/Unsupported/);
+    // Legacy binary Office formats are not read; their modern forms are.
+    expect(validateFile(file("old.xls", 10))).toMatch(/Unsupported/);
+    expect(validateFile(file("old.ppt", 10))).toMatch(/Unsupported/);
+    expect(validateFile(file("macro.xlsm", 10))).toMatch(/Unsupported/);
     expect(validateFile(null)).toMatch(/Choose/);
   });
 

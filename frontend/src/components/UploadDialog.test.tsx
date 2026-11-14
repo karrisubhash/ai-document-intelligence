@@ -95,7 +95,7 @@ describe("UploadDialog, one file", () => {
   it("says why a file cannot be uploaded, and does not send it", async () => {
     const upload = vi.spyOn(api, "upload");
     renderDialog();
-    const dialog = await choose([file("budget.xlsx")], { applyAccept: false });
+    const dialog = await choose([file("budget.xls")], { applyAccept: false });
     expect(within(dialog).getByText(/Unsupported file type/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
     expect(upload).not.toHaveBeenCalled();
@@ -130,21 +130,22 @@ describe("UploadDialog, several files", () => {
     renderDialog();
 
     const dialog = await choose([zipFile(fromBase64(PYTHON_ZIP), "term.zip")]);
-    expect(await within(dialog).findByText("4 files to upload · 1 skipped")).toBeInTheDocument();
+    expect(await within(dialog).findByText("5 files to upload")).toBeInTheDocument();
     const list = within(dialog).getByRole("list", { name: "Chosen files" });
     expect(within(list).getByText(/in term\.zip › reports$/)).toBeInTheDocument();
+    // A workbook is a format the server reads, so it is listed to upload, not skipped.
     const sheet = within(list).getByText("sheet.xlsx").closest("li") as HTMLElement;
-    expect(within(sheet).getByText("Skipped")).toBeInTheDocument();
-    expect(within(sheet).getByText(/Unsupported file type/)).toBeInTheDocument();
+    expect(within(sheet).queryByText("Skipped")).not.toBeInTheDocument();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Upload 4 documents" }));
-    expect(await within(dialog).findByText("4 documents uploaded")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Upload 5 documents" }));
+    expect(await within(dialog).findByText("5 documents uploaded")).toBeInTheDocument();
     const sent = upload.mock.calls.map((call) => (call[0] as UploadInput).file);
     expect(sent.map((item) => item.name).sort()).toEqual([
       "exam_rules.txt",
       "forced64.txt",
       "résumé.txt",
       "scan.png",
+      "sheet.xlsx",
     ]);
     const rules = sent.find((item) => item.name === "exam_rules.txt");
     expect(rules?.type).toBe("text/plain");

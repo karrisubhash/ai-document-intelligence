@@ -1647,6 +1647,20 @@ code {
   color: var(--success);
 }
 
+/* Spreadsheets and delimited files share the green readers know from Excel;
+   the tile's own label (XLSX, CSV) is what tells them from an image. */
+.file-icon-xls {
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.file-icon-ppt {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+
 .icon-tile {
   flex: none;
   display: grid;

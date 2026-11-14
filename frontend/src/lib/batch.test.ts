@@ -24,7 +24,7 @@ describe("planFiles", () => {
   });
 
   it("lists what it will not upload, with the reason, without dropping the rest", async () => {
-    const items = await planFiles([file("a.pdf"), file("budget.xlsx"), file("empty.txt", "")]);
+    const items = await planFiles([file("a.pdf"), file("budget.xls"), file("empty.txt", "")]);
     expect(items[0].skip).toBeUndefined();
     expect(items[1].skip).toMatch(/Unsupported file type/);
     expect(items[2].skip).toMatch(/empty/);
@@ -37,7 +37,21 @@ describe("planFiles", () => {
       { name: "scan.png", from: "term.zip", skip: undefined },
       { name: "résumé.txt", from: "term.zip", skip: undefined },
       { name: "forced64.txt", from: "term.zip", skip: undefined },
-      { name: "sheet.xlsx", from: "term.zip", skip: expect.stringMatching(/Unsupported/) },
+      { name: "sheet.xlsx", from: "term.zip", skip: undefined },
+    ]);
+  });
+
+  it("lists what in a zip it will not upload, with the reason, and still takes the rest", async () => {
+    const zip = await buildZip([
+      { name: "rules.pdf", data: "pdf bytes" },
+      { name: "legacy.xls", data: "old excel" },
+      { name: "notes.txt", data: "notes" },
+    ]);
+    const items = await planFiles([zipFile(zip, "mixed.zip")]);
+    expect(pick(items)).toEqual([
+      { name: "rules.pdf", from: "mixed.zip", skip: undefined },
+      { name: "legacy.xls", from: "mixed.zip", skip: expect.stringMatching(/Unsupported/) },
+      { name: "notes.txt", from: "mixed.zip", skip: undefined },
     ]);
   });
 
@@ -126,7 +140,7 @@ describe("addPlanned", () => {
 
   it(`refuses a whole choice that would pass ${MAX_BATCH_FILES} files, rather than half of it`, async () => {
     const many = await planFiles(Array.from({ length: MAX_BATCH_FILES - 1 }, (_, i) => file(`doc-${i}.txt`)));
-    const fits = addPlanned(many, await planFiles([file("last.txt"), file("bad.xlsx")]));
+    const fits = addPlanned(many, await planFiles([file("last.txt"), file("bad.xls")]));
     expect(Array.isArray(fits) && fits.length).toBe(MAX_BATCH_FILES + 1);
 
     const refused = addPlanned(many, await planFiles([file("x.txt"), file("y.txt")]));
