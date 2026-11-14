@@ -109,7 +109,13 @@ from .gateway import (
     Trace,
     links_from_settings,
 )
-from .llm import ABSTENTION_TEXT, ExtractiveAnswerer, LLMResponse, is_abstention
+from .llm import (
+    ABSTENTION_TEXT,
+    ExtractiveAnswerer,
+    LLMResponse,
+    declines_to_answer,
+    is_abstention,
+)
 
 # Re-exported: where these lived before the gateway existed, and where
 # callers and tests still import them from.
@@ -432,7 +438,7 @@ class OpenAICompatibleAnswerer:
                 "purpose": gateway_module.current_purpose(),
             },
         )
-        response.abstained = is_abstention(text)
+        response.abstained = is_abstention(text) or declines_to_answer(text)
         response.cited_markers = _markers(text)
         return response
 

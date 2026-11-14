@@ -370,6 +370,44 @@ class FigureAbstentionTests(TestCase):
         )
         self.assertEqual(answer.abstention_reason, engine.Abstention.MAYBE_IN_A_FIGURE)
 
+    def test_a_page_whose_text_was_read_is_not_an_unreadable_figure(self):
+        """A scanned page is one embedded image the size of the page. OCR
+        read it into chunks, yet it was reported as an unreadable figure and
+        every unanswered question over it became MAYBE_IN_A_FIGURE - the
+        abstention chat's general reply may not replace."""
+        from documents.models import DocumentChunk
+        from documents.rag import engine
+
+        self.document.refresh_from_db()
+        version = self.document.current_version
+        version.refresh_from_db()
+        self.assertTrue(engine._figure_hints([self.document.id]))
+
+        text = "The scanned page was read by OCR and this is its text. " * 8
+        DocumentChunk.objects.create(
+            document_version=version,
+            document_content=version.current_content,
+            chunk_index=900,
+            page_number=1,
+            character_start=0,
+            character_end=len(text),
+            text=text,
+            character_count=len(text),
+            chunking_strategy="test",
+            chunking_version="test",
+        )
+
+        self.assertGreater(len(text), engine.FIGURE_PAGE_TEXT_CHARACTERS)
+        self.assertEqual(engine._figure_hints([self.document.id]), [])
+
+        answer = engine._abstain(
+            "q",
+            engine.Abstention.MODEL_ABSTAINED,
+            0.0,
+            relevant_document_ids=[self.document.id],
+        )
+        self.assertEqual(answer.abstention_reason, engine.Abstention.MODEL_ABSTAINED)
+
     def ask(self, **options):
         from documents.rag import engine
 

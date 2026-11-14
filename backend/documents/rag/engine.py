@@ -228,6 +228,12 @@ def ranked_document_ids(reranked) -> list:
 # forty documents is not a hint.
 MAX_HINTED_DOCUMENTS = 3
 
+# A page with at least this much extracted text has been read, whatever images
+# it also carries; see _figure_hints. About three lines of prose: a chart
+# with a title and axis labels stays under it, a scanned page that OCR read
+# does not.
+FIGURE_PAGE_TEXT_CHARACTERS = 300
+
 
 def _figure_hints(document_ids) -> list:
     """Notes naming unreadable figures in documents retrieval already found.
@@ -252,9 +258,9 @@ def _figure_hints(document_ids) -> list:
     if not document_ids:
         return []
 
-    from django.db.models import F
+    from django.db.models import F, Sum
 
-    from documents.models import DocumentFigure
+    from documents.models import DocumentChunk, DocumentFigure
 
     rows = (
         DocumentFigure.objects.filter(
@@ -281,6 +287,37 @@ def _figure_hints(document_ids) -> list:
     for document_id, title, page_number in rows:
         titles[document_id] = title
         pages_by_document.setdefault(document_id, []).append(page_number)
+
+    # A page whose text was read is not a page that cannot be read. Every
+    # embedded image is a "figure", and a scanned page is one image the size
+    # of the page: OCR read it into chunks, yet it was reported as an
+    # unreadable figure, which relabelled every unanswered question over a
+    # scanned document MAYBE_IN_A_FIGURE - the abstention chat's general
+    # reply may not replace - and told the reader to look at a page whose
+    # text we hold.
+    if pages_by_document:
+        text_pages = {
+            (row["document_version__document_id"], row["page_number"])
+            for row in DocumentChunk.objects.filter(
+                document_version__document_id__in=list(pages_by_document),
+                document_version=F("document_version__document__current_version"),
+                document_content=F("document_version__current_content"),
+            )
+            .order_by()
+            .values("document_version__document_id", "page_number")
+            .annotate(characters=Sum("character_count"))
+            if row["characters"] >= FIGURE_PAGE_TEXT_CHARACTERS
+        }
+        for document_id in list(pages_by_document):
+            pages = [
+                page
+                for page in pages_by_document[document_id]
+                if (document_id, page) not in text_pages
+            ]
+            if pages:
+                pages_by_document[document_id] = pages
+            else:
+                del pages_by_document[document_id]
 
     # In retrieval order, so the cap drops the least likely documents. In
     # title order it could drop the best-ranked one for three that sort

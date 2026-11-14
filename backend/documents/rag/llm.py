@@ -44,6 +44,43 @@ def is_abstention(text: str) -> bool:
     return _normalise_reply(text) == _normalise_reply(ABSTENTION_TEXT)
 
 
+# A model told to reply with one exact sentence often replies with the same
+# message in its own words: "I couldn't find the PhD fee in these documents.
+# They only list B.Tech and M.Tech." That is a refusal, but is_abstention()
+# is exact, and the reply has no citation, so it failed grounding and was
+# stored as UNGROUNDED - the hallucination signal - and, being neither
+# NO_RELEVANT_PASSAGES nor MODEL_ABSTAINED, was kept away from the
+# general-knowledge reply it should have had.
+_DECLINE = re.compile(
+    r"\b(?:(?:could\s*n[o']t|can\s*n[o']t|cannot|can't|unable\s+to|"
+    r"(?:did|do|does)\s*n[o']t|didn't|don't|doesn't)\s+"
+    r"(?:find|locate|see|contain|mention|cover|include|provide|specify|state|"
+    r"say|have|address|answer)"
+    r"|no\s+(?:relevant\s+|such\s+|specific\s+)?(?:information|mention|details?|"
+    r"passages?|data)"
+    r"|not\s+(?:covered|mentioned|specified|stated|available|provided|found)"
+    r"\s+in)\b",
+    re.I,
+)
+_CITATION = re.compile(r"\[\d{1,3}\]")
+_HAS_FIGURE = re.compile(r"\d")
+
+
+def declines_to_answer(text: str) -> bool:
+    """Whether a reply refuses in its own words rather than answering.
+
+    Only a reply with no citation and no figure qualifies: it says it found
+    nothing and offers nothing a reader could act on. One that cites a
+    passage or states a number is an answer - possibly a wrong one - and
+    still goes through grounding, which is how a wrong answer is caught.
+    """
+    text = (text or "").replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
+    text = text.replace("\N{LEFT SINGLE QUOTATION MARK}", "'")
+    if not text.strip() or _CITATION.search(text) or _HAS_FIGURE.search(text):
+        return False
+    return bool(_DECLINE.search(text))
+
+
 # Sentence splitting good enough for institutional prose. Deliberately not a
 # full NLP sentence tokenizer - the failure mode of splitting "Clause 4.2"
 # badly is a slightly long quote, which is harmless here.

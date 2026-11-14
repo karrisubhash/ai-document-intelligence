@@ -81,8 +81,20 @@ MAX_DEPENDENT_TERMS = 1
 # opens an independent question far more often than it refers back to one,
 # and a referring word that fires on ordinary questions is worse than a
 # missing one.
+# "it" followed by one of these is the grammatical placeholder of "Is it
+# mandatory to...?" / "Is it possible for...?", not a reference to anything
+# said earlier. Read as a pronoun it made those questions "follow-ups", and
+# the previous turn's vocabulary was appended to the retrieval query.
+_EXPLETIVE_ADJECTIVES = (
+    r"possible|impossible|mandatory|compulsory|necessary|required|allowed"
+    r"|permitted|permissible|acceptable|advisable|optional|essential|legal"
+    r"|okay|ok|fine|true|worth|ever|enough|safe"
+)
+_EXPLETIVE_TAIL = rf"(?:be\s+)?(?:{_EXPLETIVE_ADJECTIVES})"
+EXPLETIVE_IT = re.compile(rf"\s+{_EXPLETIVE_TAIL}\b", re.I)
+
 REFERRING = re.compile(
-    r"""
+    rf"""
     ^\s*(?:and|but|so|also|then)\b          # continues a previous turn
   | ^\s*what\s+about\b
   | ^\s*how\s+about\b
@@ -91,7 +103,7 @@ REFERRING = re.compile(
     # not "Can IT reset...": capital IT is the department (see PRONOUN).
   | ^\s*(?:does|do|did|is|are|was|were|can|could|would|will|shall
         |should|has|have|had|must)\s+
-      (?:that|this|(?-i:[Ii]t)|they|those|these|he|she)\b
+      (?:that|this|(?-i:[Ii]t)(?!\s+{_EXPLETIVE_TAIL}\b)|they|those|these|he|she)\b
   | \bthat\s+(?:one|policy|rule|figure|amount|document|case)\b
   | \bas\s+well\b                           # "...as well?" continues a turn
   | ^\s*why\b(?!\s+(?:is|are|do|does)\s+\w+\s+\w+)   # bare "why?"
@@ -202,6 +214,8 @@ def looks_dependent(question: str) -> tuple:
     # antecedent ("students renew THEIR"); one is usually just a verb or an
     # adverb ("Can I get IT renewed?", "How long is IT valid?").
     for match in PRONOUN.finditer(stripped):
+        if match.group().lower() == "it" and EXPLETIVE_IT.match(stripped, match.end()):
+            continue
         if len(_content_terms(stripped[: match.start()])) < 2:
             return True, "refers to something said earlier"
 
