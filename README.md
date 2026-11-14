@@ -294,10 +294,11 @@ Pipeline limits, in `backend/config/settings.py`:
 |---|---|---|
 | `MAX_DOCUMENT_SIZE_BYTES` | 50 MB | Rejected at the VALIDATION stage |
 | `MAX_DOCUMENT_PAGES` | 500 | PDF page ceiling |
-| `OCR_DPI` | 300 | Render DPI for OCR of PDF pages (10pt text needs ~20px x-height, which is 300) |
+| `OCR_DPI` | 250 | Render DPI for OCR of PDF pages. Measured, not assumed: 250 scored best across real pages (more is not better - very small print read worse at 300) |
 | `OCR_LANGUAGES` | `eng` | Tesseract packs joined with `+` (`eng+hin`); packs that are not installed are dropped, `eng` is the floor. More packs: build arg `TESSERACT_LANGS` |
 | `OCR_MIN_WORD_CONFIDENCE` | 30 | Words Tesseract is less sure of than this are dropped as speckle |
 | `OCR_DETECT_ROTATION` | True | A poorly read scan is checked for being sideways or upside down and read again if that reads better |
+| `OCR_TIME_BUDGET_SECONDS` | 540 | If the pages left would not fit in this, later pages of a long scan are read at the next resolution down (250 → 200 → 150 → 100) rather than the document timing out |
 | `OCR_EMBEDDED_IMAGES` / `OCR_EMBEDDED_IMAGES_MAX` | True / 20 | Pictures inside a PDF page, DOCX or slide are OCR'd when they read like a document, up to this many per file |
 | `DOCUMENT_CLASSIFIER` | `""` | Dotted path to a `DocumentClassifier`; empty means classification is **skipped**, never guessed |
 | `DOCUMENT_CLASSIFIER_ARTIFACT` | `ai/.../v0.1.0/model.joblib` | Trained artifact the text classifier loads |

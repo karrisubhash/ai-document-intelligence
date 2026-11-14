@@ -173,7 +173,7 @@ def extract_page_results(
     *,
     region_ocr=None,
     max_regions: int = 0,
-    dpi: int = 300,
+    dpi: int = 250,
 ) -> list:
     """Every page as a `PdfPage`: text, tables, which extractor read it.
 

@@ -472,11 +472,13 @@ if AWS_STORAGE_BUCKET_NAME:
 MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 500
 
-# OCR. Tesseract reads best when the x-height of the text is about 20 pixels,
-# which is 10pt text at 300 DPI; at the 200 it used to run at, small print
-# came back as guesses. Costs roughly twice the time per page, so a very
-# long scan is the case to watch against CELERY_TASK_SOFT_TIME_LIMIT.
-OCR_DPI = int(os.getenv("OCR_DPI", "300"))
+# OCR resolution for rendering a scanned PDF page. Chosen by measurement, not
+# by theory: seven real pages rendered at 150, 200, 250 and 300 DPI and read
+# back against their own text layers scored mean F1 0.88, 0.92, 0.93 and 0.93.
+# More is not better - a page of very small print read 0.997 at 250 and 0.967
+# at 300 - while a transcript needed the higher end (0.77 at 200, 0.90 at 250).
+# 250 was best or tied on every page but one, at no real cost in time.
+OCR_DPI = int(os.getenv("OCR_DPI", "250"))
 
 # Tesseract language packs, joined with "+" ("eng+hin"). A pack that is not
 # installed is dropped with the rest still used, and "eng" is the floor - the

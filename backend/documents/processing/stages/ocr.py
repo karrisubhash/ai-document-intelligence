@@ -9,7 +9,7 @@ from documents.processing.extractors import ocr as ocr_extractor
 
 # The resolutions a PDF page is rendered at, best first. Cost falls roughly
 # with the square of the resolution.
-DPI_STEPS = (300, 200, 150, 100)
+DPI_STEPS = (300, 250, 200, 150, 100)
 
 
 def _lower(dpi: int) -> int:

@@ -574,7 +574,7 @@ class OcrBudgetTests(SimpleTestCase):
     resolution for time when the pages left will not fit. Time is a fake clock
     that each page advances by what it would cost at the resolution used."""
 
-    COST = {300: 200.0, 200: 90.0, 150: 40.0, 100: 20.0}
+    COST = {300: 200.0, 250: 140.0, 200: 90.0, 150: 40.0, 100: 20.0}
 
     def run_stage(self, pages, budget, cost=None):
         cost = cost or self.COST
@@ -615,10 +615,10 @@ class OcrBudgetTests(SimpleTestCase):
     def test_a_long_scan_steps_down_until_it_fits(self):
         used, result, context = self.run_stage(pages=10, budget=1000)
 
-        # 300 would need 2000s; 200 would need ~900 more after the first
-        # page - not enough; 150 fits.
-        self.assertEqual(used[:3], [300, 200, 150])
-        self.assertEqual(set(used[2:]), {150})
+        # Each step down is judged on what it actually cost: 300 and 250 and
+        # 200 would each leave too little, 150 fits.
+        self.assertEqual(used[:4], [300, 250, 200, 150])
+        self.assertEqual(set(used[3:]), {150})
         self.assertEqual(result.metadata["dpi_lowered_from"], 300)
         self.assertEqual(result.metadata["dpi_final"], 150)
         self.assertIn("lowered from 300 to 150", result.message)
