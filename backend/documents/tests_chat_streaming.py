@@ -388,10 +388,16 @@ class GeminiModelChainTests(SimpleTestCase):
         self.assertNotIn("reasoning_effort", default._request_kwargs("p"))
 
     def test_other_presets_send_no_extras(self):
-        with mock.patch.dict("os.environ", {"GROQ_API_KEY": "k"}):
+        with mock.patch.dict(
+            "os.environ", {"GROQ_API_KEY": "k", "MISTRAL_API_KEY": "k"}
+        ):
             groq = answerer_with(PerModelClient({}), RAG_ANSWERER_PROVIDER="groq")
-        self.assertNotIn("reasoning_effort", groq._request_kwargs("p"))
+            mistral = answerer_with(PerModelClient({}), RAG_ANSWERER_PROVIDER="mistral")
+        # Groq sends its own setting, never Gemini's "none".
+        self.assertEqual(groq._request_kwargs("p")["reasoning_effort"], "low")
+        self.assertNotIn("reasoning_effort", mistral._request_kwargs("p"))
         self.assertEqual(groq.fallback_models, ())
+        self.assertEqual(mistral.fallback_models, ())
 
     def test_a_rate_limited_model_is_tried_last_on_the_next_call(self):
         client = PerModelClient({"gemini-3.5-flash": 429})

@@ -679,9 +679,11 @@ def _ask(
 
     answer = RagAnswer(
         question=question,
-        answer=response.text,
+        # What grounding checked and cleaned: a group of citations split into
+        # one marker each, a stray off-by-one marker removed.
+        answer=report.text or response.text,
         abstained=False,
-        citations=grounding.citations_for(response.text, built),
+        citations=grounding.citations_for(report.text or response.text, built),
         support_ratio=report.support_ratio,
         duration_ms=int((time.monotonic() - started) * 1000),
         notes=notes,

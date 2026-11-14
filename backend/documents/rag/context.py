@@ -89,10 +89,18 @@ class Passage:
         correctly named the column would otherwise be marked unsupported
         for using a word that is demonstrably in the document - the
         labels were verified against the page before they were stored.
+
+        So is the document's title. The prompt prints it above the passage
+        and the citation shows it, so it is on the page the reader checks
+        against: "the 2024-25 fee is 85,000" from a passage in "Fee Structure
+        2024-25" states a figure the document does state, and was rejected as
+        invented because the year is in the title and not in the row.
         """
-        if not self.table_header:
-            return self.text
-        return self.text + " " + " ".join(self.table_header)
+        document = getattr(
+            getattr(self.chunk, "document_version", None), "document", None
+        )
+        title = " ".join(str(getattr(document, "title", "") or "").split())
+        return " ".join(part for part in (self.text, *self.table_header, title) if part)
 
     @property
     def citation(self) -> dict:

@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 
+from . import facts as fact_forms
 from . import tables
 from .llm import is_abstention
 from .reranking import _terms
@@ -100,7 +101,7 @@ THOUSANDS = re.compile(r"(?<=\d),(?=\d)")
 
 def _prose_terms(text: str) -> list:
     """Content terms for the support ratio, with figures left intact."""
-    return _terms(THOUSANDS.sub("", text))
+    return _terms(THOUSANDS.sub("", fact_forms.prose_form(text)))
 
 
 @dataclass
@@ -115,6 +116,10 @@ class GroundingReport:
     # answer stated and the documents did not.
     unsupported_facts: tuple = ()
     failures: list = field(default_factory=list)
+    # The answer as it should be shown: citations written as a group
+    # ("[1, 2]") split into one marker each, and an off-by-one marker that
+    # points at no passage removed. Empty until validate() has run.
+    text: str = ""
 
     @property
     def ok(self) -> bool:
@@ -124,7 +129,7 @@ class GroundingReport:
 def extract_markers(text: str) -> tuple:
     """Markers the answer cites, in the order they first appear."""
     seen = []
-    for match in MARKER.finditer(text):
+    for match in MARKER.finditer(fact_forms.normalize_markers(text)):
         value = int(match.group(1))
         if value not in seen:
             seen.append(value)
@@ -152,7 +157,9 @@ def _normalize_fact(token: str) -> str:
     # is part of an identifier and stays.
     token = re.sub(r"(?<=\d),(?=\d)", "", token)
     # A bare trailing separator left by the strip above.
-    return token.rstrip("./-:")
+    token = token.rstrip("./-:")
+    # "2024-25" is "2024-2025".
+    return fact_forms.canonical_range(token)
 
 
 # A figure with a unit or currency stuck to it ("rs1200", "10km", "75%"),
@@ -189,12 +196,35 @@ def _answer_facts(answer_text: str) -> set:
     """
     stripped = MARKER.sub(" ", answer_text)
     stripped = ORDINAL_LINE.sub(" ", stripped)
-    return _facts(stripped)
+    # A date the answer states is ONE fact, compared whole against the dates
+    # the passages state: its day and its year are not facts of their own.
+    remainder, dates = fact_forms.extract_dates(fact_forms.prepare(stripped))
+    return _facts(remainder) | dates
+
+
+def _support_facts(text: str) -> set:
+    """Facts the cited passages support, in every form they are written.
+
+    The tokens as printed, plus each unambiguous date as a whole, the numerals
+    behind number words ("seven" supports 7) and the two years of a range
+    ("2024-25" supports 2024 and 2025). Only this side is widened: an
+    answer's own wording is never turned into a figure it did not state.
+    """
+    prepared = fact_forms.prepare(text)
+    supported = _facts(prepared)
+    supported |= fact_forms.extract_dates(prepared)[1]
+    supported |= fact_forms.number_words(prepared)
+    for fact in list(supported):
+        supported |= fact_forms.range_years(fact)
+    return supported
 
 
 def validate(answer_text: str, context, *, abstained: bool = False) -> GroundingReport:
     """Check an answer against the context it was supposed to use."""
     report = GroundingReport()
+    # "[1, 2]" is two citations, written as a group.
+    answer_text = fact_forms.normalize_markers(answer_text)
+    report.text = answer_text
 
     if abstained or is_abstention(answer_text):
         # An abstention makes no claims, so there is nothing to ground. It
@@ -217,9 +247,24 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
         for marker in extract_markers(answer_text)
         if marker in available or marker not in quoted
     )
+    invalid = tuple(marker for marker in cited if marker not in available)
+
+    # [0], or the marker one past the last passage, BESIDE markers that do
+    # resolve is a slip in counting, not a fabricated source - and the answer
+    # is right about everything the other markers point at. It is removed and
+    # said so, instead of discarding the answer. A citation to [7] among six
+    # passages, or any invalid marker when nothing else resolves, is still the
+    # cheapest hallucination signal there is, and still fails.
+    stray = {0, max(available) + 1} if available else set()
+    if invalid and len(invalid) < len(cited) and all(m in stray for m in invalid):
+        answer_text = re.sub(
+            r"[ \t]*\[(?:" + "|".join(str(m) for m in invalid) + r")\]", "", answer_text
+        )
+        report.text = answer_text
+        cited = tuple(marker for marker in cited if marker in available)
+        invalid = ()
     report.cited_markers = cited
 
-    invalid = tuple(marker for marker in cited if marker not in available)
     report.invalid_markers = invalid
     if invalid:
         report.grounded = False
@@ -244,7 +289,7 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
     )
 
     # --- Check 3: every stated fact is in a cited passage ----------------
-    supported_facts = _facts(supporting)
+    supported_facts = _support_facts(supporting)
     # A total, count, average, highest or lowest value that the cited tables'
     # own rows imply is not written anywhere, and is not an invention: it is
     # recomputed here, from the cells, rather than taken on the model's word.
@@ -303,7 +348,7 @@ def citations_for(answer_text: str, context) -> list:
     by_marker = context.by_marker()
     citations = []
 
-    for marker in extract_markers(answer_text):
+    for marker in extract_markers(fact_forms.normalize_markers(answer_text)):
         passage = by_marker.get(marker)
         if passage is None:
             continue

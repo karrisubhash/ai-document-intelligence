@@ -14,7 +14,7 @@ from documents.agents import runner
 from documents.models import Document, ProcessingJob
 from documents.processing.pipeline import run_pipeline
 from documents.rag import context as ctx
-from documents.rag import engine, followup, judging
+from documents.rag import engine, facts, followup, grounding, judging
 from documents.rag.gateway import Gateway
 from documents.rag.llm import ABSTENTION_TEXT, ExtractiveAnswerer, declines_to_answer
 from documents.rag.reranking import RerankedChunk
@@ -479,3 +479,215 @@ class PlanningTests(TestCase):
         calls, planned = self.asked(self.generative())
 
         self.assertEqual(len(calls), 3)
+
+
+# --- The same fact, written two ways ----------------------------------------
+
+
+class FactFormsTests(SimpleTestCase):
+    def test_a_date_is_read_whole_however_it_is_written(self):
+        for written in (
+            "31.03.2025",
+            "31/03/2025",
+            "31-03-2025",
+            "31 March 2025",
+            "31st March 2025",
+            "31 Mar 2025",
+            "March 31, 2025",
+            "2025-03-31",
+        ):
+            with self.subTest(written=written):
+                remainder, dates = facts.extract_dates(f"Pay by {written}.")
+                self.assertEqual(dates, {"date:2025-03-31"})
+                self.assertNotIn("2025", remainder)
+
+    def test_a_date_that_can_be_read_two_ways_is_left_alone(self):
+        """04.03.2025 is the 4th of March or the 3rd of April; accepting either
+        reading would accept a wrong date."""
+        remainder, dates = facts.extract_dates("On 04.03.2025 and on 5 May 2025.")
+
+        self.assertEqual(dates, {"date:2025-05-05"})
+        self.assertIn("04.03.2025", remainder)
+
+    def test_a_date_that_does_not_exist_is_left_alone(self):
+        _, dates = facts.extract_dates("On 31 February 2025 and 31.02.2025.")
+        self.assertEqual(dates, set())
+
+    def test_a_year_range_is_one_range(self):
+        self.assertEqual(facts.canonical_range("2024-25"), "2024-2025")
+        self.assertEqual(facts.canonical_range("1999-00"), "1999-2000")
+        # Not a range of consecutive years: left as it is.
+        self.assertEqual(facts.canonical_range("2024-05"), "2024-05")
+        self.assertEqual(facts.canonical_range("2024-2025"), "2024-2025")
+        self.assertEqual(facts.prepare("2024\N{EN DASH}25"), "2024-25")
+        self.assertEqual(facts.range_years("2024-2025"), {"2024", "2025"})
+
+    def test_number_words_stand_for_numerals(self):
+        self.assertEqual(
+            facts.number_words("within seven days, twenty-five rupees, the third"),
+            {"7", "25", "3"},
+        )
+        self.assertEqual(facts.number_words("a statement of the situation"), set())
+
+    def test_a_group_of_citations_is_split(self):
+        self.assertEqual(
+            facts.normalize_markers("Yes [1, 2]; also [3;4]."),
+            "Yes [1][2]; also [3][4].",
+        )
+        self.assertEqual(
+            facts.normalize_markers("Yes [1] and [2]."), "Yes [1] and [2]."
+        )
+
+
+def one_passage(text, title="Doc"):
+    item = RerankedChunk(chunk=chunk(1, text, title=title), score=0.9, signals={})
+    return ctx.build([item], semantic_scores=True)
+
+
+def two_passages(first, second):
+    items = [
+        RerankedChunk(chunk=chunk(1, first), score=0.9, signals={}),
+        RerankedChunk(chunk=chunk(2, second), score=0.8, signals={}),
+    ]
+    return ctx.build(items, semantic_scores=True)
+
+
+class GroundingSpellingTests(SimpleTestCase):
+    """A correct answer is not discarded for how it spells a fact - and a
+    wrong one is still caught."""
+
+    def check(self, answer, context):
+        return grounding.validate(answer, context)
+
+    def test_a_reformatted_date_is_the_same_date(self):
+        context = one_passage("The last date for fee payment is 31.03.2025.")
+        for answer in (
+            "Pay by 31 March 2025 [1].",
+            "The deadline is March 31, 2025 [1].",
+            "Fees are due on 31st March 2025 [1].",
+        ):
+            with self.subTest(answer=answer):
+                self.assertTrue(self.check(answer, context).ok)
+
+    def test_a_different_date_is_still_caught(self):
+        context = one_passage("The last date for fee payment is 31 March 2025.")
+        for answer in (
+            "Pay by 31 May 2025 [1].",
+            "Pay by 30 March 2025 [1].",
+            "Pay by 31 March 2026 [1].",
+        ):
+            with self.subTest(answer=answer):
+                report = self.check(answer, context)
+                self.assertFalse(report.ok)
+                self.assertTrue(report.unsupported_facts)
+
+    def test_an_ambiguous_numeric_date_must_match_as_written(self):
+        context = one_passage("The form is due on 04.03.2025.")
+
+        self.assertTrue(self.check("It is due on 04.03.2025 [1].", context).ok)
+        self.assertFalse(self.check("It is due on 4 March 2025 [1].", context).ok)
+        self.assertFalse(self.check("It is due on 3 April 2025 [1].", context).ok)
+
+    def test_a_year_range_matches_however_it_is_written(self):
+        context = one_passage("Fee Structure 2024-25. Tuition is 85000.")
+        for answer in (
+            "For 2024-2025 the tuition is 85000 [1].",
+            "For 2024\N{EN DASH}25 the tuition is 85000 [1].",
+            "For 2024-25 the tuition is 85000 [1].",
+            "For 2024 to 2025 the tuition is 85000 [1].",
+        ):
+            with self.subTest(answer=answer):
+                self.assertTrue(self.check(answer, context).ok, answer)
+
+        self.assertFalse(
+            self.check("For 2025-26 the tuition is 85000 [1].", context).ok
+        )
+        self.assertFalse(
+            self.check("For 2023-24 the tuition is 85000 [1].", context).ok
+        )
+
+    def test_the_title_the_reader_sees_supports_a_figure_in_it(self):
+        context = one_passage("Tuition is 85000.", title="Fee Structure 2024-25")
+
+        self.assertTrue(self.check("For 2024-25 the tuition is 85000 [1].", context).ok)
+        self.assertFalse(
+            self.check("For 2023-24 the tuition is 85000 [1].", context).ok
+        )
+
+    def test_a_number_word_in_the_passage_supports_the_numeral(self):
+        context = one_passage("Appeals must be filed within seven days of the result.")
+
+        self.assertTrue(self.check("File within 7 days [1].", context).ok)
+        self.assertFalse(self.check("File within 8 days [1].", context).ok)
+
+    def test_a_number_word_in_the_answer_is_not_a_figure(self):
+        context = one_passage("Students may borrow four books at a time.")
+
+        self.assertTrue(self.check("One of the rules is four books [1].", context).ok)
+
+
+class CitationFormTests(TestCase):
+    PASSAGES = ("Attendance must be 75 percent.", "Condonation needs 65 percent.")
+
+    def validate(self, answer):
+        return grounding.validate(answer, two_passages(*self.PASSAGES))
+
+    def test_a_group_of_citations_is_two_citations(self):
+        report = self.validate(
+            "Attendance is 75 percent and 65 percent with leave [1, 2]."
+        )
+
+        self.assertTrue(report.ok, report.failures)
+        self.assertEqual(report.cited_markers, (1, 2))
+        self.assertIn("[1][2]", report.text)
+
+    def test_a_marker_one_past_the_last_passage_beside_a_real_one_is_removed(self):
+        report = self.validate("Attendance must be 75 percent [1] [3].")
+
+        self.assertTrue(report.ok, report.failures)
+        self.assertEqual(report.text, "Attendance must be 75 percent [1].")
+        self.assertEqual(report.cited_markers, (1,))
+
+    def test_a_marker_zero_beside_a_real_one_is_removed(self):
+        report = self.validate("Attendance must be 75 percent [0][1].")
+
+        self.assertTrue(report.ok, report.failures)
+        self.assertNotIn("[0]", report.text)
+
+    def test_a_fabricated_source_still_fails(self):
+        """The cheapest hallucination signal there is."""
+        for answer in (
+            "Attendance must be 75 percent [1] [4].",  # two past the end
+            "Attendance must be 75 percent [7].",  # nothing else resolves
+            "Attendance must be 75 percent [3].",  # the stray, but alone
+        ):
+            with self.subTest(answer=answer):
+                self.assertFalse(self.validate(answer).ok)
+
+
+@override_settings(RAG_ANSWERER_PROVIDER="groq")
+class EngineShowsTheCheckedAnswerTests(TestCase):
+    def ask(self, reply):
+        answerer = answerer_with(StubChatClient(completion(reply)))
+        found = hits((chunk(1, PASSAGE), 1.0))
+        with (
+            mock.patch.object(
+                engine.search_service, "search", return_value=FakeSearchResponse(found)
+            ),
+            mock.patch.object(engine, "get_answerer", return_value=answerer),
+            mock.patch.object(engine, "_figure_hints", return_value=[]),
+        ):
+            return rag.ask(None, "What is the minimum attendance for the examination?")
+
+    def test_the_stray_marker_is_not_shown(self):
+        answer = self.ask("You need 75 percent attendance [1] [2].")
+
+        self.assertFalse(answer.abstained, answer.grounding_failures)
+        self.assertEqual(answer.answer, "You need 75 percent attendance [1].")
+        self.assertEqual([c["marker"] for c in answer.citations], [1])
+
+    def test_a_grouped_citation_resolves(self):
+        answer = self.ask("You need 75 percent attendance [1, 1].")
+
+        self.assertFalse(answer.abstained, answer.grounding_failures)
+        self.assertEqual([c["marker"] for c in answer.citations], [1])
