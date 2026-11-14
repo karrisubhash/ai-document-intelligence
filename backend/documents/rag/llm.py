@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from .reranking import _terms
+from . import quoting
 
 ABSTENTION_TEXT = "I couldn't find enough information in the provided documents."
 
@@ -199,6 +199,34 @@ def _neutralise_brackets(text: str) -> str:
     return DOCUMENT_BRACKET.sub(r"(\1)", text)
 
 
+@dataclass
+class _Candidate:
+    """One sentence that could be quoted, and why it was a candidate."""
+
+    score: float
+    coverage: float
+    passage: object
+    sentence: str
+    # The terms the user asked about that this sentence covers (a table row's
+    # include its column labels).
+    matched: frozenset
+    # A title or clause heading rather than a sentence (quoting.is_heading),
+    # and whether it is set behind the sentences that qualify: a heading that
+    # states the year or date a question asks for is not.
+    heading: bool
+    demoted: bool
+    # The first sentence of a chunk that begins mid-sentence, and the last of a
+    # chunk that stops mid-sentence: both are cut by a chunk boundary.
+    leading: bool
+    trailing: bool
+
+    @property
+    def order(self):
+        # Best first; a shorter sentence wins a tie, because a tighter quote
+        # that says the same thing is a better answer.
+        return (-self.score, len(self.sentence), self.passage.marker)
+
+
 class ExtractiveAnswerer:
     """Answers by quoting the passages, never by generating new text."""
 
@@ -231,6 +259,11 @@ class ExtractiveAnswerer:
     # answer and becomes a search result page.
     MAX_SENTENCES = 3
 
+    # A "how much" or "when" question is answered by a sentence with a figure
+    # or a date in it. Added to the coverage of a sentence that has one, so it
+    # settles a tie and a near tie and never outweighs a clearly better match.
+    FIGURE_BONUS = 0.12
+
     # The largest table this answerer will quote whole when a question
     # matches its column labels rather than any one row. Above it, the
     # honest output is an abstention: a 120-row table pasted into an answer
@@ -238,7 +271,7 @@ class ExtractiveAnswerer:
     TABLE_QUOTE_LIMIT = 800
 
     def answer(self, *, question: str, context, prompt: str) -> LLMResponse:
-        query_terms = set(_terms(question))
+        query_terms = quoting.quote_terms(question)
 
         if not query_terms or context.is_empty:
             return self._abstain(prompt)
@@ -249,30 +282,64 @@ class ExtractiveAnswerer:
         # about condonation?" after an attendance question quoted the
         # attendance clause back, because the borrowed terms outnumbered
         # the user's one.
-        focus_terms = set(_terms(getattr(context, "focus", "") or ""))
+        focus_text = getattr(context, "focus", "") or ""
+        focus_terms = quoting.quote_terms(focus_text)
+        asked = focus_terms or query_terms
 
-        scored = []
-        skipped_hostile = 0
+        # A passage that is trying to manipulate the system stays in the
+        # context - it was retrieved, it is reported, and search still finds
+        # it, so nothing is hidden. But it is not quoted as an ANSWER. Text
+        # that is trying to manipulate the system is not a trustworthy source
+        # of fact, and emitting it beside a real answer launders it into
+        # looking like one: a reader skimming "...75 percent [1] ...10
+        # percent [2]" is worse off than a reader who saw only the answer and
+        # a warning.
+        usable = [p for p in context.passages if not p.suspected_injection]
+        skipped_hostile = len(context.passages) - len(usable)
 
-        for passage in context.passages:
-            if passage.suspected_injection:
-                # The passage stays in the context - it was retrieved, it is
-                # reported, and search still finds it, so nothing is hidden.
-                # But it is not quoted as an ANSWER. Text that is trying to
-                # manipulate the system is not a trustworthy source of fact,
-                # and emitting it beside a real answer launders it into
-                # looking like one: a reader skimming
-                # "...75 percent [1] ...10 percent [2]" is worse off than a
-                # reader who saw only the answer and a warning.
-                skipped_hostile += 1
-                continue
+        # Something the question names that no passage mentions: a programme
+        # the fee table does not list, a year no document covers. A ranker
+        # that counts shared words cannot see it; a reader sees it at once.
+        lacking = quoting.names_what_the_passages_lack(focus_text or question, usable)
+        if lacking:
+            return self._abstain(prompt, hostile=skipped_hostile, reason=lacking)
 
-            for sentence in self._sentences(passage.text):
-                sentence_terms = set(_terms(sentence))
-                if not sentence_terms:
+        wants_figure = quoting.wants_figure(focus_text or question)
+        date_question = quoting.wants_date(focus_text or question)
+
+        eligible = []
+        partial = []
+
+        for passage in usable:
+            header_terms = quoting.quote_terms(
+                " ".join(getattr(passage, "table_header", ()) or ())
+            )
+            sentences = self._sentences(passage.text)
+            fragment_start = passage.text.lstrip()[:1].islower()
+
+            for position, sentence in enumerate(sentences):
+                own_terms = quoting.quote_terms(sentence)
+                if not own_terms:
                     continue
-                matched = query_terms & sentence_terms
+
+                looks_like_a_row = _looks_like_a_table_row(sentence)
+                is_header = self._is_header_row(passage, sentence)
+
+                # A data row means what its column labels say it means: "B.Tech
+                # ECE 82000 2500 60000" is a TUITION figure only under
+                # "Tuition". Matched without them, a question that named the
+                # column ("tuition") matched nothing in the row and the
+                # answer was a document title. A row is still only a candidate
+                # if the question named something IN the row: a question that
+                # names only labels is answered by the table, below.
+                is_row = bool(header_terms) and looks_like_a_row and not is_header
+                terms = own_terms | header_terms if is_row else own_terms
+                if is_row and not (own_terms & asked):
+                    continue
+
+                matched = query_terms & terms
                 coverage = len(matched) / len(query_terms)
+                asked_matched = frozenset(asked & terms)
 
                 # The minimum-matched-terms rule applies to the question
                 # actually being answered: on a follow-up, the user's own
@@ -280,15 +347,20 @@ class ExtractiveAnswerer:
                 # (one term of its own) refused "On weekends, students may
                 # sign back in by 11 pm" for not ALSO repeating a term from
                 # the earlier turn.
-                asked = focus_terms or query_terms
                 if (
                     len(asked) >= self.MIN_MATCHED_TERMS
-                    and len(asked & sentence_terms) < self.MIN_MATCHED_TERMS
+                    and len(asked_matched) < self.MIN_MATCHED_TERMS
                 ):
                     continue
 
+                bonus = (
+                    self.FIGURE_BONUS
+                    if wants_figure and quoting.has_figure(sentence)
+                    else 0.0
+                )
+
                 if focus_terms:
-                    focused = focus_terms & sentence_terms
+                    focused = focus_terms & terms
                     if not focused:
                         continue
                     # Ranked by how much of what the user asked it covers
@@ -296,25 +368,39 @@ class ExtractiveAnswerer:
                     # coverage floor is then applied to the user's words,
                     # which is the question actually being answered.
                     focus_coverage = len(focused) / len(focus_terms)
-                    if focus_coverage >= self.MIN_COVERAGE:
-                        scored.append(
-                            (focus_coverage + coverage / 10, passage, sentence)
-                        )
-                    continue
+                    if focus_coverage < self.MIN_COVERAGE:
+                        continue
+                    score = focus_coverage + coverage / 10 + bonus
+                    meets_floor = True
+                else:
+                    score = coverage + bonus
+                    meets_floor = coverage >= self.MIN_COVERAGE
 
-                if coverage >= self.MIN_COVERAGE:
-                    scored.append((coverage, passage, sentence))
+                heading = quoting.is_heading(sentence, is_row=looks_like_a_row)
+                candidate = _Candidate(
+                    score=score,
+                    coverage=coverage,
+                    passage=passage,
+                    sentence=sentence,
+                    matched=asked_matched,
+                    heading=heading,
+                    demoted=heading
+                    and not (date_question and quoting.heading_has_figure(sentence)),
+                    leading=position == 0 and fragment_start,
+                    trailing=position == len(sentences) - 1
+                    and quoting.ends_cut(sentence),
+                )
+                # A sentence that matches enough terms but not enough of the
+                # WHOLE question may still answer one part of it (below).
+                (eligible if meets_floor else partial).append(candidate)
 
-        if not scored:
+        if not eligible:
             return self._abstain(prompt, hostile=skipped_hostile)
 
         # Sorted here rather than after the header filter below, because
-        # that branch reads scored[0] as "the best match" and on an
+        # that branch reads eligible[0] as "the best match" and on an
         # unsorted list that is merely "the first one found".
-        #
-        # Best coverage first; shorter sentences win ties because a tighter
-        # quote that says the same thing is a better answer.
-        scored.sort(key=lambda item: (-item[0], len(item[2]), item[1].marker))
+        eligible.sort(key=lambda candidate: candidate.order)
 
         # A header row is labels, not data, and quoting one as an answer is
         # the most confidently useless thing this answerer can do. Observed
@@ -332,10 +418,14 @@ class ExtractiveAnswerer:
         # only labels, the useful answer is the table itself: the labels
         # with the rows underneath them, verbatim, so the value can be read
         # off. Bounded by size, because a 120-row table is not an answer.
-        data = [item for item in scored if not self._is_header_row(item[1], item[2])]
+        data = [
+            candidate
+            for candidate in eligible
+            if not self._is_header_row(candidate.passage, candidate.sentence)
+        ]
 
         if not data:
-            best = scored[0][1]
+            best = eligible[0].passage
             if len(best.text) <= self.TABLE_QUOTE_LIMIT:
                 text = f"{_neutralise_brackets(best.text.strip())} [{best.marker}]"
                 return LLMResponse(
@@ -349,7 +439,7 @@ class ExtractiveAnswerer:
                     completion_characters=len(text),
                     metadata={
                         "quoted_sentences": 1,
-                        "best_coverage": round(scored[0][0], 4),
+                        "best_coverage": round(eligible[0].coverage, 4),
                         "strategy": "whole table quoted: the question matched "
                         "the column labels rather than any one row",
                         "passages_skipped_as_hostile": skipped_hostile,
@@ -364,26 +454,115 @@ class ExtractiveAnswerer:
                 ),
             )
 
-        scored = data
+        # A title or a clause heading is quoted only when nothing else
+        # qualifies, and then only if it can be the answer: a heading states
+        # no figure and no date, so it cannot answer "how much" or "when" -
+        # "By which date must I sign up?" was answered with the name of the
+        # office. The exception is a question for a date or a year, and a
+        # heading that states one: "Subject: Campus bus services for the
+        # academic year 2024-25" IS the answer to "which year".
+        pool = [candidate for candidate in data if not candidate.demoted]
+        if not pool:
+            pool = data
+            if wants_figure and not any(
+                quoting.has_figure(candidate.sentence) for candidate in pool
+            ):
+                return self._abstain(
+                    prompt,
+                    hostile=skipped_hostile,
+                    reason=(
+                        "only a title or heading matched, and it states no "
+                        "figure or date"
+                    ),
+                )
 
-        chosen = []
-        seen = set()
-        for coverage, passage, sentence in scored:
-            key = " ".join(sentence.lower().split())
-            if key in seen:
-                continue
-            seen.add(key)
-            chosen.append((passage, sentence, coverage))
+        def key_of(candidate):
+            return " ".join(candidate.sentence.lower().split())
+
+        first = pool[0]
+        chosen = [first]
+        seen = {key_of(first)}
+
+        # Equally good answers are all quoted: two rows that both say CSE are
+        # the same answer to "the fee for CSE", and picking one would hide the
+        # other. A sentence that matched LESS than the best is not one.
+        for candidate in pool[1:]:
             if len(chosen) >= self.MAX_SENTENCES:
                 break
+            if (
+                candidate.matched == first.matched
+                and abs(candidate.score - first.score) < 1e-9
+                and key_of(candidate) not in seen
+            ):
+                chosen.append(candidate)
+                seen.add(key_of(candidate))
 
-        parts = [self._quote(passage, sentence) for passage, sentence, _ in chosen]
+        # What the question still asks. A two-part question matches each
+        # part's sentence on only HALF its terms, under the floor measured
+        # over the whole question, so the second part was dropped. After the
+        # best sentence, another is added if it says something the chosen ones
+        # do not:
+        #
+        # - a sentence that is itself a good match is added when it covers a
+        #   term not yet covered ("Condonation granted for examination
+        #   purposes does not restore a scholarship" beside the scholarship's
+        #   attendance rule, for a question about both);
+        # - one that matched too little of the WHOLE question to qualify alone
+        #   is added only if it covers two new terms and a third of what is
+        #   left (the other half of a two-part question).
+        #
+        # A sentence that covers nothing new is not added, which keeps a
+        # single-topic answer from being padded with the same clause twice.
+        if not first.demoted:
+            covered = set().union(*(candidate.matched for candidate in chosen))
+            good = [candidate for candidate in pool if not candidate.demoted]
+            partial_ok = [
+                candidate
+                for candidate in partial
+                if not candidate.demoted
+                and not self._is_header_row(candidate.passage, candidate.sentence)
+            ]
+            while len(chosen) < self.MAX_SENTENCES:
+                uncovered = asked - covered
+                if not uncovered:
+                    break
+                options = []
+                for candidate in good:
+                    gained = candidate.matched & uncovered
+                    if gained and key_of(candidate) not in seen:
+                        options.append((-len(gained), candidate.order, candidate))
+                if not options:
+                    for candidate in partial_ok:
+                        gained = candidate.matched & uncovered
+                        if (
+                            len(gained) >= self.MIN_MATCHED_TERMS
+                            and len(gained) / len(uncovered) >= self.MIN_COVERAGE
+                            and key_of(candidate) not in seen
+                        ):
+                            options.append((-len(gained), candidate.order, candidate))
+                if not options:
+                    break
+                options.sort(key=lambda option: option[:2])
+                pick = options[0][2]
+                chosen.append(pick)
+                seen.add(key_of(pick))
+                covered |= pick.matched
+
+        parts = [
+            self._quote(
+                candidate.passage,
+                candidate.sentence,
+                leading=candidate.leading,
+                trailing=candidate.trailing,
+            )
+            for candidate in chosen
+        ]
         text = " ".join(parts)
 
         return LLMResponse(
             text=text,
             abstained=False,
-            cited_markers=tuple(sorted({p.marker for p, _, _ in chosen})),
+            cited_markers=tuple(sorted({c.passage.marker for c in chosen})),
             model_name=self.name,
             model_version=self.version,
             generative=self.generative,
@@ -391,7 +570,7 @@ class ExtractiveAnswerer:
             completion_characters=len(text),
             metadata={
                 "quoted_sentences": len(chosen),
-                "best_coverage": round(chosen[0][2], 4),
+                "best_coverage": round(chosen[0].coverage, 4),
                 "strategy": "verbatim extraction",
                 "passages_skipped_as_hostile": skipped_hostile,
             },
@@ -417,7 +596,9 @@ class ExtractiveAnswerer:
         return cells == list(header)
 
     @staticmethod
-    def _quote(passage, sentence: str) -> str:
+    def _quote(
+        passage, sentence: str, *, leading: bool = False, trailing: bool = False
+    ) -> str:
         """One quoted sentence with its marker, and its columns if it is a
         table row.
 
@@ -431,8 +612,22 @@ class ExtractiveAnswerer:
         the labels come from the table's header row rather than from the
         sentence. Those labels are document content too: the detector
         verified every cell against the page before the table was stored.
+
+        A sentence a chunk boundary cut is marked with an ellipsis where it was
+        cut, so the reader is told it continues, rather than shown "f member is
+        entitled to 12 days" as if that were how the document begins.
         """
-        quoted = f"{_neutralise_brackets(sentence.strip())} [{passage.marker}]"
+        text = sentence.strip()
+        start_cut = False
+        if leading:
+            text, start_cut = quoting.trim_cut_start(text)
+
+        shown = _neutralise_brackets(text)
+        if start_cut:
+            shown = "\N{HORIZONTAL ELLIPSIS}" + shown
+        if trailing:
+            shown += "\N{HORIZONTAL ELLIPSIS}"
+        quoted = f"{shown} [{passage.marker}]"
 
         header = getattr(passage, "table_header", ())
         if not header:

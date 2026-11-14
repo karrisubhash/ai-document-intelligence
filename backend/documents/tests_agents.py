@@ -190,11 +190,12 @@ class PlanRunnerTests(TestCase):
         single_found = [item for item in expected if item in single.answer]
         planned_found = [item for item in expected if item in planned.answer]
 
-        self.assertLess(
-            len(single_found),
-            len(expected),
-            "the fixture no longer exercises the single-shot failure",
-        )
+        # The planner was added because this question was answered in one part
+        # of three. The quoting answerer now picks sentences by what the
+        # question still asks (rag.quoting), so a single pass answers all three
+        # on this fixture; the four-part question below still needs the
+        # planner. What must hold either way: planning is never worse.
+        self.assertLessEqual(len(single_found), len(planned_found))
         self.assertEqual(len(planned_found), len(expected), planned.answer)
 
     def test_a_four_part_question_no_longer_abstains_outright(self):
