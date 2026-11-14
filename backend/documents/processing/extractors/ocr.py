@@ -296,15 +296,18 @@ def read_words(image: Image.Image, languages: str | None = None) -> list:
 
 
 def image_frame_count(file_path: str) -> int:
-    """Pages in an image file: more than one for a multi-page TIFF."""
+    """Pages in an image file: more than one for a multi-page TIFF.
+
+    An image Pillow cannot open counts as one page rather than raising: the
+    stage that actually reads it reports the failure, with the same error code
+    a corrupt image has always had, instead of it surfacing from a counting
+    step earlier in the pipeline.
+    """
     try:
         with Image.open(file_path) as image:
             return max(1, int(getattr(image, "n_frames", 1)))
-    except Exception as exc:
-        raise StageError(
-            f"Could not read image: {exc}",
-            code=ErrorCode.CORRUPT_DOCUMENT,
-        ) from exc
+    except Exception:
+        return 1
 
 
 def ocr_image_file(file_path: str, frame: int = 0) -> OcrPage:

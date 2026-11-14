@@ -51,7 +51,16 @@ class EmbeddedImageDetector:
             # The file IS the figure. Recorded so that a question about a
             # scanned chart whose OCR produced nothing can still be told
             # where to look.
+            # One per frame: a multi-page TIFF is a figure on every page.
             return [
+                detector.DetectedFigure(
+                    page_number=page.page_number,
+                    figure_index=index,
+                    metadata={"whole_page": True},
+                )
+                for index, page in enumerate(pages or [None])
+                if page is not None
+            ] or [
                 detector.DetectedFigure(
                     page_number=1,
                     figure_index=0,

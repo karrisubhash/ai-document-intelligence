@@ -35,14 +35,14 @@ Tables are written through `PageBuilder` as structure (rows of cells, blank
 cells kept), so the Tables tab and the answerer see real columns.
 """
 
-import hashlib
 import re
 from dataclasses import dataclass, field
-from io import BytesIO
 
 from documents.processing.errors import ErrorCode, StageError
 from documents.processing.extractors import compose, ooxml
+from documents.processing.extractors.listmarks import format_number
 from documents.processing.extractors.ooxml import local
+from documents.processing.extractors.pictures import PictureReader
 
 # The part every real Word document has. Its presence is what separates a
 # .docx from the other ZIP-based office formats (.xlsx, .pptx, .odt), which
@@ -61,14 +61,6 @@ MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 V = "urn:schemas-microsoft-com:vml"
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
-
-# A picture smaller than this on either side is a bullet, a rule, a logo.
-MIN_IMAGE_SIDE = 100
-# OCR text kept from a picture only when it is plausibly a document: a photo
-# of a building also "reads" as a word or two - but at low confidence, which
-# is the real filter. Two words is a legitimate short caption or a total.
-MIN_PICTURE_WORDS = 2
-MIN_PICTURE_CONFIDENCE = 50.0
 
 # Section breaks that do NOT start a new page.
 CONTINUOUS = "continuous"
@@ -119,55 +111,6 @@ class _Level:
     start: int = 1
     fmt: str = "decimal"
     text: str = ""
-
-
-def _roman(number: int, upper: bool) -> str:
-    pairs = [
-        (1000, "m"),
-        (900, "cm"),
-        (500, "d"),
-        (400, "cd"),
-        (100, "c"),
-        (90, "xc"),
-        (50, "l"),
-        (40, "xl"),
-        (10, "x"),
-        (9, "ix"),
-        (5, "v"),
-        (4, "iv"),
-        (1, "i"),
-    ]
-    out = ""
-    for value, symbol in pairs:
-        while number >= value:
-            out += symbol
-            number -= value
-    return out.upper() if upper else out
-
-
-def _letters(number: int, upper: bool) -> str:
-    """1 -> a, 26 -> z, 27 -> aa: the way Word letters a long list."""
-    out = ""
-    while number > 0:
-        number, remainder = divmod(number - 1, 26)
-        out = chr(ord("a") + remainder) + out
-    return out.upper() if upper else out
-
-
-def _format_number(number: int, fmt: str) -> str:
-    if fmt == "lowerLetter":
-        return _letters(number, False)
-    if fmt == "upperLetter":
-        return _letters(number, True)
-    if fmt == "lowerRoman":
-        return _roman(number, False)
-    if fmt == "upperRoman":
-        return _roman(number, True)
-    if fmt == "decimalZero":
-        return f"{number:02d}"
-    if fmt == "none":
-        return ""
-    return str(number)
 
 
 class _Numbering:
@@ -302,7 +245,7 @@ class _Numbering:
             index = int(match.group(1)) - 1
             other = levels.get(index, _Level())
             value = counts.get(index, self.overrides.get((num_id, index), other.start))
-            return _format_number(value, other.fmt)
+            return format_number(value, other.fmt)
 
         template = level.text or f"%{ilvl + 1}."
         return re.sub(r"%(\d)", fill, template).strip(), ilvl
@@ -344,9 +287,7 @@ class _Extractor:
         self.document = document
         self.file_path = file_path
         self.numbering = _Numbering(document)
-        self.image_ocr = image_ocr
-        self.images_left = max_images if image_ocr else 0
-        self.seen_images: set = set()
+        self.pictures = PictureReader(image_ocr, max_images)
 
         self.pages: list = []
         self.builder = None
@@ -358,7 +299,6 @@ class _Extractor:
         self.paragraphs = 0
         self.tables = 0
         self.text_boxes = 0
-        self.pictures_read = 0
         self.footnote_numbers: dict = {}
         self.endnote_numbers: dict = {}
 
@@ -566,38 +506,14 @@ class _Extractor:
     # -- pictures ------------------------------------------------------
 
     def _picture(self, rid) -> None:
-        if self.images_left <= 0:
-            return
-
         try:
             blob = self.document.part.related_parts[rid].blob
         except Exception:
             return
 
-        digest = hashlib.sha1(blob).hexdigest()
-        if digest in self.seen_images:
-            return
-        self.seen_images.add(digest)
-
-        try:
-            from PIL import Image
-
-            with Image.open(BytesIO(blob)) as image:
-                if min(image.size) < MIN_IMAGE_SIDE:
-                    return
-                picture = image.copy()
-        except Exception:
-            return  # EMF/WMF and the like: not something Pillow reads here
-
-        self.images_left -= 1
-        page = self.image_ocr(picture)
-        if page.words < MIN_PICTURE_WORDS:
-            return
-        if (page.confidence or 0.0) < MIN_PICTURE_CONFIDENCE:
-            return
-
-        self.pictures_read += 1
-        self._emit_text(page.text)
+        text = self.pictures.text(blob)
+        if text:
+            self._emit_text(text)
 
     # -- tables --------------------------------------------------------
 
@@ -817,7 +733,7 @@ def extract_page_results(file_path: str, *, image_ocr=None, max_images: int = 0)
         "text_boxes": walker.text_boxes,
         "headers_footers": len(headers) + len(footers),
         "notes": len(notes),
-        "pictures_ocred": walker.pictures_read,
+        "pictures_ocred": walker.pictures.read,
         **expansion,
     }
     return pages, metadata

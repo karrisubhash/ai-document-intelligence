@@ -18,6 +18,7 @@ from docx.oxml import parse_xml
 from PIL import Image, ImageDraw, ImageFont
 
 from documents.processing.extractors import docx as docx_extractor
+from documents.processing.extractors.listmarks import format_number
 from documents.processing.extractors.ocr import OcrPage
 
 NS = (
@@ -314,11 +315,11 @@ class NumberingTests(SimpleTestCase):
         self.assertEqual(lines[2], "• Gamma")
 
     def test_roman_and_letter_formats(self):
-        self.assertEqual(docx_extractor._format_number(4, "lowerRoman"), "iv")
-        self.assertEqual(docx_extractor._format_number(14, "upperRoman"), "XIV")
-        self.assertEqual(docx_extractor._format_number(27, "lowerLetter"), "aa")
-        self.assertEqual(docx_extractor._format_number(3, "upperLetter"), "C")
-        self.assertEqual(docx_extractor._format_number(7, "decimalZero"), "07")
+        self.assertEqual(format_number(4, "lowerRoman"), "iv")
+        self.assertEqual(format_number(14, "upperRoman"), "XIV")
+        self.assertEqual(format_number(27, "lowerLetter"), "aa")
+        self.assertEqual(format_number(3, "upperLetter"), "C")
+        self.assertEqual(format_number(7, "decimalZero"), "07")
 
     def test_numbering_inside_a_table_cell_is_kept(self):
         numbered = (

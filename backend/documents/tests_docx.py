@@ -72,13 +72,29 @@ class DocxDetectionTests(TestCase):
         self.assertIsNone(detect_file_type(path))
 
     def test_a_zip_named_docx_is_still_not_a_docx(self):
-        """The extension is client-supplied and must not decide."""
+        """The extension is client-supplied and must not decide. An
+        OpenDocument file is a ZIP too, and is none of the formats read."""
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr("xl/workbook.xml", "<workbook/>")
-        path = write(self.tmp, "spreadsheet.docx", buffer.getvalue())
+            archive.writestr("mimetype", "application/vnd.oasis.opendocument.text")
+            archive.writestr("content.xml", "<office:document-content/>")
+        path = write(self.tmp, "letter.docx", buffer.getvalue())
 
         self.assertIsNone(detect_file_type(path))
+
+    def test_the_main_part_decides_the_type_not_the_extension(self):
+        for part, expected in (
+            ("xl/workbook.xml", FileType.XLSX),
+            ("ppt/presentation.xml", FileType.PPTX),
+            ("word/document.xml", FileType.DOCX),
+        ):
+            with self.subTest(part=part):
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w") as archive:
+                    archive.writestr(part, "<root/>")
+                path = write(self.tmp, "misnamed.docx", buffer.getvalue())
+
+                self.assertEqual(detect_file_type(path), expected)
 
     def test_is_docx_returns_false_for_a_corrupt_archive(self):
         path = write(self.tmp, "broken.docx", b"PK\x03\x04 truncated garbage")
@@ -277,7 +293,8 @@ class DocxPipelineTests(AuthenticatedAPITestCase):
     def test_a_zip_pretending_to_be_a_docx_is_rejected(self):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr("xl/workbook.xml", "<workbook/>")
+            archive.writestr("mimetype", "application/vnd.oasis.opendocument.text")
+            archive.writestr("content.xml", "<office:document-content/>")
 
         document_id = self.upload_expecting_failure("fake.docx", buffer.getvalue())
         document = Document.objects.get(id=document_id)

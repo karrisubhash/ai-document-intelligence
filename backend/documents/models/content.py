@@ -45,6 +45,11 @@ class PageContent(models.Model):
         # author-declared breaks rather than rendered pages. Keeping them
         # apart is what lets extraction quality be compared per source.
         DOCX_TEXT = "DOCX_TEXT", "DOCX text"
+        # Cells read from a workbook or delimited file, one page per sheet,
+        # and slides read from a deck, one page per slide. Their page
+        # boundaries are the file's own sheets and slides, not rendered pages.
+        SPREADSHEET = "SPREADSHEET", "Spreadsheet"
+        PRESENTATION = "PRESENTATION", "Presentation"
 
     content = models.ForeignKey(
         DocumentContent,

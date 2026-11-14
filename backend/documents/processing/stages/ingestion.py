@@ -1,10 +1,11 @@
+import codecs
 import os
 
 from django.conf import settings
 
 from documents.processing.context import FileType, StageResult
 from documents.processing.errors import ErrorCode, StageError
-from documents.processing.extractors import docx
+from documents.processing.extractors import ooxml
 
 # Content sniffing beats the extension: the uploaded name is client-supplied
 # and a mislabelled file would otherwise be handed to the wrong extractor.
@@ -34,6 +35,18 @@ def _is_webp(header: bytes) -> bool:
     return header.startswith(b"RIFF") and header[8:12] == b"WEBP"
 
 
+# The main part each ZIP-based office format carries. The bytes alone cannot
+# tell them apart, so the archive is asked which of these it holds.
+OOXML_MAIN_PARTS = {
+    "word/document.xml": FileType.DOCX,
+    "xl/workbook.xml": FileType.XLSX,
+    "ppt/presentation.xml": FileType.PPTX,
+}
+
+# How much of a file is read to sniff it: enough for every signature above and
+# for a delimited file to be checked for being text at all.
+SNIFF_BYTES = 4096
+
 # Every ZIP-based office format shares these bytes, so the signature alone
 # cannot identify a DOCX - the archive has to be opened and asked whether it
 # holds a Word document part.
@@ -50,12 +63,23 @@ EXTENSION_TYPES = {
     ".webp": FileType.IMAGE,
     ".bmp": FileType.IMAGE,
     ".docx": FileType.DOCX,
+    ".xlsx": FileType.XLSX,
+    ".pptx": FileType.PPTX,
+    ".csv": FileType.CSV,
+    ".tsv": FileType.CSV,
 }
+
+
+def _is_text(sample: bytes) -> bool:
+    """Whether bytes read as text: no NUL, unless it is UTF-16 with a BOM."""
+    if sample.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return True
+    return bytes(1) not in sample
 
 
 def detect_file_type(file_path: str) -> str | None:
     with open(file_path, "rb") as handle:
-        header = handle.read(32)
+        header = handle.read(SNIFF_BYTES)
 
     for signature, file_type in MAGIC_SIGNATURES:
         if header.startswith(signature):
@@ -65,15 +89,21 @@ def detect_file_type(file_path: str) -> str | None:
         return FileType.IMAGE
 
     if header.startswith(ZIP_SIGNATURES):
-        # A .xlsx, .pptx or plain .zip reaches here too and must come back
-        # unrecognised rather than be handed to the DOCX extractor.
-        return FileType.DOCX if docx.is_docx(file_path) else None
+        # The type is whichever main part the archive holds. A plain .zip, or
+        # an .odt, holds none of them and comes back unrecognised rather than
+        # being handed to an extractor that cannot read it.
+        part = ooxml.first_part(file_path, OOXML_MAIN_PARTS)
+        return OOXML_MAIN_PARTS.get(part)
 
-    # No signature matched. Only a plain-text extension may fall back to
-    # the extension, since text files have no magic bytes.
-    extension = os.path.splitext(file_path)[1].lower()
-    if EXTENSION_TYPES.get(extension) == FileType.TXT:
+    # No signature matched. Only text formats may fall back to the
+    # extension, since they have no magic bytes.
+    declared = EXTENSION_TYPES.get(os.path.splitext(file_path)[1].lower())
+    if declared == FileType.TXT:
         return FileType.TXT
+    # A delimited file is only believed to be one if it is text: a binary
+    # blob renamed .csv would otherwise be "parsed" into rows of noise.
+    if declared == FileType.CSV and _is_text(header):
+        return FileType.CSV
 
     return None
 

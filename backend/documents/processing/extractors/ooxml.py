@@ -57,6 +57,24 @@ def has_part(file_path: str, part: str) -> bool:
         ) from exc
 
 
+def first_part(file_path: str, candidates) -> str | None:
+    """The first of `candidates` this ZIP holds, or None.
+
+    The format of an OOXML file is whichever main part it carries, so one
+    look at the archive answers it. Same error rule as `has_part`.
+    """
+    try:
+        with zipfile.ZipFile(file_path) as archive:
+            names = set(archive.namelist())
+    except zipfile.BadZipFile:
+        return None
+    except OSError as exc:
+        raise TransientError(
+            f"Could not read the stored file while detecting its type: {exc}"
+        ) from exc
+    return next((part for part in candidates if part in names), None)
+
+
 def check_expansion(file_path: str, label: str = "Office") -> dict:
     """Reject decompression bombs before handing the file to a parser."""
     try:

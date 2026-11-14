@@ -8,6 +8,9 @@ class FileType:
     TXT = "TXT"
     IMAGE = "IMAGE"
     DOCX = "DOCX"
+    XLSX = "XLSX"
+    CSV = "CSV"
+    PPTX = "PPTX"
 
 
 @dataclass(frozen=True)

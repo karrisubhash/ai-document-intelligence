@@ -7,6 +7,7 @@ redis
 pypdf
 pdfplumber
 openpyxl
+defusedxml
 python-pptx
 pytesseract
 pdf2image
