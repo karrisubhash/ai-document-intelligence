@@ -28,7 +28,7 @@ for** and **what is actually built today**, and never conflates the two.
 | Document upload, versioning, metadata | 5, 10 | ✅ Built — row-locked versioning, archival, per-version download, 404 (not 403) to non-readers |
 | Async processing (queue + worker) | 17 | ✅ Built (Celery + Redis) — time limits, stalled-run recovery, duplicate-run refusal |
 | Validation, ingestion, integrity checks | 5, 10 | ✅ Built |
-| PDF/DOCX/TXT parsing + OCR fallback | 11.3 | ✅ Built (pypdf, python-docx, pdf2image, Tesseract) |
+| PDF/DOCX/XLSX/PPTX/CSV/TXT/image parsing + OCR, tables kept as tables | 11.3 | ✅ Built (pdfplumber, python-docx, openpyxl, python-pptx, pdf2image, Tesseract) |
 | Per-page normalized content store | 15 | ✅ Built (`DocumentContent` / `PageContent`) |
 | Classification pipeline stage + contract | 11.1 | ✅ Built — pluggable |
 | Trained document classifier + inference adapter | 11.1 | ✅ Built — text baseline, 71.9% test accuracy ([results](ai/classification/README.md#results)) |
@@ -167,8 +167,12 @@ ai-document-intelligence/
 │       │   ├── pipeline.py         stage orchestration + content persistence
 │       │   ├── stages/             ingestion, validation, text_extraction, ocr,
 │       │   │                       classification, field_extraction, chunking
-│       │   ├── extractors/         pdf (pypdf), docx (python-docx),
-│       │   │                       ocr (tesseract), plain_text
+│       │   ├── extractors/         pdf (pdfplumber), docx (python-docx XML walk),
+│       │   │                       ocr (tesseract, word positions),
+│       │   │                       spreadsheet (openpyxl, csv), presentation
+│       │   │                       (python-pptx), geometry (reading order,
+│       │   │                       borderless tables), compose (page builder),
+│       │   │                       plain_text
 │       │   ├── classification/     DocumentClassifier protocol, service,
 │       │   │                       trained text-baseline adapter
 │       │   ├── field_extraction/   FieldExtractor protocol, schema packs,
@@ -290,7 +294,11 @@ Pipeline limits, in `backend/config/settings.py`:
 |---|---|---|
 | `MAX_DOCUMENT_SIZE_BYTES` | 50 MB | Rejected at the VALIDATION stage |
 | `MAX_DOCUMENT_PAGES` | 500 | PDF page ceiling |
-| `OCR_DPI` | 200 | Render DPI for OCR of PDF pages |
+| `OCR_DPI` | 300 | Render DPI for OCR of PDF pages (10pt text needs ~20px x-height, which is 300) |
+| `OCR_LANGUAGES` | `eng` | Tesseract packs joined with `+` (`eng+hin`); packs that are not installed are dropped, `eng` is the floor. More packs: build arg `TESSERACT_LANGS` |
+| `OCR_MIN_WORD_CONFIDENCE` | 30 | Words Tesseract is less sure of than this are dropped as speckle |
+| `OCR_DETECT_ROTATION` | True | A poorly read scan is checked for being sideways or upside down and read again if that reads better |
+| `OCR_EMBEDDED_IMAGES` / `OCR_EMBEDDED_IMAGES_MAX` | True / 20 | Pictures inside a PDF page, DOCX or slide are OCR'd when they read like a document, up to this many per file |
 | `DOCUMENT_CLASSIFIER` | `""` | Dotted path to a `DocumentClassifier`; empty means classification is **skipped**, never guessed |
 | `DOCUMENT_CLASSIFIER_ARTIFACT` | `ai/.../v0.1.0/model.joblib` | Trained artifact the text classifier loads |
 | `DOCUMENT_FIELD_EXTRACTOR` | `""` | Dotted path to a `FieldExtractor`; empty means extraction is **skipped**, never invented |
@@ -545,19 +553,24 @@ Stages:  INGESTION → SCANNING → VALIDATION → TEXT_EXTRACTION → OCR
 ```
 
 - **INGESTION** — sniffs the file type from magic bytes rather than trusting the uploaded
-  extension (only `.txt` may fall back to the extension, since text has no signature). A
-  DOCX shares its ZIP signature with `.xlsx`, `.pptx` and any `.zip`, so the archive is
-  opened and asked whether it actually holds a Word document part.
+  extension (only text formats — `.txt`, and a `.csv`/`.tsv` that really is text — may fall
+  back to the extension, since they have no signature). DOCX, XLSX and PPTX share one ZIP
+  signature with any `.zip`, so the archive is opened and asked which main part it holds
+  (`word/document.xml`, `xl/workbook.xml`, `ppt/presentation.xml`).
 - **SCANNING** — runs *before* validation, deliberately. See
   [Scanning runs before validation](#scanning-runs-before-validation-and-that-order-is-deliberate).
-- **VALIDATION** — enforces supported type, size and page limits, and proves the PDF parses.
-- **TEXT_EXTRACTION** — pulls the PDF text layer per page. Pages without one are left
-  unclaimed rather than silently blanked.
+- **VALIDATION** — enforces supported type, size and page limits (slides in a deck, frames
+  in a TIFF), proves the PDF parses, and refuses decompression bombs in any Office file.
+- **TEXT_EXTRACTION** — reads the text layer per page (see
+  [How each format is read](#how-each-format-is-read)). A page whose layer is absent, or
+  unreadable (unmapped glyphs, replacement characters), is left unclaimed with the reason
+  recorded, rather than silently blanked or stored as garbage.
 - **OCR** — claims exactly those pages, rendering one page at a time to keep memory bounded.
   Keeping the two paths separate makes each independently measurable.
 - **LAYOUT_ANALYSIS** — last in the content phase, because it reads the finished page text:
-  a table on a scanned page is not there to be found until OCR has filled that page in. Finds
-  tables and locates figures; see
+  a table on a scanned page is not there to be found until OCR has filled that page in.
+  Stores the tables an extractor read as cells (verified like any other), finds the ones it
+  could not by whitespace layout, and locates figures; see
   [Structure and multi-part questions](#structure-and-multi-part-questions-113-25-phase-12).
 - **CLASSIFICATION** — reads the persisted `DocumentContent`, never the original file.
 - **EXTRACTION** — likewise; see [Information extraction](#information-extraction-112-fr-10).
@@ -579,11 +592,46 @@ The size checked at VALIDATION is the *compressed* size, which says nothing abou
 expands to, so the uncompressed total and compression ratio are checked before any parsing
 happens.
 
-Tables are extracted in document order alongside paragraphs — `python-docx`'s `paragraphs`
-skips them entirely, and in institutional documents the tables are often where the content
-actually is (fee schedules, course lists, signature blocks). A DOCX whose content is only
-embedded images produces no text and fails with `EMPTY_EXTRACTION`: rendering and OCR-ing
-embedded images is a capability this pipeline does not claim to have.
+The body is walked as XML in document order, because `python-docx`'s `paragraphs` and
+`tables` skip most of what carries content in an institutional document: content controls
+(the fill-in fields of a form), tracked insertions, text boxes (read once — each is stored
+twice for old and new Word), nested tables, headers, footers, footnotes and endnotes. A
+merged cell holds its text once rather than once per column it spans. List numbers are
+*generated* from `numbering.xml` — "2.3.1" is not in the paragraph's text, so without
+them "see clause 2.3.1" refers to nothing. A DOCX with no text and nothing legible in
+its pictures fails with `EMPTY_EXTRACTION`.
+
+### How each format is read
+
+| Format | Read with | A page is | Tables |
+|---|---|---|---|
+| PDF | pdfplumber; Tesseract for scanned pages | a PDF page | ruled grids cell by cell, blank and merged cells kept; borderless tables inferred from aligned text |
+| Scan or photo — PNG, JPEG, TIFF, WebP, BMP | Tesseract, with word positions | an image, or one TIFF frame | inferred from word positions |
+| DOCX | python-docx, walking the XML | the author's page breaks | the document's own cells |
+| XLSX | openpyxl | a visible sheet, in 500-row parts with the header repeated | a table per run of non-blank rows |
+| CSV, TSV | `csv`, encoding and delimiter detected | the file, in 500-row parts | the whole file |
+| PPTX | python-pptx | a slide | slide tables; a chart becomes a table of its categories and series |
+| TXT | built in | the file | whitespace layout detector |
+
+The same reasoning runs through all of them. **Extractors that can see real cells hand
+them over as structure** instead of flattening them to text for a detector to rediscover:
+a blank cell otherwise leaves no trace, and the number after it silently moves into the
+wrong column. Every table is written into the page text as one `a | b | c` row per line
+(blank cells kept) and recorded with its exact span, so the invariant below still holds.
+Pages are read in **reading order** — a two-column page is read one column after the other,
+and a numbered-clause list is left as the lines it is, never cut into cells.
+
+Work is **bounded**: a spreadsheet stops at 200,000 filled cells (and says so in its last
+page), a blank-row run ends a sheet, pictures are OCR'd up to a per-file budget, and a
+failure in the PDF engine on one page falls back to the previous engine for that page
+only. A `.docx`-named workbook is still read as a workbook: the bytes decide.
+
+**Re-extracting what is already uploaded.** Every extraction records the pipeline version
+that wrote it (`ingestion-v2` now). `python manage.py reprocess_documents --dry-run` lists
+the documents an older pipeline read; run it without `--dry-run`, in batches with
+`--limit`, to queue them. It uses the same path as the Reprocess button, so a run already
+in progress is never doubled, and the previous text stays live until the new extraction is
+indexed. `--all`, `--file-type` and `--department` narrow or widen the selection.
 
 ### Versioning and evidence
 
@@ -1512,7 +1560,11 @@ checkable relationship to the text that every chunk, citation and extracted fiel
 grounded in.
 
 It also means one implementation covers a PDF text layer, an OCR pass, a DOCX and a plain
-text file, because by then they are all just text.
+text file, because by then they are all just text. Since then extractors that can see real
+cells (Word, a ruled PDF grid, a spreadsheet, a slide) hand their tables over as structure
+rather than leave them to be rediscovered — but they write them into the page text first
+and are verified by the same check, so the span invariant above is what they are held to
+too. This detector remains the one for everything else.
 
 The first version of the space-aligned detector found **nothing**, because it compared the
 left edges of columns and real tables right-align numbers under left-aligned headers —
@@ -1773,12 +1825,14 @@ in the code compares against them.
 ## Evaluation and benchmarking
 
 The extraction harness compares approaches on a real evaluation set instead of assuming the
-initial `pypdf` / `tesseract` wiring was the right technology choice:
+initial `pypdf` / `tesseract` wiring was the right technology choice. The previous engines
+are kept as named baselines (`pypdf_text`, `ocr_plain`) so a change in extraction can be
+measured against what it replaced:
 
 ```bash
 cd backend
 python manage.py benchmark_extraction ../eval_set \
-    --approach pdf_text --approach ocr \
+    --approach pypdf_text --approach pdf_text --approach ocr_plain --approach ocr \
     --json ../extraction_report.json
 ```
 
@@ -1834,7 +1888,7 @@ the last recorded results are in [docs/development/testing.md](docs/development/
 | Database | PostgreSQL 16 |
 | Cache / broker | Redis 7 |
 | Async jobs | Celery |
-| Parsing / OCR | pypdf, pdf2image + poppler, pytesseract + Tesseract, Pillow |
+| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow |
 | Search | PostgreSQL full-text + pgvector (HNSW), reciprocal-rank fusion |
 | ML | scikit-learn (text classifier), sentence-transformers on CPU PyTorch (bge-small embeddings, bge-reranker-base cross-encoder), PyTorch on a remote GPU (vision training path) |
 | LLM providers (optional) | Anthropic API / Amazon Bedrock, any OpenAI-compatible endpoint |
@@ -1881,7 +1935,7 @@ discovered.
 | 1 | Identity — users, auth, roles | ✅ |
 | 2 | Document platform — upload, versions, lifecycle | ✅ |
 | 3 | Async processing — queue, workers, retries, progress | ✅ |
-| 4 | Document AI — parsing, OCR, classification, extraction | ✅ PDF/DOCX/TXT/image parsing, OCR, text classification and field extraction all done; vision classifier remains untrained (tracked under phase 12) |
+| 4 | Document AI — parsing, OCR, classification, extraction | ✅ PDF/DOCX/XLSX/PPTX/CSV/TXT/image parsing, OCR, text classification and field extraction all done; vision classifier remains untrained (tracked under phase 12) |
 | 5 | Search — chunking, embeddings, pgvector, hybrid retrieval | ✅ (embedding baseline is lexical, not semantic — see below) |
 | 6 | RAG — reranking, context builder, LLM gateway, citations, abstention | ✅ (answerer is extractive, not generative — see below) |
 | 7 | AI security — prompt/document injection, permission-aware retrieval | ✅ (heuristic scanner, not an antivirus — see below) |

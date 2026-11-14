@@ -14,12 +14,36 @@ WORKDIR /app
 #   postgresql-client  pg_dump / pg_restore for manage.py backup and restore
 #   poppler-utils      PDF page rendering for OCR
 #   tesseract-ocr      OCR
+#   tesseract-ocr-osd  orientation data: how OCR tells a sideways or upside-down
+#                      scan from an upright one, so it can turn the page and read
+#                      it (a dependency of tesseract-ocr today; named so that a
+#                      change upstream cannot silently remove it)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-client \
         poppler-utils \
         tesseract-ocr \
+        tesseract-ocr-osd \
     && rm -rf /var/lib/apt/lists/*
+
+# Extra OCR languages, as tesseract-ocr-<code> packages, space separated:
+#
+#   docker compose build --build-arg TESSERACT_LANGS="hin tel"
+#   OCR_LANGUAGES=eng+hin+tel
+#
+# English and the orientation data above are always installed. Each pack is
+# tens of megabytes, so none is added by default; a language that is
+# configured but not installed is dropped and English is read instead.
+ARG TESSERACT_LANGS=""
+
+RUN if [ -n "$TESSERACT_LANGS" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            $(for lang in $TESSERACT_LANGS; do printf 'tesseract-ocr-%s ' "$lang"; done) \
+        && rm -rf /var/lib/apt/lists/*; \
+    else \
+        echo "No extra OCR languages (TESSERACT_LANGS is empty)"; \
+    fi
 
 # An unprivileged user for everything the container runs. Created before
 # the dependency layers so the uid is stable across rebuilds; the writable
