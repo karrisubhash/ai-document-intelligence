@@ -122,6 +122,35 @@ export function explainAbstention(reason: string): string {
   return "There was not enough evidence in your documents to answer this reliably.";
 }
 
+/**
+ * Whether the AI itself failed to write an answer (unavailable, at capacity,
+ * declined, out of room) - as opposed to the documents not holding one. The
+ * passages were found; saying "not enough evidence" sent a reader off to
+ * rewrite a question that was fine.
+ */
+export function isAnswererFailure(reason: string): boolean {
+  return reason.toLowerCase().includes("usable answer");
+}
+
+/** The headline over a withheld answer. */
+export function abstentionTitle(reason: string): string {
+  return isAnswererFailure(reason)
+    ? "The AI couldn't write an answer just now"
+    : "Not enough evidence to answer";
+}
+
+/**
+ * What to tell a reader when the AI could not write an answer. `capacity`
+ * comes back by itself (a free plan allows a few answers a minute and a
+ * limited number a day); anything else is a failure worth trying again.
+ */
+export function explainAnswererFailure(reason: "capacity" | "unavailable" | null | undefined): string {
+  if (reason === "capacity") {
+    return "The AI has reached its limit for the moment: free plans allow only a few answers a minute and a limited number a day. Your question and your documents are fine. Try again in a minute, or use Search to open the relevant pages yourself.";
+  }
+  return "The AI service did not return an answer: it was unavailable, declined, or ran out of room. Your documents are fine. Try again in a moment, or ask about one thing at a time.";
+}
+
 export function humanize(value: string): string {
   return value
     .toLowerCase()

@@ -13,7 +13,12 @@ import type {
 } from "../../api/types";
 import { formatDuration, formatPercent } from "../../lib/format";
 import { excerpt, findQuotedSpans, toUtf16Offset } from "../../lib/highlight";
-import { explainAbstention } from "../../lib/labels";
+import {
+  abstentionTitle,
+  explainAbstention,
+  explainAnswererFailure,
+  isAnswererFailure,
+} from "../../lib/labels";
 import { Markdown } from "../../lib/markdown";
 import PageText from "../PageText";
 import { Icon, type IconName } from "../icons";
@@ -129,7 +134,7 @@ export function fromMessage(message: ChatMessage): AnswerView {
  * pasted answer still says where each claim came from.
  */
 export function answerAsMarkdown(answer: AnswerView): string {
-  if (answer.abstained) return "Not enough evidence to answer.";
+  if (answer.abstained) return `${abstentionTitle(answer.abstentionReason)}.`;
   const notes = answer.citations
     .slice()
     .sort((a, b) => a.marker - b.marker)
@@ -394,8 +399,12 @@ export function Answer({
         <div className="abstention">
           <Icon name="alert-triangle" size={18} />
           <div className="abstention-body">
-            <p className="abstention-title">Not enough evidence to answer</p>
-            <p>{explainAbstention(answer.abstentionReason)}</p>
+            <p className="abstention-title">{abstentionTitle(answer.abstentionReason)}</p>
+            <p>
+              {isAnswererFailure(answer.abstentionReason)
+                ? explainAnswererFailure(answer.degraded?.reason)
+                : explainAbstention(answer.abstentionReason)}
+            </p>
             {answer.notes.filter((note) => note.includes("image")).map((note) => (
               <p key={note} className="muted small">
                 {note}
@@ -448,7 +457,11 @@ export function Answer({
         />
       )}
 
-      <DegradedNote degraded={answer.degraded} />
+      {/* "This answer quotes your documents" is false of an answer that quoted
+          nothing: the card above already says the AI could not write one. */}
+      <DegradedNote
+        degraded={answer.abstained && answer.degraded?.answerer ? null : answer.degraded}
+      />
 
       {answer.planSteps.length > 1 ? (
         <div className="plan">

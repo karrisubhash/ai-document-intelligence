@@ -227,6 +227,70 @@ describe("answers", () => {
     expect(screen.getByText(/do not have access to/)).toBeInTheDocument();
   });
 
+  describe("when the AI itself could not write the answer", () => {
+    const FAILED = "the answerer could not produce a usable answer";
+
+    function renderFailure(reason: "capacity" | "unavailable") {
+      return render(
+        <MemoryRouter>
+          <ToastProvider>
+            <Answer
+              answer={chatResponse({
+                abstained: true,
+                abstention_reason: FAILED,
+                citations: [],
+                answer: "I couldn't find enough information in the provided documents.",
+                degraded: { answerer: true, reranker: false, reason },
+              })}
+              onInspect={() => undefined}
+            />
+          </ToastProvider>
+        </MemoryRouter>,
+      );
+    }
+
+    it("says the AI failed rather than that the evidence was missing", () => {
+      renderFailure("capacity");
+
+      expect(screen.getByText("The AI couldn't write an answer just now")).toBeInTheDocument();
+      expect(screen.queryByText("Not enough evidence to answer")).not.toBeInTheDocument();
+      expect(screen.getByText(/reached its limit for the moment/)).toBeInTheDocument();
+      expect(screen.getByText(/Your question and your documents are fine/)).toBeInTheDocument();
+    });
+
+    it("does not claim to have quoted the documents when nothing was quoted", () => {
+      renderFailure("capacity");
+
+      expect(screen.queryByText(/quotes your documents directly/)).not.toBeInTheDocument();
+    });
+
+    it("tells an outage from a limit", () => {
+      renderFailure("unavailable");
+
+      expect(screen.getByText(/did not return an answer/)).toBeInTheDocument();
+      expect(screen.queryByText(/reached its limit/)).not.toBeInTheDocument();
+    });
+
+    it("still says so when an answer WAS quoted", () => {
+      render(
+        <MemoryRouter>
+          <ToastProvider>
+            <Answer
+              answer={chatResponse({
+                degraded: { answerer: true, reranker: false, reason: "capacity" },
+              })}
+              onInspect={() => undefined}
+            />
+          </ToastProvider>
+        </MemoryRouter>,
+      );
+
+      expect(
+        screen.getByText(/AI writing is at capacity — this answer quotes your documents directly/),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("shows the exact evidence, highlighted, and warns when it is out of date", async () => {
     vi.spyOn(api, "source").mockResolvedValue({
       document_id: 7,
