@@ -18,6 +18,7 @@ from documents.rag import engine, facts, followup, grounding, judging
 from documents.rag.gateway import Gateway
 from documents.rag.llm import ABSTENTION_TEXT, ExtractiveAnswerer, declines_to_answer
 from documents.rag.reranking import RerankedChunk
+from documents.search import service as search_service
 from documents.tests import MEDIA_ROOT, make_user
 from documents.tests_providers import (
     PASSAGE,
@@ -1105,3 +1106,40 @@ class RejectedAnswerTests(TestCase):
 
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+
+
+# --- Vector search stays exact ----------------------------------------------
+
+
+@override_settings(
+    MEDIA_ROOT=MEDIA_ROOT,
+    DOCUMENT_EMBEDDING_PROVIDER="documents.processing.embedding.hashing.HashingEmbeddingProvider",
+)
+class VectorSearchStaysExactTests(TestCase):
+    """An HNSW scan returns at most `hnsw.ef_search` rows BEFORE the permission
+    filter is applied. Where someone may read a small share of the index (one
+    department of many, under open sign-up), almost none of the nearest rows
+    would be theirs, and the semantic half of search would come back nearly
+    empty - so chat would be answering from lexical results alone. Today that
+    cannot happen only because `_vector` orders by (distance, id): no HNSW
+    index can serve an ORDER BY with a key it does not hold, on Postgres 16.
+
+    That rests on a second column name and a Postgres version. A plan cannot
+    pin it - on a table this small Postgres never walks the index whatever the
+    query, so a plan test passes with or without the tie-break and proves
+    nothing - so the ORDER BY itself is what is pinned."""
+
+    def test_the_search_query_orders_by_distance_and_then_id(self):
+        from documents.models import DocumentChunkEmbedding
+
+        owner = make_user("plan_owner", department="Registry")
+        index_handbook(owner)
+        queryset, _ = search_service.authorized_chunks(owner)
+        row = DocumentChunkEmbedding.objects.first()
+
+        built = search_service._vector_queryset(
+            queryset, [0.1] * 384, row.model_name, row.model_version, 5
+        )
+
+        self.assertEqual(built.query.order_by, ("distance", "id"))
+        self.assertTrue(0 < len(list(built)) <= 5)

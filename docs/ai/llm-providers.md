@@ -67,7 +67,7 @@ notice - check your provider's console, and set `LLM_DAILY_LIMITS` to match.
 | Preset | Key variable | Default model | Where to get a key | Free tier (as documented) | Default daily limit here | May train on inputs |
 |---|---|---|---|---|---|---|
 | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash` (+3 fallbacks) | aistudio.google.com/apikey | **Measured 2026-10-11:** 5 requests/min and 20/day per model; day ends at midnight Pacific | 20 per model | **Yes** on unpaid tiers (Google's terms) |
-| `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` | console.groq.com/keys | ~30 requests/min, 1,000/day, but 8K tokens/min and 200K tokens/day for this model - the token cap binds first, around 65 grounded questions | 60 | No (unverified) |
+| `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` | console.groq.com/keys | ~30 requests/min, 1,000/day, but 8K tokens/min and 200K tokens/day for this model - the token cap binds first: a grounded prompt is now 5-6K tokens, so about one question a minute and ~30 a day. **Put it last in a chain** | 30 | No (unverified) |
 | `cerebras` | `CEREBRAS_API_KEY` | `gpt-oss-120b` | cloud.cerebras.ai | Reported as about a million tokens/day; few requests per minute - set `RAG_ANSWERER_RETRIES` low | 100 (unverified) | No (unverified) |
 | `openrouter` | `OPENROUTER_API_KEY` | `openrouter/free` (a router over free models) | openrouter.ai/keys | 50 free-model requests/day per **account** below $10 of credits, 1,000 above | 50 | **Yes** - free models may be trained on by whoever serves them |
 | `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` | console.mistral.ai | "Experiment" plan: metered by tokens per month, not requests per day | 100 (unverified) | **Yes** on the free plan (unverified) |
@@ -84,8 +84,55 @@ not quietly switch a provider on. The OpenAI reasoning models (o-series, gpt-5) 
 System status and stored on every answer (`metadata.llm.may_train_on_input`). For
 confidential documents, attach billing to the Gemini key, or use `ollama`.
 
-A sensible free setup for the public site: `RAG_ANSWERER_CHAIN=gemini,groq,cerebras` - about
-80 + 60 + 100 written answers a day before anything is quoted.
+A sensible free setup for the public site: `RAG_ANSWERER_CHAIN=gemini,cerebras,groq` - about
+80 + 100 + 30 written answers a day before anything is quoted. Groq is last because its
+8K-tokens-a-minute window fits roughly one grounded question a minute.
+
+**Two presets ask for less reasoning, and that is unverified.** `groq` and `cerebras` send
+`reasoning_effort: "low"` (gpt-oss is a reasoning model and bills its hidden reasoning
+against `max_tokens`, so a short answer could be cut off and recorded as a failure), and
+`groq` also caps the reply it asks for at 1,500 tokens - its window counts the reply a request
+*asks* for, not the one it gets. Neither was measured against a live key from here. After
+adding a key, press **Test** on System status; a provider that rejects the parameter answers
+400, and the chain moves on to the next link rather than failing the question.
+
+A **413** ("request too large": a prompt that does not fit a free tier's window) is handled
+like a 429 - handed back, not counted, and the link rested for a minute - instead of costing
+every question a wasted round trip.
+
+## What a model is shown, and what happens when it is wrong
+
+These apply only while a model can write the answer now (a link is ready); a quote keeps
+the settings it was measured with. They are all in `.env.example`.
+
+- **The model judges relevance, not the score floor.** The small reranker scores a correct
+  paraphrase 0.00-0.08 against a floor of 0.30, so the model never saw it and the reader was
+  told "not found" - or, with general knowledge on, got a general reply to a question about
+  their own documents. The reranker's top 6 passages and retrieval's top 2 now go to the
+  model even below the floor (`RAG_MODEL_JUDGES_RELEVANCE`), and a question scoped to one
+  document also reads its opening chunks. A quote - including the fallback when every
+  provider is out of quota - never sees those passages.
+- **More context, with the chunks around the best ones.** 14,000 characters and 12 passages
+  instead of 8,000 and 8, and the chunk before and after each of the top 3 passages, so a list
+  or procedure that runs over a chunk boundary arrives whole.
+- **A compound question goes whole.** Planning cut "the fee for X and Y, and when is it
+  due?" into parts that lost what they referred to, spending one call per part.
+- **A refusal in the model's own words is a refusal.** "I couldn't find X; these documents
+  only list Y" was stored as an ungrounded answer - the hallucination signal - and kept
+  chat's general reply away. Only a reply with no citation and no figure counts.
+- **A correct answer is not discarded for how it spells a fact:** a date written another
+  way ("31 March 2025" for "31.03.2025"), a year range ("2024-25"), a number word, a
+  citation written "[1, 2]", a marker one past the last passage. A date that could be read
+  two ways ("04.03.2025") and a wrong date are still rejected.
+- **A rejected answer gets two chances before it is discarded:** a figure written in exactly
+  one passage the answer did not cite gets that passage's citation; otherwise the model is
+  told which figures were not in its passages and asked once more (`RAG_GROUNDING_RETRY`).
+  The second answer is checked exactly like the first, and if it fails too the first failure
+  stands.
+
+To measure all of it, `manage.py evaluate --chat-path --pause 12` against
+`evaluation/benchmark-v3.template.json` reports `correctness` (the expected answer's key facts
+are in the answer) and how many questions the documents answer got a general-knowledge reply.
 
 ## Daily limits
 

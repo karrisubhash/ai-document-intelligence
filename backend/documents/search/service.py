@@ -263,22 +263,36 @@ def _lexical(queryset, query: str, limit: int):
     )
 
 
+def _vector_queryset(queryset, vector, model_name, model_version, limit: int):
+    """The query behind `_vector`, unevaluated, so a test can read its plan.
+
+    ORDERED BY (distance, id), and that second key is load-bearing. An HNSW
+    index can only serve an ORDER BY whose every key it matches, so with the
+    tie-break Postgres computes the distance for every authorized row and
+    keeps the nearest exactly. Ordered by distance alone it would walk the
+    index instead, which returns at most `hnsw.ef_search` rows BEFORE the
+    permission filter - and a person who may read a small share of the index
+    (one department of many, under open sign-up) would get back almost none
+    of their own chunks. The tie-break is what keeps that from happening, and
+    it is pinned by a test (tests_rag_quality.VectorSearchStaysExactTests).
+    """
+    return _candidates(
+        queryset.filter(
+            embeddings__model_name=model_name,
+            embeddings__model_version=model_version,
+        )
+        .annotate(distance=CosineDistance("embeddings__embedding", vector))
+        .order_by("distance", "id")
+    )[:limit]
+
+
 def _vector(queryset, vector, model_name, model_version, limit: int):
     """Nearest chunks by cosine distance, restricted to one model's vectors.
 
     Mixing models would compare coordinates from different spaces, which
     produces numbers that look like scores and mean nothing.
     """
-    return list(
-        _candidates(
-            queryset.filter(
-                embeddings__model_name=model_name,
-                embeddings__model_version=model_version,
-            )
-            .annotate(distance=CosineDistance("embeddings__embedding", vector))
-            .order_by("distance", "id")
-        )[:limit]
-    )
+    return list(_vector_queryset(queryset, vector, model_name, model_version, limit))
 
 
 def _embedding_provider():
