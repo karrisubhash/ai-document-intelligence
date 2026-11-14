@@ -9,7 +9,8 @@ from unittest import mock
 from django.core.files.base import ContentFile
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from documents import rag
+from documents import agents, rag
+from documents.agents import runner
 from documents.models import Document, ProcessingJob
 from documents.processing.pipeline import run_pipeline
 from documents.rag import context as ctx
@@ -420,3 +421,61 @@ class LeadingChunksTests(TestCase):
 
     def test_no_document_scope_means_no_leading_chunks(self):
         self.assertEqual(judging.leading_chunks(self.owner, None, set()), [])
+
+
+# --- A model is given the compound question whole ---------------------------
+
+THREE_PART = (
+    "What is the attendance minimum, how many books can a student borrow, "
+    "and what is the hostel curfew?"
+)
+
+
+class PlanningTests(TestCase):
+    """Planning cuts a compound question up so a quoting answerer can answer
+    each piece. A model reads it whole - and a cut-up question spends a
+    free tier's few daily calls and loses what each part referred to."""
+
+    def asked(self, answerer):
+        calls = []
+
+        def ask(user, question, **kwargs):
+            calls.append(question)
+            return rag.RagAnswer(
+                question=question, answer=ABSTENTION_TEXT, abstained=True
+            )
+
+        with (
+            mock.patch.object(runner, "ask", side_effect=ask),
+            mock.patch.object(runner, "get_answerer", return_value=answerer),
+        ):
+            planned = agents.answer(None, THREE_PART)
+        return calls, planned
+
+    def generative(self):
+        return mock.Mock(generative=True, gateway=FakeGateway(True))
+
+    def test_a_model_gets_the_whole_question_in_one_call(self):
+        calls, planned = self.asked(self.generative())
+
+        self.assertEqual(calls, [THREE_PART])
+        self.assertFalse(planned.planned)
+
+    def test_a_quoting_answerer_still_gets_it_in_parts(self):
+        calls, planned = self.asked(ExtractiveAnswerer())
+
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(planned.planned)
+
+    def test_a_model_with_no_capacity_left_is_planned_for_like_a_quote(self):
+        out_of_quota = mock.Mock(generative=True, gateway=FakeGateway(False))
+
+        calls, planned = self.asked(out_of_quota)
+
+        self.assertEqual(len(calls), 3)
+
+    @override_settings(RAG_PLAN_WHEN_GENERATIVE=True)
+    def test_the_setting_brings_planning_back_for_a_model(self):
+        calls, planned = self.asked(self.generative())
+
+        self.assertEqual(len(calls), 3)

@@ -162,9 +162,21 @@ PRESETS = {
         key_env="GROQ_API_KEY",
         display="Groq",
         # Groq's published free tier for this model is 1,000 requests and
-        # 200K tokens a day; at ~3K tokens a question the TOKEN cap binds
-        # first, around 65 questions. Not measured from here.
-        daily_limit=60,
+        # 200K tokens a day, and 8K tokens a MINUTE. A grounded prompt is now
+        # about 5-6K tokens and an answer a few hundred, so the token cap
+        # binds first: around 30 questions a day, and one a minute. That is
+        # why Groq belongs LAST in a chain, as a last resort.
+        daily_limit=30,
+        # gpt-oss is a reasoning model whose hidden reasoning is billed
+        # against max_tokens; at the default effort a short answer can be cut
+        # off at the cap (finish_reason "length"), which is an answerer
+        # failure. This is extraction over supplied passages. The ceiling
+        # keeps prompt + max_tokens inside the 8K-per-minute window, which
+        # counts the reply the request ASKS for, not the one it gets.
+        # NOT verified against a live key from here: confirm with the AI
+        # providers test on System status before relying on it.
+        request_extras=(("reasoning_effort", "low"),),
+        max_output_tokens=1500,
         json_object=True,
     ),
     # A portability check rather than a production path: the same call,
@@ -211,6 +223,11 @@ PRESETS = {
         # Cerebras's free tier is reported at about a million tokens a day;
         # 100 grounded questions stays well inside that. Unverified.
         daily_limit=100,
+        # gpt-oss reasons before it answers and bills that against
+        # max_tokens; "low" is plenty for extraction over given passages.
+        # NOT verified against a live key from here: confirm with the AI
+        # providers test on System status before relying on it.
+        request_extras=(("reasoning_effort", "low"),),
     ),
     # Mistral's own API speaks /chat/completions at this path. Its free
     # ("Experiment") plan meters tokens per month rather than requests per

@@ -934,13 +934,16 @@ class Gateway:
 
     def _failed(self, link: Link, exc, reservation) -> None:
         status = _status(exc)
-        if status == 429:
+        if status in (413, 429):
             # Refused before it was served: the provider does not count it,
-            # so neither does the budget.
+            # so neither does the budget. 413 is how a small free tier (Groq's
+            # 8K tokens a minute) refuses a prompt that does not fit its
+            # window - it was not benched, so every question paid a wasted
+            # round trip to the same refusal before moving on.
             self.broker.refund(reservation)
-            if budget.is_daily_quota(exc):
+            if status == 429 and budget.is_daily_quota(exc):
                 self.broker.mark_exhausted(link)
-        if status in (429, 503):
+        if status in (413, 429, 503):
             self.broker.cool(link, exc)
         self.broker.record_error(link, exc)
 

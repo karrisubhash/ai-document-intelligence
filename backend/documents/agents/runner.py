@@ -25,7 +25,8 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 
-from documents.rag.engine import ask
+from documents.rag import judging
+from documents.rag.engine import ask, get_answerer
 from documents.rag.llm import ABSTENTION_TEXT
 
 from . import planner
@@ -131,6 +132,17 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
     # an "unanswered" note) for something nobody asked this turn.
     focus = (kwargs.get("focus") or "").strip()
     parts = planner.plan(focus or question, max_steps=max_steps)
+
+    # Planning exists for an answerer that can only quote: it answers one
+    # thing per retrieval, so a compound question is cut up. A model reads a
+    # dozen passages and answers all of it at once - and cutting the question
+    # up costs it: a part loses what it referred to ("when is it due?"), every
+    # part spends one of a free tier's few daily calls, and when every part
+    # abstains chat's general reply is never tried. So while a model can
+    # write the answer, the question goes to it whole.
+    if len(parts) > 1 and not getattr(settings, "RAG_PLAN_WHEN_GENERATIVE", False):
+        if judging.model_can_judge(get_answerer()):
+            parts = []
 
     if len(parts) <= 1:
         # Not compound, or planning is switched off. This is the ordinary

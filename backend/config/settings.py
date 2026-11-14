@@ -704,6 +704,13 @@ DOCUMENT_FIGURE_DETECTOR = os.getenv(
 # Each step costs a full retrieval, so this is a bound, not a budget.
 RAG_MAX_PLAN_STEPS = int(os.getenv("RAG_MAX_PLAN_STEPS", "4"))
 
+# Planning is for an answerer that can only quote. While a generative model
+# can write the answer, a compound question goes to it whole (one retrieval,
+# one call, nothing cut off from what it referred to); True plans it anyway.
+RAG_PLAN_WHEN_GENERATIVE = (
+    os.getenv("RAG_PLAN_WHEN_GENERATIVE", "False").lower() == "true"
+)
+
 # Chunking. Changing either requires re-indexing to keep old and new chunks
 # comparable - see documents.processing.chunking.CHUNKING_VERSION.
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))

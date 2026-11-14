@@ -148,11 +148,11 @@ class ChainConfigurationTests(GatewayTestCase):
 
     def test_a_reasoning_override_only_touches_links_that_send_it(self):
         chain = build(
-            "gemini:gemini-3.5-flash,groq", RAG_ANSWERER_REASONING_EFFORT="low"
+            "gemini:gemini-3.5-flash,mistral", RAG_ANSWERER_REASONING_EFFORT="low"
         )
         extras = {link.provider: dict(link.request_extras) for link in chain.links}
         self.assertEqual(extras["gemini"], {"reasoning_effort": "low"})
-        self.assertEqual(extras["groq"], {})
+        self.assertEqual(extras["mistral"], {})
 
     def test_daily_limits_most_specific_key_wins(self):
         chain = build(
@@ -194,7 +194,11 @@ class ChainWalkTests(GatewayTestCase):
         self.assertEqual(len(gemini.calls), 4)
         # Each link gets its own provider's extras and nobody else's.
         self.assertEqual(gemini.calls[0]["reasoning_effort"], "none")
-        self.assertNotIn("reasoning_effort", groq.calls[0])
+        self.assertEqual(groq.calls[0]["reasoning_effort"], "low")
+        # And its own ceiling on the reply it asks for (Groq's 8K a minute).
+        groq_link = next(link for link in chain.links if link.provider == "groq")
+        self.assertEqual(groq_link.token_cap(4096), 1500)
+        self.assertEqual(groq_link.token_cap(200), 200)
 
     def test_a_refused_key_skips_that_provider_not_the_chain(self):
         chain = build()
@@ -329,6 +333,25 @@ class SharedBudgetTests(GatewayTestCase):
         rows = {row["provider"]: row for row in chain.status()["chain"]}
         self.assertEqual(rows["gemini"]["calls_today"], 0)
         self.assertEqual(rows["groq"]["calls_today"], 1)
+
+    def test_a_request_too_large_for_a_free_tier_is_benched_not_retried(self):
+        """Groq answers 413 when the prompt does not fit its tokens-per-minute
+        window. It was not benched, so every question first paid a wasted round
+        trip to the same refusal; and it was counted against the day."""
+        chain = build("groq,cerebras")
+        groq = wire(chain, "groq", ModelClient({"openai/gpt-oss-120b": 413}))
+        cerebras = wire(chain, "cerebras", ModelClient())
+
+        ask(chain)
+        ask(chain)
+
+        # The first question tried Groq and moved on; the second never did.
+        self.assertEqual(len(groq.calls), 1)
+        self.assertEqual(len(cerebras.calls), 2)
+        rows = {row["provider"]: row for row in chain.status()["chain"]}
+        self.assertEqual(rows["groq"]["calls_today"], 0)
+        self.assertEqual(rows["groq"]["state"], gateway.COOLING)
+        self.assertEqual(rows["groq"]["last_error_status"], 413)
 
     def test_chat_tries_a_cooling_link_last_and_other_purposes_wait(self):
         chain = build("gemini:gemini-3.5-flash,groq")
@@ -475,7 +498,9 @@ class StatusTests(GatewayTestCase):
         self.assertTrue(rows["openrouter"]["trains_on_input"])
         self.assertEqual(rows["gemini"]["label"], "Gemini 3.5 Flash")
         # Only configured links count towards what is left today.
-        self.assertEqual(status["totals"]["capacity_left_today"], 60)
+        self.assertEqual(
+            status["totals"]["capacity_left_today"], PRESETS["groq"].daily_limit
+        )
 
     def test_no_generation_configured_is_an_empty_disabled_status(self):
         status = gateway.status()  # the suite's extractive answerer
