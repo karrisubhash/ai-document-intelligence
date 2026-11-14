@@ -8,6 +8,8 @@ set with no database at all, and it keeps the rules that decide what a field
 
 from dataclasses import dataclass, field
 
+from documents.processing.normalize import matchable
+
 from .schemas import VALUE_GROUP, DocumentSchema, FieldRule
 
 
@@ -87,8 +89,12 @@ def find_field(rule: FieldRule, pages) -> FieldMatch:
     seen_spans = set()
 
     for page_number, text in pages:
+        # Patterns run on a same-length view in which a table's cell pipes
+        # are spaces, so a label beside its value is found in a table as
+        # it is after a colon; the value is then read from the original.
+        view = matchable(text)
         for regex in rule.compiled:
-            for match in regex.finditer(text):
+            for match in regex.finditer(view):
                 raw = match.group(VALUE_GROUP)
                 if raw is None:
                     # The group is inside an optional branch that did not
@@ -102,6 +108,8 @@ def find_field(rule: FieldRule, pages) -> FieldMatch:
                     continue
                 seen_spans.add(key)
 
+                # What the document actually says there, not the view.
+                raw = text[start:end]
                 value = normalize_value(raw)
                 if not value:
                     continue

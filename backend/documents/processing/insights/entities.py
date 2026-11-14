@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
+from documents.processing.normalize import matchable
+
 MAX_ENTITIES = 200
 LABEL_WORDS = 12
 
@@ -532,7 +534,15 @@ def extract_entities(pages) -> list:
     """Every entity in the document, deduplicated, first occurrence kept."""
     found = []
     for page_number, text in pages:
-        found.extend(_resolve_overlaps(_find_on_page(page_number, text or "")))
+        text = text or ""
+        # Patterns run on a same-length view in which a table's cell pipes
+        # are spaces, so a deadline in a table is read as one just as it is
+        # after a colon; each entity then gets back the document's own
+        # characters for its span.
+        entities = _resolve_overlaps(_find_on_page(page_number, matchable(text)))
+        for entity in entities:
+            entity.text = text[entity.start : entity.end]
+        found.extend(entities)
 
     found.sort(key=lambda e: (e.page_number, e.start))
     merged = {}
