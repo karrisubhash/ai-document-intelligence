@@ -31,6 +31,8 @@ from documents.processing.figures.exceptions import (
 )
 from documents.processing.figures.service import get_detector as get_figure_detector
 from documents.processing.normalize import strip_nul
+from documents.processing.tables.detector import DetectedTable
+from documents.processing.tables.detector import verify as verify_table
 from documents.processing.tables.exceptions import (
     TableDetectorNotConfigured,
     TableDetectorUnavailable,
@@ -62,52 +64,82 @@ def run(context) -> StageResult:
 
 
 def _run_tables(context):
+    # Tables an extractor read as structure come first. They are verified
+    # exactly as a detected table is - the span must re-slice out of the
+    # page and every cell must be inside it - but they do not depend on the
+    # text detector being configured, and they keep their empty cells.
+    found, rejected = _structured_tables(context)
+
+    detector = None
+    unavailable = None
     try:
         detector = get_table_detector()
     except TableDetectorNotConfigured as exc:
-        return str(exc), {"skipped": True}
+        unavailable = (str(exc), {"skipped": True})
     except TableDetectorUnavailable as exc:
         # Transient by taxonomy, but a missing detector must not cost the
         # document its text. Recorded with a reason so the run is visible
         # in ProcessingEvent rather than silently empty.
-        return f"Table detection unavailable: {exc}", {
-            "skipped": True,
-            "tables_unavailable": True,
-        }
+        unavailable = (
+            f"Table detection unavailable: {exc}",
+            {"skipped": True, "tables_unavailable": True},
+        )
 
-    detected = []
-    rejected = 0
+    if detector is None and not found and not rejected:
+        # Nothing ran and nothing was found: the stage may be SKIPPED.
+        return unavailable
 
-    for page in context.pages:
-        # The SAME normalization the pipeline applies before storing, so
-        # the offsets recorded here index the text that actually lands in
-        # PageContent. See processing/normalize.py.
-        text = strip_nul(page.text)
-        if not text.strip():
-            continue
+    metadata = {}
 
-        for table in detector.detect(page.page_number, text):
-            # Verified per table, on every run. A detector that returns a
-            # row the page does not contain gets that row dropped here -
-            # fabrication is refused at the boundary rather than trusted
-            # not to happen.
-            if not detector.verify(table, text):
-                rejected += 1
+    if detector is not None:
+        taken = {}
+        for table in found:
+            taken.setdefault(table.page_number, []).append(
+                (table.character_start, table.character_end)
+            )
+
+        for page in context.pages:
+            # The SAME normalization the pipeline applies before storing, so
+            # the offsets recorded here index the text that actually lands in
+            # PageContent. See processing/normalize.py.
+            text = strip_nul(page.text)
+            if not text.strip():
                 continue
-            detected.append(table)
+
+            for table in detector.detect(page.page_number, text):
+                # The extractor already read this region as cells. Its
+                # reading wins: it saw the document's own structure, where
+                # this saw only whitespace.
+                if _overlaps(table, taken.get(page.page_number, ())):
+                    continue
+
+                # Verified per table, on every run. A detector that returns a
+                # row the page does not contain gets that row dropped here -
+                # fabrication is refused at the boundary rather than trusted
+                # not to happen.
+                if not detector.verify(table, text):
+                    rejected += 1
+                    continue
+                found.append(table)
+
+        metadata["table_detector"] = detector.name
+        metadata["table_detector_version"] = detector.version
+    else:
+        metadata.update(unavailable[1])
+        metadata.pop("skipped", None)
 
     # Re-numbered across the document in reading order. The detector
     # numbers within a page, and two pages would otherwise both claim
     # table 0 - which the uniqueness constraint on (content, table_index)
     # would reject at the very end of an otherwise successful pipeline.
-    context.tables = [_renumber(table, index) for index, table in enumerate(detected)]
+    found.sort(key=lambda table: (table.page_number, table.character_start))
+    context.tables = [_renumber(table, index) for index, table in enumerate(found)]
 
-    metadata = {
-        "tables": len(context.tables),
-        "tables_rejected": rejected,
-        "table_detector": detector.name,
-        "table_detector_version": detector.version,
-    }
+    metadata["tables"] = len(context.tables)
+    metadata["tables_rejected"] = rejected
+    sources = sorted({table.source for table in context.tables if table.source})
+    if sources:
+        metadata["table_sources"] = sources
 
     # The rejection count is reported whether or not anything survived.
     # An earlier version returned a bare "No tables found." when every
@@ -131,6 +163,44 @@ def _run_tables(context):
 
     metadata["pages_with_tables"] = pages_with_tables
     return note, metadata
+
+
+def _structured_tables(context):
+    """The tables extractors recorded, verified, as DetectedTables."""
+    found = []
+    rejected = 0
+
+    for page in context.pages:
+        if not page.tables:
+            continue
+
+        text = strip_nul(page.text)
+        for recorded in page.tables:
+            table = DetectedTable(
+                page_number=page.page_number,
+                table_index=0,
+                character_start=recorded.character_start,
+                character_end=recorded.character_end,
+                rows=[list(row) for row in recorded.rows],
+                # Written as " | " rows by PageBuilder, whatever the source.
+                separator="PIPE",
+                header=list(recorded.header),
+                source=recorded.source,
+                source_version=recorded.source_version,
+            )
+            if not verify_table(table, text):
+                rejected += 1
+                continue
+            found.append(table)
+
+    return found, rejected
+
+
+def _overlaps(table, spans) -> bool:
+    return any(
+        table.character_start < end and start < table.character_end
+        for start, end in spans
+    )
 
 
 def _run_figures(context):

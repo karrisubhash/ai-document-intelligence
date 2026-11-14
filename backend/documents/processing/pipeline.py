@@ -307,8 +307,12 @@ def _persist_content(job, context) -> DocumentContent:
                     row_count=table.row_count,
                     column_count=table.column_count,
                     header=table.header,
-                    detector=layout_detector.DETECTOR_NAME,
-                    detector_version=layout_detector.DETECTOR_VERSION,
+                    # An extractor that read real cells says so; a table the
+                    # text detector found is recorded as the layout detector's.
+                    detector=table.source or layout_detector.DETECTOR_NAME,
+                    detector_version=(
+                        table.source_version or layout_detector.DETECTOR_VERSION
+                    ),
                     metadata={"separator": table.separator},
                 )
                 for table in context.tables

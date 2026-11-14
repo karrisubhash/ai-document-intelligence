@@ -5,6 +5,9 @@ python-dotenv
 celery
 redis
 pypdf
+pdfplumber
+openpyxl
+python-pptx
 pytesseract
 pdf2image
 pillow

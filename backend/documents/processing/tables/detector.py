@@ -57,7 +57,10 @@ SEPARATORS = (
 )
 
 DETECTOR_NAME = "layout"
-DETECTOR_VERSION = "v1"
+# v2: a pipe-delimited row keeps its empty cells. Dropping them shifted every
+# cell after a blank one into the wrong column - or split the table in two,
+# because the row no longer had the width of its neighbours.
+DETECTOR_VERSION = "v2"
 
 # A cell that carries a number and no letters. Used only to tell a header
 # row from a data row.
@@ -78,6 +81,10 @@ class DetectedTable:
     # _guess_header: a wrong header is worse than no header, because the
     # header is what gives a quoted number its meaning.
     header: list = field(default_factory=list)
+    # Which extractor read this as structure, when it did not come from the
+    # text detector. Empty means "found by this module in the page text".
+    source: str = ""
+    source_version: str = ""
 
     @property
     def row_count(self) -> int:
@@ -110,9 +117,27 @@ def _lines(text: str) -> list:
     return out
 
 
-def _split(line: str, pattern) -> list:
-    cells = [" ".join(cell.split()) for cell in pattern.split(line.strip())]
-    return [cell for cell in cells if cell != ""]
+def _split(line: str, pattern, keep_empty: bool = False) -> list:
+    """The cells of one line.
+
+    `keep_empty` is for a separator that is unambiguous - a pipe always
+    delimits - so "a |  | c" is three cells with a blank in the middle. For
+    tabs and runs of spaces it stays off: those pad for alignment, and an
+    extra tab is far more often padding than an empty column.
+    """
+    stripped = line.strip()
+    cells = [" ".join(cell.split()) for cell in pattern.split(stripped)]
+
+    if not keep_empty:
+        return [cell for cell in cells if cell != ""]
+
+    # Pipes on BOTH ends ("| a | b |") frame the row and add no columns. A
+    # pipe on one end only is a blank first or last cell: "Pens | 10 |" is
+    # three cells, and reading its trailing pipe as a frame would make it
+    # two and break the table at that row.
+    if len(cells) > 2 and stripped.startswith("|") and stripped.endswith("|"):
+        cells = cells[1:-1]
+    return cells
 
 
 def _corridors(texts: list) -> int:
@@ -174,6 +199,9 @@ def _aligned(lines: list, columns: int) -> bool:
 def _usable(cells: list) -> bool:
     if len(cells) < MIN_COLUMNS:
         return False
+    # A row of nothing but separators ("| | |") carries no content.
+    if not any(cells):
+        return False
     return all(len(cell) <= MAX_CELL_LENGTH for cell in cells)
 
 
@@ -200,6 +228,12 @@ def _guess_header(rows: list) -> list:
     return []
 
 
+# Public: extractors that already have real rows (extractors/compose.py) ask
+# the same question the text detector does, so one rule decides what a header
+# is across every source.
+guess_header = _guess_header
+
+
 def _runs(lines: list, name: str, pattern) -> list:
     """Maximal runs of consecutive lines with the same shape.
 
@@ -212,8 +246,10 @@ def _runs(lines: list, name: str, pattern) -> list:
     current = []
     width = None
 
+    keep_empty = name == "PIPE"
+
     for line in lines:
-        cells = _split(line.text, pattern) if line.text.strip() else []
+        cells = _split(line.text, pattern, keep_empty) if line.text.strip() else []
         fits = _usable(cells) and (width is None or len(cells) == width)
 
         if fits:
@@ -241,7 +277,7 @@ def _runs(lines: list, name: str, pattern) -> list:
             for run in found
             if _aligned(
                 [line.text for line in run],
-                len(_split(run[0].text, pattern)),
+                len(_split(run[0].text, pattern, keep_empty)),
             )
         ]
 
@@ -281,7 +317,7 @@ def detect_tables(page_number: int, text: str) -> list:
 
         for block in blocks:
             for run in _runs([line for _, line in block], name, pattern):
-                rows = [_split(line.text, pattern) for line in run]
+                rows = [_split(line.text, pattern, name == "PIPE") for line in run]
                 start, end = run[0].start, run[-1].end
                 detected.append(
                     DetectedTable(

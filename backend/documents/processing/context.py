@@ -10,6 +10,31 @@ class FileType:
     DOCX = "DOCX"
 
 
+@dataclass(frozen=True)
+class PageTable:
+    """A table an extractor read as structure, and where it sits in the text.
+
+    Extractors that can see real cells (a Word table, a ruled PDF grid, a
+    spreadsheet) hand them over here instead of flattening them to text for
+    the layout detector to rediscover - which loses every empty cell and
+    every column that happens to line up by accident. The span still
+    indexes the page text, so LAYOUT_ANALYSIS verifies it exactly as it
+    verifies a detected table: every cell must re-slice out of the page.
+    `PageBuilder` (extractors/compose.py) is what produces these, so the
+    offsets are measured, never estimated.
+    """
+
+    character_start: int
+    character_end: int
+    rows: list
+    # Always rows[0] when set - the Tables tab drops the first row from the
+    # body when a header is present.
+    header: list = field(default_factory=list)
+    # Which extractor found it, recorded as DocumentTable.detector (<= 50).
+    source: str = ""
+    source_version: str = ""
+
+
 @dataclass
 class ExtractedPage:
     page_number: int
@@ -17,6 +42,8 @@ class ExtractedPage:
     # None means "no text yet" - the OCR stage claims these pages.
     extraction_method: str | None = None
     metadata: dict = field(default_factory=dict)
+    # Tables the extractor read as structure; spans index `text` as stored.
+    tables: list = field(default_factory=list)
 
     @property
     def has_text(self) -> bool:
