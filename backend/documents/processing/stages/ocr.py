@@ -28,12 +28,17 @@ def run(context) -> StageResult:
                 context.file_path, page.page_number, settings.OCR_DPI
             )
 
+        # Why the text layer was passed over (unmapped glyphs, none at all),
+        # if the extractor said - OCR text is a different thing to trust.
+        reason = page.metadata.get("ocr_reason")
+
         page.text = text
         page.extraction_method = PageContent.ExtractionMethod.OCR
         page.metadata = {
             "extractor": "tesseract",
             "extractor_version": ocr_extractor.tesseract_version(),
             "dpi": settings.OCR_DPI if context.file_type == FileType.PDF else None,
+            **({"ocr_reason": reason} if reason else {}),
         }
 
     duration = time.monotonic() - started

@@ -42,42 +42,60 @@ def _extract_plain_text(context) -> StageResult:
 
 
 def _extract_pdf_text(context) -> StageResult:
-    page_texts = pdf.extract_pages(context.file_path)
+    results = pdf.extract_page_results(context.file_path)
 
-    for index, text in enumerate(page_texts, start=1):
+    for index, result in enumerate(results, start=1):
         # Decided on the text that will be stored: a text layer of nothing
-        # but NUL bytes is no text layer, and the page belongs to OCR.
-        has_text = bool(strip_nul(text).strip())
+        # but NUL bytes is no text layer, and the page belongs to OCR. So is
+        # one the extractor judged unreadable (unmapped glyphs).
+        has_text = not result.needs_ocr and bool(strip_nul(result.text).strip())
         context.pages.append(
             ExtractedPage(
                 page_number=index,
-                text=text if has_text else "",
+                text=result.text if has_text else "",
                 extraction_method=(
                     PageContent.ExtractionMethod.PDF_TEXT if has_text else None
                 ),
                 metadata=(
-                    {"extractor": "pypdf", "extractor_version": pdf.VERSION}
+                    {
+                        "extractor": result.extractor,
+                        "extractor_version": result.extractor_version,
+                        **result.metadata,
+                    }
                     if has_text
-                    else {}
+                    # Kept for the OCR stage, which records why it was asked.
+                    else {
+                        key: value
+                        for key, value in result.metadata.items()
+                        if key == "ocr_reason"
+                    }
                 ),
+                tables=result.tables if has_text else [],
             )
         )
 
     with_text = sum(1 for page in context.pages if page.has_text)
     needs_ocr = len(context.pages) - with_text
+    fell_back = sum(1 for result in results if result.extractor == "pypdf")
 
-    return StageResult(
-        message=(
-            f"{with_text}/{len(context.pages)} pages had a text layer; "
-            f"{needs_ocr} deferred to OCR."
-        ),
-        metadata={
-            "pages": len(context.pages),
-            "pages_with_text_layer": with_text,
-            "pages_needing_ocr": needs_ocr,
-            "characters": sum(len(page.text) for page in context.pages),
-        },
+    metadata = {
+        "pages": len(context.pages),
+        "pages_with_text_layer": with_text,
+        "pages_needing_ocr": needs_ocr,
+        "characters": sum(len(page.text) for page in context.pages),
+        "pdf_extractor": pdf.EXTRACTOR,
+        "pdf_extractor_version": pdf.VERSION,
+    }
+    if fell_back:
+        metadata["pages_read_by_fallback"] = fell_back
+
+    message = (
+        f"{with_text}/{len(context.pages)} pages had a text layer; "
+        f"{needs_ocr} deferred to OCR."
     )
+    if fell_back:
+        message += f" {fell_back} read by the fallback extractor."
+    return StageResult(message=message, metadata=metadata)
 
 
 def _extract_docx_text(context) -> StageResult:

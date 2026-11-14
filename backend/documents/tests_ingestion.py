@@ -217,7 +217,7 @@ class PagePreservationTests(IngestionTestCase):
         page = self.content_for(response.data["id"]).pages.first()
 
         self.assertEqual(page.extraction_method, PageContent.ExtractionMethod.PDF_TEXT)
-        self.assertEqual(page.metadata["extractor"], "pypdf")
+        self.assertEqual(page.metadata["extractor"], "pdfplumber")
         self.assertEqual(page.character_count, len(page.text))
 
     def test_plain_text_produces_one_page(self):
