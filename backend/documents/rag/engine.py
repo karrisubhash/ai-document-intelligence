@@ -687,6 +687,74 @@ def _ask(
     report = grounding.validate(response.text, built, abstained=False)
     timings["grounding"] = _elapsed_ms(stage_started)
 
+    # A rejected answer that states figures the passages lack gets two chances
+    # before it is thrown away, each of which can only make it TRACEABLE:
+    #
+    # 1. It cited [1] and its figure is written in [2], and in no other
+    #    passage: the marker is added, and the answer checked again from
+    #    scratch (grounding.repair_citations).
+    # 2. Otherwise, a model that can answer now is told which figures were
+    #    not in its passages and asked once more. What it writes is validated
+    #    exactly as the first answer was; if it fails again the FIRST failure
+    #    stands, so the hallucination signal still counts it.
+    if not report.ok and report.unsupported_facts and not report.invalid_markers:
+        repaired_text, repairs = grounding.repair_citations(report, built)
+        if repairs:
+            repaired = grounding.validate(repaired_text, built, abstained=False)
+            if repaired.ok:
+                report = repaired
+                notes.append(
+                    "added the citation the answer left out for "
+                    + ", ".join(f"{fact} -> [{marker}]" for fact, marker in repairs)
+                )
+
+        if (
+            not report.ok
+            and getattr(settings, "RAG_GROUNDING_RETRY", True)
+            and response.generative is True
+            and not fell_back_from
+            and judging.model_can_judge(answerer)
+        ):
+            # A client was shown the first draft as it streamed.
+            streaming.reset()
+            streaming.status(streaming.WRITING)
+            stage_started = time.monotonic()
+            second = answerer.answer(
+                question=question,
+                context=built,
+                prompt=prompt + grounding.correction_for(report),
+            )
+            timings["retry"] = _elapsed_ms(stage_started)
+            telemetry.llm_called(second, timings["retry"] / 1000.0)
+            telemetry.llm_usage(second)
+
+            second_fell_back = (second.metadata or {}).get("fell_back_from")
+            second_report = (
+                grounding.validate(second.text, built, abstained=False)
+                if second.generative is True
+                and not second.abstained
+                and not second_fell_back
+                else None
+            )
+            retried = "; ".join(report.failures[:1])
+            if second_report is not None and second_report.ok:
+                notes.append(
+                    f"the first answer was rejected ({retried}); "
+                    f"asked the model once more and its second answer was grounded"
+                )
+                response, report = second, second_report
+                common.update(
+                    model_name=response.model_name,
+                    model_version=response.model_version,
+                    generative=response.generative,
+                    llm=llm_metadata(response),
+                )
+            else:
+                notes.append(
+                    f"the first answer was rejected ({retried}); asked the model "
+                    f"once more and it did not produce a grounded answer either"
+                )
+
     if not report.ok:
         # The model said something; it could not be substantiated. Section
         # 12.4 says abstain rather than invent, and an answer that fails

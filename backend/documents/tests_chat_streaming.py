@@ -530,11 +530,21 @@ class WithdrawnDraftTests(TestCase):
             )
         return answer, events
 
+    @override_settings(RAG_GROUNDING_RETRY=False)
     def test_an_ungrounded_draft_is_withdrawn(self):
         answerer = stub_answerer(["The minimum attendance is ", "80 percent [1]."])
         answer, events = self.stream_engine(answerer)
         self.assertEqual(answer.abstention_reason, Abstention.UNGROUNDED)
         self.assertEqual(events, ["delta", "delta", "reset"])
+
+    def test_a_retried_draft_is_withdrawn_before_the_second_attempt_streams(self):
+        """The first draft is shown as it streams, so it is withdrawn before
+        the model is asked again; and a second attempt that is no better is
+        withdrawn too, leaving the reader with only the final answer."""
+        answerer = stub_answerer(["The minimum attendance is ", "80 percent [1]."])
+        answer, events = self.stream_engine(answerer)
+        self.assertEqual(answer.abstention_reason, Abstention.UNGROUNDED)
+        self.assertEqual(events, ["delta", "delta", "reset", "delta", "delta", "reset"])
 
     def test_a_stream_that_breaks_is_withdrawn_before_the_quoted_answer(self):
         client = BreakingStreamClient(["The minimum attendance "])

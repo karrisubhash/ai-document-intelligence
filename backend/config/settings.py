@@ -962,6 +962,13 @@ RAG_CONTEXT_BUDGET_GENERATIVE = int(os.getenv("RAG_CONTEXT_BUDGET_GENERATIVE", "
 RAG_MAX_PASSAGES_GENERATIVE = int(os.getenv("RAG_MAX_PASSAGES_GENERATIVE", "12"))
 RAG_NEIGHBOUR_ANCHORS = int(os.getenv("RAG_NEIGHBOUR_ANCHORS", "3"))
 
+# An answer rejected only for stating figures its passages lack is sent back
+# to the model ONCE, told which figures, before it is discarded. The second
+# answer is validated exactly like the first; a model that fails again leaves
+# the first failure standing. It costs one more call, only when a model can
+# answer and only on a rejected answer. False turns the retry off.
+RAG_GROUNDING_RETRY = os.getenv("RAG_GROUNDING_RETRY", "True").lower() == "true"
+
 # Share of an answer's content words that must appear in the passages it
 # cites. This is the BACKSTOP behind grounding's fact check, not the gate -
 # see documents/rag/grounding.py for why it is no longer 0.55. Raising it

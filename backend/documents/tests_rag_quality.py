@@ -878,3 +878,230 @@ class ModelContextTests(TestCase):
         self.assertTrue(answer.answerer_fell_back)
         for citation in answer.citations:
             self.assertEqual(citation["chunk_id"], self.chunks[3].id)
+
+
+# --- A rejected answer gets a chance to be made traceable -------------------
+
+TUITION = "Tuition is 85000 per year for the programme."
+HOSTEL = "The hostel fee is 42000 per year for residents."
+
+
+class RepairCitationsTests(SimpleTestCase):
+    def report(self, answer, *passages):
+        items = [
+            RerankedChunk(chunk=chunk(n, text), score=0.9, signals={})
+            for n, text in enumerate(passages, start=1)
+        ]
+        context = ctx.build(items, semantic_scores=True)
+        return context, grounding.validate(answer, context)
+
+    def test_a_figure_in_one_uncited_passage_gets_that_passages_marker(self):
+        context, report = self.report(
+            "Tuition is 85000 [1] and the hostel fee is 42000.", TUITION, HOSTEL
+        )
+        self.assertFalse(report.ok)
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [("42000", 2)])
+        self.assertEqual(
+            repaired, "Tuition is 85000 [1] and the hostel fee is 42000 [2]."
+        )
+        self.assertTrue(grounding.validate(repaired, context).ok)
+
+    def test_a_figure_in_no_passage_is_not_excused(self):
+        context, report = self.report(
+            "Tuition is 85000 [1] and the hostel fee is 99999.", TUITION, HOSTEL
+        )
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+        self.assertFalse(grounding.validate(repaired, context).ok)
+
+    def test_a_figure_in_two_passages_is_ambiguous_and_left_alone(self):
+        context, report = self.report(
+            "Tuition is 85000 [1] and the hostel fee is 42000.",
+            TUITION,
+            HOSTEL,
+            "Hostel fee: 42000 and mess charges 18000.",
+        )
+
+        _, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+
+    def test_a_small_figure_is_never_attributed(self):
+        """ "5" is in most passages; finding it in one means nothing."""
+        context, report = self.report(
+            "Tuition is 85000 [1] and the fine is 5.",
+            TUITION,
+            "The late fine is 5 rupees.",
+        )
+
+        _, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+
+    def test_an_answer_that_cites_nothing_valid_is_not_repaired(self):
+        context, report = self.report("The hostel fee is 42000.", TUITION, HOSTEL)
+        self.assertFalse(report.ok)
+
+        _, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+
+    def test_a_date_can_be_attributed_too(self):
+        context, report = self.report(
+            "Tuition is 85000 [1], payable by 31 March 2025.",
+            TUITION,
+            "Fees must be paid by 31.03.2025.",
+        )
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [("date:2025-03-31", 2)])
+        self.assertTrue(grounding.validate(repaired, context).ok)
+
+    def test_the_correction_names_the_figures_it_rejected(self):
+        _, report = self.report(
+            "Tuition is 85000 [1], payable by 31 March 2026.", TUITION
+        )
+
+        correction = grounding.correction_for(report)
+
+        self.assertIn("2026-03-31", correction)
+        self.assertIn("rejected by an automated check", correction)
+
+
+class SequenceClient(StubChatClient):
+    """Answers each call with the next text, repeating the last."""
+
+    def __init__(self, *texts):
+        super().__init__(completion=None)
+        self.texts = list(texts)
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        text = self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
+        return completion(text)
+
+
+@override_settings(RAG_ANSWERER_PROVIDER="groq")
+class RejectedAnswerTests(TestCase):
+    """What happens between "the first draft failed grounding" and "not found"."""
+
+    def ask(self, client, *passages, available=True):
+        answerer = answerer_with(client)
+        answerer.gateway.available = lambda purpose: available
+        found = hits(
+            *[
+                (chunk(n, text), 1.0 - n / 10)
+                for n, text in enumerate(passages, start=1)
+            ]
+        )
+        with (
+            mock.patch.object(
+                engine.search_service, "search", return_value=FakeSearchResponse(found)
+            ),
+            mock.patch.object(engine, "get_answerer", return_value=answerer),
+            mock.patch.object(
+                engine,
+                "get_reranker",
+                return_value=LowScoreReranker(
+                    dict.fromkeys(range(1, len(passages) + 1), 0.9)
+                ),
+            ),
+            mock.patch.object(engine, "_figure_hints", return_value=[]),
+        ):
+            return rag.ask(None, "What is the tuition per year for the programme?")
+
+    def test_a_missing_citation_is_added_without_asking_again(self):
+        client = SequenceClient("Tuition is 85000 [1] and the hostel fee is 42000.")
+
+        answer = self.ask(client, TUITION, HOSTEL)
+
+        self.assertFalse(answer.abstained, answer.grounding_failures)
+        self.assertEqual(len(client.calls), 1)
+        self.assertIn("[2]", answer.answer)
+        self.assertEqual([c["marker"] for c in answer.citations], [1, 2])
+        self.assertTrue(
+            any("added the citation" in n for n in answer.notes), answer.notes
+        )
+
+    def test_a_wrong_figure_is_asked_again_once_and_a_grounded_answer_is_kept(self):
+        client = SequenceClient(
+            "Tuition is 90000 per year [1].", "Tuition is 85000 per year [1]."
+        )
+
+        answer = self.ask(client, TUITION)
+
+        self.assertFalse(answer.abstained, answer.grounding_failures)
+        self.assertEqual(answer.answer, "Tuition is 85000 per year [1].")
+        self.assertEqual(len(client.calls), 2)
+        retry_prompt = client.calls[1]["messages"][1]["content"]
+        self.assertIn("rejected by an automated check", retry_prompt)
+        self.assertIn("90000", retry_prompt)
+        self.assertTrue(any("second answer was grounded" in n for n in answer.notes))
+        self.assertIn("retry", answer.timings)
+
+    def test_a_second_wrong_figure_leaves_the_first_failure_standing(self):
+        client = SequenceClient(
+            "Tuition is 90000 per year [1].", "Tuition is 95000 per year [1]."
+        )
+
+        answer = self.ask(client, TUITION)
+
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+        self.assertTrue(
+            any("90000" in failure for failure in answer.grounding_failures),
+            answer.grounding_failures,
+        )
+        self.assertTrue(
+            any("did not produce a grounded answer" in n for n in answer.notes)
+        )
+
+    def test_a_model_that_gives_up_on_the_retry_is_still_ungrounded(self):
+        client = SequenceClient(
+            "Tuition is 90000 per year [1].",
+            "I couldn't find enough information in the provided documents.",
+        )
+
+        answer = self.ask(client, TUITION)
+
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+
+    @override_settings(RAG_GROUNDING_RETRY=False)
+    def test_the_retry_can_be_switched_off(self):
+        client = SequenceClient("Tuition is 90000 per year [1].")
+
+        answer = self.ask(client, TUITION)
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+
+    def test_no_retry_when_no_model_has_capacity_left(self):
+        client = SequenceClient("Tuition is 90000 per year [1].")
+
+        answer = self.ask(client, TUITION, available=False)
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertTrue(answer.abstained)
+
+    def test_no_retry_for_an_answer_that_states_no_wrong_figure(self):
+        """A missing citation is not a figure the passages lack."""
+        client = SequenceClient("Tuition is paid every year.")
+
+        answer = self.ask(client, TUITION)
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+
+    def test_a_fabricated_source_is_not_retried(self):
+        client = SequenceClient("Tuition is 85000 per year [7].")
+
+        answer = self.ask(client, TUITION)
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)

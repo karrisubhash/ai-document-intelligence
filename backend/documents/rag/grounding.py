@@ -358,3 +358,87 @@ def citations_for(answer_text: str, context) -> list:
         citations.append(citation)
 
     return citations
+
+
+# At most this many figures are re-attributed in one answer. A repair that
+# needed more than two is an answer that was not written from what it cites.
+MAX_REPAIRS = 2
+
+_SENTENCE = re.compile(r"[^.!?\n]+(?:[.!?]+|\n|$)")
+
+
+def _distinctive(fact: str) -> bool:
+    """A figure specific enough that finding it in one passage means something.
+
+    "2" or "10" turn up in most passages; a date, or a figure of three or more
+    digits, does not. Only these are ever attributed to a passage.
+    """
+    return fact.startswith("date:") or len(re.sub(r"\D", "", fact)) >= 3
+
+
+def _supports(passage, fact: str) -> bool:
+    supported = _support_facts(passage.support_text)
+    return fact in supported or (
+        _numeric_core(fact) is not None
+        and _numeric_core(fact) in {_numeric_core(f) for f in supported} - {None}
+    )
+
+
+def repair_citations(report: GroundingReport, context):
+    """(the answer with a marker added where one was missing, [(figure, marker)]).
+
+    An answer that cites [1] and states a figure that is written in [2], and
+    in no other passage, did not invent it: it forgot to cite [2], and was
+    discarded whole for it. When a distinctive figure is in exactly one
+    passage the answer did not cite, that passage's marker is added to the
+    sentence that states it. The result is checked again from scratch, so the
+    repair can only ever make a figure traceable, never excuse one that is not
+    in the context. Never done for an answer that cites nothing valid.
+    """
+    text = report.text
+    cited = set(report.cited_markers)
+    if not report.unsupported_facts or not cited or report.invalid_markers:
+        return text, []
+
+    repairs = []
+    for fact in report.unsupported_facts:
+        if len(repairs) >= MAX_REPAIRS:
+            break
+        if not _distinctive(fact):
+            continue
+        owners = [
+            passage
+            for passage in context.passages
+            if passage.marker not in cited and _supports(passage, fact)
+        ]
+        if len(owners) != 1:
+            continue
+        marker = owners[0].marker
+
+        for sentence in _SENTENCE.finditer(text):
+            if fact not in _answer_facts(sentence.group(0)):
+                continue
+            body = sentence.group(0)
+            # Before the sentence's own full stop, where a marker belongs.
+            tail = re.search(r"[.!?\s]*$", body).group(0)
+            end = sentence.end() - len(tail)
+            text = f"{text[:end]} [{marker}]{text[end:]}"
+            repairs.append((fact, marker))
+            break
+
+    return text, repairs
+
+
+def correction_for(report: GroundingReport) -> str:
+    """What to tell a model whose answer stated figures its passages lack."""
+    shown = [
+        fact[len("date:") :] if fact.startswith("date:") else fact
+        for fact in report.unsupported_facts[:8]
+    ]
+    return (
+        "\n\nYour previous answer was rejected by an automated check: it stated "
+        f"{', '.join(shown)}, which the passages you cited do not contain. "
+        "Answer again. Write every figure and date exactly as a passage writes "
+        "it, cite the passage each one comes from, and if the passages do not "
+        "give a figure, say so instead of stating one."
+    )
