@@ -55,11 +55,28 @@ CONTINUATION_GAP = 0.5
 # A gap above this (in heights) between lines of text is a paragraph break.
 PARAGRAPH_GAP = 0.6
 
+# A gutter is a column gap that no more than this share of a band's lines run
+# through (see `_tolerance`), and the band is long enough for that to be
+# at least one line from this many rows on.
+GUTTER_TOLERANCE = 0.08
+TOLERANCE_FROM = 8
+
+# A line crossing more than this share of the established gutters is not a
+# row of the table: it is text that runs across it.
+SPAN_FRACTION = 0.25
+
+# Gutters are re-measured every line while a band is this short, then every
+# this many lines.
+REFRESH_EVERY = 8
+
 # Bounds the quadratic worst case of retrying band starts on a pathological
 # page; a real table or column band is far shorter.
 MAX_BAND_LINES = 400
 
 MIN_TABLE_ROWS = 3
+
+# The largest number a page's line numbering is taken to reach.
+MAX_LINE_NUMBER = 60
 MIN_COLUMN_LINES = 4
 
 # What a list pulls into its own narrow column: "1.", "(a)", "iv)", a clause
@@ -69,6 +86,9 @@ _MARKER = re.compile(
     r"|\d{1,3}(\.\d{1,3})+\.?"
     r"|[•◦▪■●○·*\-–—])$"
 )
+# A cell with nothing in it but punctuation: a colon or a dash used as a
+# divider, as transcripts and forms do.
+_PUNCTUATION = re.compile(r"^[\W_]+$")
 _CURRENCY = re.compile(r"^(rs\.?|inr|usd|eur)\s*", re.IGNORECASE)
 _NUMBER = re.compile(r"^\d[\d,.:/%\-–]*%?$")
 
@@ -167,68 +187,158 @@ def _segments(line: Line, gap_min: float) -> list:
     return segments
 
 
-def _corridors_of(segments: list) -> list:
-    return [(a[1], b[0]) for a, b in zip(segments, segments[1:], strict=False)]
+def _covered(line: Line, gap_min: float) -> list:
+    """The stretches of x a line has text across, as [x0, x1] pairs.
 
-
-def _narrow(corridors: list, words, gap_min: float) -> list:
-    """What is left of each corridor once `words` are laid over it.
-
-    A corridor keeps at most one piece - the widest. A word sitting in the
-    middle of a wide gap (a centred heading, an overflowing cell) must not
-    split it in two: that would invent a column the page does not have.
+    Words closer together than a column gap are one stretch: the spaces
+    inside a cell are not gutters.
     """
-    kept = []
-    for left, right in corridors:
-        pieces = [(left, right)]
-        for word in words:
-            if word.x1 <= left or word.x0 >= right:
-                continue
-            narrowed = []
-            for a, b in pieces:
-                if word.x1 <= a or word.x0 >= b:
-                    narrowed.append((a, b))
-                    continue
-                if word.x0 > a:
-                    narrowed.append((a, word.x0))
-                if word.x1 < b:
-                    narrowed.append((word.x1, b))
-            pieces = narrowed
-        pieces = [piece for piece in pieces if piece[1] - piece[0] >= gap_min]
-        if pieces:
-            kept.append(max(pieces, key=lambda piece: piece[1] - piece[0]))
-    return kept
+    spans: list = []
+    for word in line.words:
+        if spans and word.x0 - spans[-1][1] < gap_min:
+            spans[-1][1] = max(spans[-1][1], word.x1)
+        else:
+            spans.append([word.x0, word.x1])
+    return spans
+
+
+def _tolerance(count: int) -> int:
+    """How many lines may run through a gutter and still leave it a gutter.
+
+    None for a short band: three rows that all agree are evidence, and one that
+    disagrees is a different layout. For a long one a few intruders are noise -
+    a long name that nearly touches the next column, a heading that spans two -
+    and demanding that a gutter be empty in EVERY row of a fifty-row table
+    loses the column the first time one row crowds it.
+    """
+    allowed = int(GUTTER_TOLERANCE * count)
+    if count >= TOLERANCE_FROM and allowed < 1:
+        return 1
+    return allowed
+
+
+def _gutters(lines: list, gap_min: float) -> list:
+    """Vertical gutters shared by these lines, as (left, right) pairs.
+
+    A gutter is a stretch at least `gap_min` wide that no more than
+    `_tolerance` of the lines have text across, with text on both sides of it
+    - the empty margin around a table is not a column gap.
+
+    A column between two gutters needs text in at least two of the lines
+    (when there are three or more). Without that, one word sitting in the
+    middle of a wide gap - a centred heading, a cell wider than its column -
+    would split the gap in two and invent a column the page does not have;
+    the narrower of the two gutters is dropped and the gap stays whole.
+    """
+    allowed = _tolerance(len(lines))
+    support_needed = 2 if len(lines) >= 3 else 1
+    events: list = []
+    for line in lines:
+        for left, right in _covered(line, gap_min):
+            events.append((left, 1))
+            events.append((right, -1))
+    events.sort()
+
+    found: list = []  # (left, right, lines with text in the column before it)
+    coverage = 0
+    solid_before = False
+    region_start = None
+    island = 0
+    index = 0
+
+    while index < len(events):
+        x = events[index][0]
+        while index < len(events) and events[index][0] == x:
+            coverage += events[index][1]
+            index += 1
+        if index >= len(events):
+            break
+
+        next_x = events[index][0]
+        if coverage > allowed:
+            if (
+                region_start is not None
+                and solid_before
+                and x - region_start >= gap_min
+            ):
+                found.append((region_start, x, island))
+                island = 0
+            island = max(island, coverage)
+            solid_before = True
+            region_start = None
+        elif solid_before and region_start is None and next_x > x:
+            region_start = x
+
+    gutters = [[left, right] for left, right, _ in found]
+    supports = [support for _, _, support in found]
+
+    position = 1
+    while position < len(gutters):
+        if supports[position] < support_needed:
+            narrower = min(
+                (position - 1, position), key=lambda i: gutters[i][1] - gutters[i][0]
+            )
+            del gutters[narrower]
+            del supports[narrower]
+            position = max(position - 1, 1)
+            continue
+        position += 1
+
+    return [(left, right) for left, right in gutters]
+
+
+def _crossed(line: Line, gutters: list, gap_min: float) -> int:
+    """How many of the gutters this line has text running right across.
+
+    Across means from one side of the gutter to the other, as a sentence runs
+    through a column gap. Overlapping is not enough: the gutters of a band's
+    first line are only the gaps between ITS words, and figures right-aligned
+    under left-aligned headings always sit partly - even mostly - inside them
+    without being text that runs through a gap.
+    """
+    spans = _covered(line, gap_min)
+    return sum(
+        1
+        for left, right in gutters
+        if any(
+            span_left <= left and span_right >= right for span_left, span_right in spans
+        )
+    )
 
 
 # -- bands ------------------------------------------------------------------
 
 
 def _grow_band(lines: list, start: int, gap_min: float, height: float):
-    """The longest run of lines from `start` that share a corridor.
+    """The longest run of lines from `start` that share their gutters.
 
-    Returns (end, corridors) or None. The first line must itself be laid out
-    in at least two segments; later lines may be a single segment so long as
-    it stays inside one column (a wrapped cell), because a line that crosses
-    a corridor - any full-width sentence - is exactly what ends the band.
+    Returns (end, gutters) or None. The first line must itself be laid out in
+    at least two segments. A later line ends the band if it has text across a
+    meaningful share of the gutters found so far - a full-width sentence does,
+    a table row does not. One that stays inside a column (a wrapped cell) goes
+    on being part of it.
     """
-    first = _segments(lines[start], gap_min)
-    if len(first) < 2:
+    if len(_segments(lines[start], gap_min)) < 2:
         return None
 
-    corridors = _corridors_of(first)
+    gutters = _gutters(lines[start : start + 1], gap_min)
     end = start + 1
 
     while end < len(lines) and end - start < MAX_BAND_LINES:
         previous, line = lines[end - 1], lines[end]
         if line.top - previous.bottom > MAX_ROW_GAP * height:
             break
-        narrowed = _narrow(corridors, line.words, gap_min)
-        if not narrowed:
+        if gutters and _crossed(line, gutters, gap_min) > SPAN_FRACTION * len(gutters):
             break
-        corridors = narrowed
         end += 1
 
-    return end, corridors
+        # Re-measured as the band grows - every line while it is short, then
+        # every few - so the gutters reflect the rows, not just the first.
+        count = end - start
+        if count <= REFRESH_EVERY or count % REFRESH_EVERY == 0:
+            gutters = _gutters(lines[start:end], gap_min) or gutters
+
+    return end, _gutters(lines[start:end], gap_min)
 
 
 def _bounds(corridors: list) -> list:
@@ -250,6 +360,73 @@ def _is_number(cell: str) -> bool:
 
 def _word_count(cell: str) -> int:
     return len(cell.split())
+
+
+def _is_line_numbers(cells: list) -> bool:
+    """Consecutive small whole numbers: a gutter of line numbers, not data.
+
+    Small, because a run of years - 2019, 2020, 2021 - or of course codes - 101,
+    102, 103 - is a column of a table. A page rarely has more than sixty lines.
+    """
+    try:
+        values = [int(cell) for cell in cells]
+    except ValueError:
+        return False
+    return (
+        len(values) >= 3
+        and max(values) <= MAX_LINE_NUMBER
+        and all(
+            later - earlier == 1
+            for earlier, later in zip(values, values[1:], strict=False)
+        )
+    )
+
+
+def _columns_with_content(rows: list) -> list:
+    """(index, cells) for each column that has text in enough rows to count.
+
+    Enough is two rows, or a third of them: one stray fragment in a column -
+    "No. 07-1315", "2009" split off a date by a wide gap - is not a column.
+    A column of nothing but punctuation is a divider, as in a transcript's
+    caption box, and is not one either.
+    """
+    needed = max(2, -(-3 * len(rows) // 10))
+    columns = []
+    for index in range(len(rows[0])):
+        cells = [row[index] for row in rows if row[index]]
+        if len(cells) < needed:
+            continue
+        if all(_PUNCTUATION.match(cell) for cell in cells):
+            continue
+        columns.append((index, cells))
+    return columns
+
+
+def _gutter_columns(rows: list) -> set:
+    """Indexes of columns that are line numbers, not data.
+
+    A column of consecutive small whole numbers beside text is the numbering of
+    a transcript or a statute - unless another column is numeric, in which case
+    it is just one of the table's figures (semester 1, 2, 3 beside credits).
+    """
+    columns = _columns_with_content(rows)
+    data_numbers = any(
+        not _is_line_numbers(cells) and sum(map(_is_number, cells)) >= 0.6 * len(cells)
+        for _, cells in columns
+    )
+    if data_numbers:
+        return set()
+    return {index for index, cells in columns if _is_line_numbers(cells)}
+
+
+def _substantive_columns(rows: list) -> int:
+    """How many columns carry content of their own.
+
+    Two columns of content make a table. A gutter of line numbers, one column of
+    text and a colon make a transcript.
+    """
+    gutters = _gutter_columns(rows)
+    return sum(1 for index, _ in _columns_with_content(rows) if index not in gutters)
 
 
 def _merge_continuations(lines: list, rows: list, height: float) -> list:
@@ -298,11 +475,16 @@ def _classify(raw_rows: list, merged_rows: list) -> str | None:
         if firsts and sum(1 for c in firsts if _MARKER.match(c)) >= 0.8 * len(firsts):
             return None
 
+    if _substantive_columns(merged_rows) < 2:
+        return None
+
+    gutters = _gutter_columns(merged_rows)
     numeric_columns = 0
     for index in range(columns):
+        if index in gutters:
+            continue
         cells = [row[index] for row in body if row[index]]
-        needed = 1 if len(merged_rows) == 2 else 2
-        if len(cells) >= needed and sum(map(_is_number, cells)) >= 0.6 * len(cells):
+        if len(cells) >= 2 and sum(map(_is_number, cells)) >= 0.6 * len(cells):
             numeric_columns += 1
 
     words = mean(_word_count(cell) for cell in filled)
@@ -453,11 +635,9 @@ def layout_page(words, extra_blocks=()) -> list:
             band, rows = _trim_trailing(band, rows)
             merged = _merge_continuations(band, rows, height)
 
-            if len(merged) >= 2:
+            if len(merged) >= MIN_TABLE_ROWS:
                 verdict = _classify(rows, merged)
-                if verdict == "table" and (
-                    len(merged) >= MIN_TABLE_ROWS or _two_row_table_ok(merged)
-                ):
+                if verdict == "table":
                     accepted = (
                         len(band),
                         [
@@ -489,8 +669,3 @@ def layout_page(words, extra_blocks=()) -> list:
     place_extras_above(float("inf"))
 
     return [block for blocks in regions for block in blocks]
-
-
-def _two_row_table_ok(rows: list) -> bool:
-    """A header and one data row is a table only with a number in it."""
-    return any(_is_number(cell) for cell in rows[1] if cell)

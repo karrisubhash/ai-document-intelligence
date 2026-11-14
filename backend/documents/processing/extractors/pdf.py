@@ -33,7 +33,9 @@ pypdf stays for what it is good at: counting pages for validation and
 reading the image dictionary for figure detection.
 """
 
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 import pdfplumber
@@ -70,6 +72,15 @@ RULED_SETTINGS = {
 # A page drawn with more rulings than this (a map, a CAD sheet) is not a
 # table page, and finding tables in it is slow.
 MAX_RULING_OBJECTS = 3000
+
+# A ruled table whose cells hold this many lines of text, in this share of its
+# body, has rows the rulings did not separate - a report shaded or ruled in
+# bands of five rows has a rule every fifth row, so every cell holds five
+# rows' worth of text. Its columns may be right and its rows are not; it is
+# not stored as a table, and its words are read by the layout pass, which
+# finds the rows from the text itself.
+MULTILINE_CELL_LINES = 3
+MULTILINE_SHARE = 0.3
 
 # A page is deferred to OCR when this share of its text is unreadable.
 GARBLED_SHARE = 0.2
@@ -218,21 +229,31 @@ class _Budget:
 def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
     metadata: dict = {}
 
-    ruled = _ruled_tables(page, metadata)
+    # A landscape table drawn sideways has its text running down or up the
+    # sheet in the file's own coordinates. Its words are turned into the
+    # text's own frame, in which it reads left to right; the rulings and
+    # pictures are in the other frame and are left alone.
+    votes = _directions(page)
+    direction = _text_direction(votes)
+    turned = direction != "right"
+    if turned:
+        metadata["text_direction"] = direction
+
+    ruled = [] if turned else _ruled_tables(page, metadata)
     boxes = [bbox for bbox, _ in ruled]
-    upright, rotated = _words(page, boxes)
+    upright, odd = _words(page, boxes, direction, votes)
 
     unreadable = _garbled(upright, ruled)
     if unreadable:
         return PdfPage(needs_ocr=True, metadata={"ocr_reason": unreadable})
 
-    if _is_scan(page, upright):
+    if not turned and _is_scan(page, upright):
         return PdfPage(
             needs_ocr=True,
             metadata={"ocr_reason": "scanned page: a picture with no text layer"},
         )
 
-    if region_ocr is not None:
+    if region_ocr is not None and not turned:
         upright += _ocr_pictures(page, upright, region_ocr, budget, dpi, metadata)
 
     extras = [
@@ -245,13 +266,16 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
         )
         for bbox, rows in ruled
     ]
-    if rotated:
+    for group in odd:
+        # On a turned page the odd ones out are in the other frame, where
+        # this page has no place for them: they close it.
+        top = float("inf") if turned else min(w["top"] for w in group)
         extras.append(
             geometry.Block(
                 kind="text",
-                top=min(word["top"] for word in rotated),
-                bottom=max(word["bottom"] for word in rotated),
-                text=" ".join(word["text"] for word in rotated),
+                top=top,
+                bottom=top,
+                text=" ".join(word["text"] for word in group),
             )
         )
 
@@ -295,9 +319,27 @@ def _ruled_tables(page, metadata) -> list:
             continue
         if not any(cell.strip() for row in rows for cell in row):
             continue
+        if not _rows_are_whole(rows):
+            metadata["ruled_tables_distrusted"] = (
+                metadata.get("ruled_tables_distrusted", 0) + 1
+            )
+            continue
         found.append((table.bbox, rows))
 
     return _outermost(found)
+
+
+def _rows_are_whole(rows: list) -> bool:
+    """Whether each row of this ruled table is one row of the page.
+
+    A cell of one or two lines is a wrapped description. A body in which
+    many cells hold three or more lines is rows that were never separated.
+    """
+    body = [cell for row in rows[1:] for cell in row if cell.strip()]
+    if len(body) < 4:
+        return True
+    tall = sum(1 for cell in body if cell.count("\n") + 1 >= MULTILINE_CELL_LINES)
+    return tall < MULTILINE_SHARE * len(body)
 
 
 def _outermost(tables: list) -> list:
@@ -320,33 +362,183 @@ def _inside(word: dict, box) -> bool:
     return box[0] - 1 <= x <= box[2] + 1 and box[1] - 1 <= y <= box[3] + 1
 
 
-def _words(page, table_boxes) -> tuple:
-    """(upright geometry words, rotated word dicts), outside ruled tables."""
-    raw = page.extract_words(
-        x_tolerance_ratio=X_TOLERANCE_RATIO,
-        y_tolerance=3,
-        keep_blank_chars=False,
-        use_text_flow=False,
+# How far from an exact quarter turn a character may be drawn and still count as
+# running that way; between the margins it is a diagonal annotation.
+ANGLE_MARGIN = 20
+
+# How pdfplumber should assemble the characters of text drawn in each direction
+# into words. Without it, a vertical label comes out one letter at a time.
+_WORD_OPTIONS = {
+    "right": {},
+    "down": {"char_dir_rotated": "ttb", "line_dir_rotated": "rtl"},
+    "up": {"char_dir_rotated": "btt", "line_dir_rotated": "ltr"},
+    # Upside down. pdfplumber counts it as upright (nothing is turned a
+    # quarter), so it is the plain direction options that apply.
+    "left": {"char_dir": "rtl", "line_dir": "btt"},
+}
+
+
+def _char_direction(char: dict) -> str:
+    """The direction a character was drawn in.
+
+    right, up, down or left (upside down: text that reads right to left),
+    each within a margin of the exact angle; anything between is angled - a
+    diagonal annotation. Read from its text matrix, which carries the
+    rotation it was drawn with whatever /Rotate says.
+    """
+    a, b = char["matrix"][0], char["matrix"][1]
+    angle = math.degrees(math.atan2(b, a))
+    if abs(angle) <= ANGLE_MARGIN:
+        return "right"
+    if abs(angle - 90) <= ANGLE_MARGIN:
+        return "up"
+    if abs(angle + 90) <= ANGLE_MARGIN:
+        return "down"
+    if abs(angle) >= 180 - ANGLE_MARGIN:
+        return "left"
+    return "angled"
+
+
+def _directions(page) -> Counter:
+    return Counter(_char_direction(char) for char in page.chars)
+
+
+def _text_direction(votes: Counter) -> str:
+    """Which way most of the page's text runs, given each direction's count.
+
+    A page of mostly diagonal text has no direction to turn it by, so it is
+    read as it stands.
+    """
+    if not votes:
+        return "right"
+    direction, count = votes.most_common(1)[0]
+    if direction == "angled" or count <= 0.5 * sum(votes.values()):
+        return "right"
+    return direction
+
+
+def _turn(word: dict, direction: str, width: float, height: float) -> tuple:
+    """A word's (x0, x1, top, bottom) in the frame its text reads left to right in.
+
+    Text running down the sheet reads left to right once the sheet is turned
+    a quarter anticlockwise, which also makes its lines advance down the
+    page; text running up needs a quarter turn clockwise, and text upside
+    down a half turn. Applied to the word's box, not its characters - the
+    words were already formed along the text's own direction.
+    """
+    if direction == "left":
+        return (
+            width - word["x1"],
+            width - word["x0"],
+            height - word["bottom"],
+            height - word["top"],
+        )
+    if direction == "down":
+        return (
+            word["top"],
+            word["bottom"],
+            width - word["x1"],
+            width - word["x0"],
+        )
+    return (
+        height - word["bottom"],
+        height - word["top"],
+        word["x0"],
+        word["x1"],
     )
 
-    upright = []
-    rotated = []
-    for word in raw:
-        if any(_inside(word, box) for box in table_boxes):
+
+def _angled_words(page) -> list:
+    """Diagonal text, read in the order it was written.
+
+    No axis runs along it, so it cannot be assembled by position - but the
+    PDF stores characters in the order the author typed them. A run ends at
+    a space, a change of angle, or a jump of more than a few character
+    widths.
+    """
+    words: list = []
+    run: list = []
+
+    def close():
+        if run:
+            words.append(
+                {
+                    "text": "".join(c["text"] for c in run),
+                    "x0": min(c["x0"] for c in run),
+                    "x1": max(c["x1"] for c in run),
+                    "top": min(c["top"] for c in run),
+                    "bottom": max(c["bottom"] for c in run),
+                }
+            )
+            run.clear()
+
+    previous = None
+    for char in page.chars:
+        if _char_direction(char) != "angled" or char["text"].isspace():
+            close()
+            previous = None
             continue
-        if not word.get("upright", True):
-            rotated.append(word)
-            continue
-        upright.append(
-            geometry.Word(
-                text=word["text"],
-                x0=word["x0"],
-                x1=word["x1"],
-                top=word["top"],
-                bottom=word["bottom"],
+        if previous is not None:
+            same = char["matrix"][:2] == previous["matrix"][:2]
+            near = abs(char["x0"] - previous["x0"]) <= 2.5 * char["size"]
+            if not (same and near):
+                close()
+        run.append(char)
+        previous = char
+    close()
+    return words
+
+
+def _drawn(page, which: str, votes: Counter) -> list:
+    """The words made of the characters drawn in direction `which`."""
+    if which == "angled":
+        return _angled_words(page)
+    options = {
+        "x_tolerance_ratio": X_TOLERANCE_RATIO,
+        "y_tolerance": 3,
+        "keep_blank_chars": False,
+        "use_text_flow": False,
+        **_WORD_OPTIONS[which],
+    }
+    source = page
+    if len(votes) > 1:
+        source = page.filter(
+            lambda obj: (
+                obj.get("object_type") == "char" and _char_direction(obj) == which
             )
         )
-    return upright, rotated
+    return source.extract_words(**options)
+
+
+def _words(page, table_boxes, direction: str, votes: Counter) -> tuple:
+    """(geometry words, [groups of odd-one-out word dicts]), outside ruled tables.
+
+    The odd ones out are words drawn in a different direction from the rest of
+    the page - a vertical margin stamp on an upright page, an upright label on
+    a page whose text was turned - each group read along its own direction.
+    """
+    turned = direction != "right"
+
+    def outside(words):
+        return [w for w in words if not any(_inside(w, box) for box in table_boxes)]
+
+    upright = []
+    for word in outside(_drawn(page, direction, votes)):
+        if turned:
+            x0, x1, top, bottom = _turn(word, direction, page.width, page.height)
+        else:
+            x0, x1, top, bottom = word["x0"], word["x1"], word["top"], word["bottom"]
+        upright.append(
+            geometry.Word(text=word["text"], x0=x0, x1=x1, top=top, bottom=bottom)
+        )
+
+    odd = []
+    for which in votes:
+        if which != direction:
+            group = outside(_drawn(page, which, votes))
+            if group:
+                odd.append(group)
+    return upright, odd
 
 
 def _garbled(words, ruled) -> str:

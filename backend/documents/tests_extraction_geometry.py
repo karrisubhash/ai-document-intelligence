@@ -203,22 +203,19 @@ class BorderlessTableTests(SimpleTestCase):
         self.assertEqual(blocks[1].text, "Note: all fees are in INR.")
         self.assertEqual(len(blocks[0].rows), 4)
 
-    def test_a_header_and_one_numeric_row_is_a_table(self):
-        words = row(100, (50, "Course"), (200, "Marks")) + row(
+    def test_a_header_and_one_row_is_never_a_borderless_table(self):
+        """The weakest structure there is. A transcript's justified lines, a
+        caption box and a stray year all look like it, and the cost of those
+        false tables - pipes through readable text - outweighs the rare real
+        two-row table, which stays perfectly readable as text."""
+        numeric = row(100, (50, "Course"), (200, "Marks")) + row(
             114, (50, "CS301"), ("r", 240, "84")
         )
-
-        blocks = layout_page(words)
-
-        self.assertEqual(
-            texts(blocks), [("table", [["Course", "Marks"], ["CS301", "84"]])]
-        )
-
-    def test_a_header_and_one_row_of_words_is_not(self):
         words = row(100, (50, "Name"), (200, "Place")) + row(
             114, (50, "Asha"), (200, "Pune")
         )
 
+        self.assertEqual([b.kind for b in layout_page(numeric)], ["text"])
         self.assertEqual([b.kind for b in layout_page(words)], ["text"])
 
     def test_a_form_of_labels_and_values_is_a_table(self):
@@ -247,6 +244,86 @@ class BorderlessTableTests(SimpleTestCase):
 
         self.assertEqual(table.kind, "table")
         self.assertEqual(table.rows[3], ["Meera Nair", "Admin", "Registrar"])
+
+
+class DenseTableTests(SimpleTestCase):
+    """A real report: many narrow numeric columns, tens of rows, and a few rows
+    where a long figure nearly touches the next column. Demanding that a column
+    gap be empty in EVERY row lost the column the first time that happened."""
+
+    COLUMNS = 16
+    ROWS = 40
+    PITCH = 44
+    CROWDED = (7, 23)  # data rows whose figure in column 4 runs up to column 3
+
+    def table(self, crowded=CROWDED):
+        words = []
+        expected = [[f"c{column}" for column in range(self.COLUMNS)]]
+        for column in range(self.COLUMNS):
+            words += phrase(f"c{column}", 60 + self.PITCH * column, 100)
+
+        for row in range(self.ROWS):
+            y = 114 + 14 * row
+            cells = []
+            for column in range(self.COLUMNS):
+                if row in crowded and column == 4:
+                    value = "123456"
+                else:
+                    value = str((row * 31 + column * 17) % 9000 + 100)
+                cells.append(value)
+                words += right_aligned(value, 60 + self.PITCH * column + 34, y)
+            expected.append(cells)
+        return words, expected
+
+    def test_every_column_is_found_though_a_few_rows_crowd_a_gap(self):
+        words, expected = self.table()
+
+        tables = [b for b in layout_page(words) if b.kind == "table"]
+
+        self.assertEqual(len(tables), 1)
+        self.assertEqual(tables[0].rows, expected)
+
+    def test_the_same_table_without_the_crowding_reads_the_same(self):
+        words, expected = self.table(crowded=())
+
+        (table,) = [b for b in layout_page(words) if b.kind == "table"]
+
+        self.assertEqual(table.rows, expected)
+
+    def test_a_short_heading_inside_a_wide_table_does_not_end_it(self):
+        words, _ = self.table()
+        # Two words running across a couple of columns, between two body rows.
+        words += phrase("Group heading", 60 + self.PITCH * 5, 114 + 14 * 20 + 7)
+
+        tables = [b for b in layout_page(words) if b.kind == "table"]
+
+        self.assertEqual(len(tables), 1)
+        self.assertGreaterEqual(len(tables[0].rows), self.ROWS)
+
+    def test_a_sentence_under_a_wide_table_still_ends_it(self):
+        words, _ = self.table()
+        words += phrase(
+            "Figures are for the month and include every category reported to the office",
+            60,
+            114 + 14 * self.ROWS + 12,
+        )
+
+        blocks = layout_page(words)
+
+        self.assertEqual([b.kind for b in blocks], ["table", "text"])
+        self.assertTrue(blocks[1].text.startswith("Figures are for the month"))
+
+    def test_a_lone_word_in_a_wide_gap_does_not_invent_a_column(self):
+        words = []
+        for row in range(5):
+            y = 100 + 14 * row
+            words += phrase(f"item{row}", 50, y) + right_aligned(str(100 + row), 400, y)
+        # One word, mid-gap, in one row only.
+        words += phrase("note", 200, 100 + 14 * 2)
+
+        (table,) = [b for b in layout_page(words) if b.kind == "table"]
+
+        self.assertEqual({len(row) for row in table.rows}, {2})
 
 
 class ListsAreNotTablesTests(SimpleTestCase):
@@ -284,6 +361,97 @@ class ListsAreNotTablesTests(SimpleTestCase):
 
         self.assertEqual([b.kind for b in blocks], ["text"])
         self.assertIn("• Library cards", blocks[0].text)
+
+
+class LineNumberGutterTests(SimpleTestCase):
+    """A transcript, a statute, a court filing: every line numbered down the
+    margin. The numbers beside the text are not a table."""
+
+    def numbered(self, lines):
+        words = []
+        for index, line in enumerate(lines):
+            y = 100 + 14 * index
+            words += phrase(str(index + 1), 50, y) + phrase(line, 90, y)
+        return words
+
+    def test_numbered_lines_stay_as_lines(self):
+        words = self.numbered(
+            [
+                "IN THE SUPREME COURT OF THE UNITED STATES",
+                "MICHAEL A. KNOWLES,",
+                "WARDEN,",
+                "Petitioner",
+                "ALEXANDRE MIRZAYANCE.",
+                "Washington, D.C.",
+            ]
+        )
+
+        blocks = layout_page(words)
+
+        self.assertEqual([b.kind for b in blocks], ["text"])
+        self.assertIn("2 MICHAEL A. KNOWLES,", blocks[0].text)
+
+    def test_a_stray_fragment_beside_numbered_lines_is_not_a_column(self):
+        words = self.numbered(
+            [
+                "MICHAEL A. KNOWLES, :",
+                "WARDEN, :",
+                "Petitioner :",
+                "v. :",
+                "ALEXANDRE MIRZAYANCE. :",
+            ]
+        )
+        words += phrase("No. 07-1315", 320, 100 + 14 * 3)
+
+        self.assertEqual([b.kind for b in layout_page(words)], ["text"])
+
+    def test_a_numbered_list_of_names_is_not_a_table(self):
+        words = (
+            row(100, (50, "1"), (90, "Asha Rao"))
+            + row(114, (50, "2"), (90, "Ravi Kumar"))
+            + row(128, (50, "3"), (90, "Meera Nair"))
+            + row(142, (50, "4"), (90, "Kiran Das"))
+        )
+
+        self.assertEqual([b.kind for b in layout_page(words)], ["text"])
+
+    def test_consecutive_numbers_are_still_data_when_another_column_is_numeric(self):
+        words = (
+            row(100, (50, "Semester"), (200, "Credits"))
+            + row(114, (50, "1"), ("r", 240, "22"))
+            + row(128, (50, "2"), ("r", 240, "24"))
+            + row(142, (50, "3"), ("r", 240, "23"))
+            + row(156, (50, "4"), ("r", 240, "25"))
+        )
+
+        (table,) = [b for b in layout_page(words) if b.kind == "table"]
+
+        self.assertEqual(table.rows[1], ["1", "22"])
+        self.assertEqual(len(table.rows), 5)
+
+    def test_a_run_of_course_codes_is_data_not_line_numbers(self):
+        words = (
+            row(100, (50, "Code"), (200, "Course"))
+            + row(114, (50, "101"), (200, "Introduction to programming"))
+            + row(128, (50, "102"), (200, "Data structures"))
+            + row(142, (50, "103"), (200, "Operating systems"))
+        )
+
+        (table,) = [b for b in layout_page(words) if b.kind == "table"]
+
+        self.assertEqual(table.rows[2], ["102", "Data structures"])
+
+    def test_a_run_of_years_is_data_not_line_numbers(self):
+        words = (
+            row(100, (50, "Year"), (200, "Intake"))
+            + row(114, (50, "2019"), ("r", 240, "120"))
+            + row(128, (50, "2020"), ("r", 240, "150"))
+            + row(142, (50, "2021"), ("r", 240, "180"))
+        )
+
+        (table,) = [b for b in layout_page(words) if b.kind == "table"]
+
+        self.assertEqual(table.rows[3], ["2021", "180"])
 
 
 class ExtraBlockTests(SimpleTestCase):

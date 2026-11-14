@@ -12,6 +12,7 @@ way a reader thinks about a page; the builder flips them into PDF's
 bottom-left space.
 """
 
+import math
 import zlib
 from io import BytesIO
 
@@ -29,8 +30,19 @@ def _escape(text: str) -> str:
     return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
 
+# The matrix that turns a page's whole content a quarter turn, for pages whose
+# text runs down or up the sheet in the file's own coordinates - a landscape
+# table drawn sideways. Content to be turned must be designed within the top
+# 450 points of the page (y <= 400, x <= 450) so that it stays on the sheet.
+TURNS = {
+    "cw": "0 -1 1 0 -300 500",  # text then reads top to bottom
+    "ccw": "0 1 -1 0 900 50",  # text then reads bottom to top
+}
+
+
 class Page:
-    def __init__(self):
+    def __init__(self, turn=None):
+        self.turn = turn
         self.ops: list[str] = []
         self.images: list[tuple] = []  # (name, width, height, rgb bytes)
 
@@ -41,6 +53,21 @@ class Page:
         baseline = PAGE_HEIGHT - y - size * 0.8
         self.ops.append(
             f"BT /{font} {size} Tf {x} {baseline:.2f} Td ({_escape(text)}) Tj ET"
+        )
+        return self
+
+    def stamp(self, x, y, text, size=10, angle=90):
+        """Text turned `angle` degrees anticlockwise (90: reading up the page,
+        like the arXiv stamp down a margin; 180: upside down; 45: a diagonal
+        annotation). (x, y) is where
+        it starts, measured from the top.
+        """
+        radians = math.radians(angle)
+        cos, sin = round(math.cos(radians), 4), round(math.sin(radians), 4)
+        matrix = f"{cos} {sin} {-sin} {cos}"
+        self.ops.append(
+            f"BT /F1 {size} Tf {matrix} {x} {PAGE_HEIGHT - y:.2f} Tm "
+            f"({_escape(text)}) Tj ET"
         )
         return self
 
@@ -161,7 +188,10 @@ def build(pages) -> bytes:
             )
             image_refs.append(f"/{name} {number} 0 R")
 
-        stream = "\n".join(page.ops).encode()
+        body = "\n".join(page.ops)
+        if page.turn:
+            body = f"q {TURNS[page.turn]} cm\n{body}\nQ"
+        stream = body.encode()
         content = add(
             f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
         )

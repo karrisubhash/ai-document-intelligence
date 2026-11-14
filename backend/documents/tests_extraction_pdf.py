@@ -51,8 +51,8 @@ def fee_page():
     return page
 
 
-def attendance_page():
-    page = fx.Page().text(72, 60, "ATTENDANCE SUMMARY", size=14, font="F2")
+def attendance_page(turn=None):
+    page = fx.Page(turn=turn).text(72, 60, "ATTENDANCE SUMMARY", size=14, font="F2")
     for x, label in (
         (72, "Course"),
         (200, "Present"),
@@ -168,6 +168,145 @@ class RuledTableTests(SimpleTestCase):
         self.assertIn("ruled_tables_skipped", result.metadata)
         self.assertNotIn("pdfplumber:ruled", [t.source for t in result.tables])
         self.assertIn("85000", result.text)
+
+
+def banded_page():
+    """A table ruled in bands: vertical rules for every column, but a
+    horizontal rule only after every third row - so the rulings say the table
+    has four rows, each holding three."""
+    page = fx.Page().text(72, 60, "MARKS", size=14, font="F2")
+    columns = [72, 232, 332, 432]
+    top, pitch, bands, per_band = 100, 14, 4, 3
+    bottom = top + pitch * (bands * per_band + 1)
+
+    for x in columns:
+        page.rule(x, top, x, bottom)
+    page.rule(columns[0], top, columns[-1], top)
+    for band in range(1, bands + 1):
+        y = top + pitch * (1 + band * per_band)
+        page.rule(columns[0], y, columns[-1], y)
+
+    page.text(76, top + 2, "Name")
+    page.text(236, top + 2, "Marks")
+    page.text(336, top + 2, "Grade")
+    for row in range(bands * per_band):
+        y = top + pitch * (row + 1) + 2
+        marks = str(50 + row)
+        page.text(76, y, f"Student {row + 1}")
+        page.text(320 - 5.6 * len(marks), y, marks)
+        page.text(336, y, "AB"[row % 2])
+    return page
+
+
+class BandedRulingTests(SimpleTestCase):
+    def test_rows_the_rulings_did_not_separate_are_read_from_the_text(self):
+        (result,) = run(banded_page())
+
+        self.assertEqual(result.metadata.get("ruled_tables_distrusted"), 1)
+        (table,) = result.tables
+        self.assertEqual(table.source, "pdfplumber:layout")
+        self.assertEqual(len(table.rows), 13)  # the header and twelve students
+        self.assertEqual(table.rows[0], ["Name", "Marks", "Grade"])
+        self.assertEqual(table.rows[1], ["Student 1", "50", "A"])
+        self.assertEqual(table.rows[12], ["Student 12", "61", "B"])
+
+    def test_a_table_with_wrapped_cells_is_still_trusted(self):
+        page = fx.Page().grid(
+            72,
+            100,
+            [120, 200, 100],
+            [
+                ["Code", "Description", "Fee"],
+                ["CS101", "Introduction to programming", "5000"],
+                ["CS102", "Data structures", "6000"],
+                ["CS103", "Operating systems", "6500"],
+            ],
+            right_align={2},
+        )
+
+        (result,) = run(page)
+
+        self.assertEqual(result.tables[0].source, "pdfplumber:ruled")
+        self.assertNotIn("ruled_tables_distrusted", result.metadata)
+
+    def test_whole_rows_versus_merged_ones(self):
+        whole = [
+            ["a", "b"],
+            ["x", "y"],
+            ["x" + chr(10) + "y", "y"],
+            ["x", "y"],
+            ["x", "y"],
+        ]
+        merged = [["a", "b"]] + [
+            [chr(10).join("xyz"), chr(10).join("123")] for _ in range(4)
+        ]
+
+        self.assertTrue(pdf._rows_are_whole(whole))
+        self.assertFalse(pdf._rows_are_whole(merged))
+        self.assertTrue(pdf._rows_are_whole([["a", "b"], ["x", "y"]]))
+
+
+class SidewaysPageTests(SimpleTestCase):
+    """A landscape table drawn sideways in a portrait sheet: in the file's own
+    coordinates its text runs down (or up) the page. pdfplumber reports words
+    in that frame, and read as it stands the table comes out transposed - which
+    the previous engine, pypdf, did not do."""
+
+    EXPECTED = [
+        ["Course", "Present", "Total", "Percent"],
+        ["CS301", "38", "45", "84.4"],
+        ["CS302", "31", "45", "68.9"],
+        ["CS303", "40", "45", "88.9"],
+    ]
+
+    def test_text_running_down_the_sheet_is_read_as_the_upright_page_is(self):
+        (result,) = run(attendance_page(turn="cw"))
+
+        self.assertEqual(result.metadata["text_direction"], "down")
+        self.assertEqual(result.tables[0].rows, self.EXPECTED)
+        self.assertTrue(result.text.startswith("ATTENDANCE SUMMARY"))
+        self.assertIn("Note: attendance below 75 percent", result.text)
+
+    def test_text_running_up_the_sheet_is_read_as_the_upright_page_is(self):
+        (result,) = run(attendance_page(turn="ccw"))
+
+        self.assertEqual(result.metadata["text_direction"], "up")
+        self.assertEqual(result.tables[0].rows, self.EXPECTED)
+        self.assertTrue(result.text.startswith("ATTENDANCE SUMMARY"))
+
+    def test_an_ordinary_page_is_not_turned(self):
+        (result,) = run(attendance_page())
+
+        self.assertNotIn("text_direction", result.metadata)
+
+    def test_an_upside_down_label_on_an_upright_page_reads_whole(self):
+        page = attendance_page().stamp(300, 400, "label upside down", angle=180)
+
+        (result,) = run(page)
+
+        self.assertNotIn("text_direction", result.metadata)
+        self.assertIn("label upside down", result.text)
+        self.assertEqual(result.tables[0].rows, self.EXPECTED)
+
+    def test_a_diagonal_annotation_is_read_in_the_order_it_was_written(self):
+        page = attendance_page().stamp(300, 400, "draft copy", angle=45)
+
+        (result,) = run(page)
+
+        self.assertNotIn("text_direction", result.metadata)
+        self.assertIn("draft copy", result.text)
+        self.assertEqual(result.tables[0].rows, self.EXPECTED)
+
+    def test_a_vertical_margin_stamp_on_an_upright_page_does_not_turn_it(self):
+        page = attendance_page().stamp(20, 400, "stamp in the margin")
+
+        (result,) = run(page)
+
+        self.assertNotIn("text_direction", result.metadata)
+        self.assertEqual(result.tables[0].rows, self.EXPECTED)
+        self.assertTrue(result.text.startswith("ATTENDANCE SUMMARY"))
+        # The stamp reads whole, along its own direction - not a letter at a time.
+        self.assertIn("stamp in the margin", result.text)
 
 
 class LayoutTests(SimpleTestCase):
