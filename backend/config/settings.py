@@ -929,6 +929,21 @@ CHAT_GENERAL_MAX_TOKENS = int(os.getenv("CHAT_GENERAL_MAX_TOKENS", "4096"))
 RAG_CONTEXT_BUDGET = int(os.getenv("RAG_CONTEXT_BUDGET", "8000"))
 RAG_MAX_PASSAGES = int(os.getenv("RAG_MAX_PASSAGES", "8"))
 
+# When a GENERATIVE model is answering, it - not the reranker's score floor -
+# decides whether a passage answers the question: a small cross-encoder
+# scores a correct paraphrase 0.00-0.08 against a floor of 0.30, so the model
+# never saw the passage and the user was told "not found". The passages the
+# floor rejects but the reranker still ranks in its top RAG_MIN_PASSAGES, or
+# retrieval ranks in its top RAG_ADMIT_RETRIEVAL_TOP, are handed to the model
+# along with the ones above the floor. Anything that merely quotes (the
+# extractive answerer, or the fallback when no model is available) keeps the
+# floor exactly. See documents/rag/judging.py. False restores the floor.
+RAG_MODEL_JUDGES_RELEVANCE = (
+    os.getenv("RAG_MODEL_JUDGES_RELEVANCE", "True").lower() == "true"
+)
+RAG_MIN_PASSAGES = int(os.getenv("RAG_MIN_PASSAGES", "6"))
+RAG_ADMIT_RETRIEVAL_TOP = int(os.getenv("RAG_ADMIT_RETRIEVAL_TOP", "2"))
+
 # Share of an answer's content words that must appear in the passages it
 # cites. This is the BACKSTOP behind grounding's fact check, not the gate -
 # see documents/rag/grounding.py for why it is no longer 0.55. Raising it

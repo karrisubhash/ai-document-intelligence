@@ -66,6 +66,12 @@ class Passage:
     # spliced into it would be the one piece of a passage that is not on
     # the page where the citation says it is.
     table_header: tuple = ()
+    # The relevance reranker scored this below its floor and a generative
+    # model was handed it to judge anyway (rag.judging). It is evidence for a
+    # model that can say "this is not it", and NOT for anything that cannot:
+    # the quoting fallback, the figure hints and the sources a reader is shown
+    # before the answer all leave these passages out.
+    model_judged: bool = False
 
     @property
     def is_table(self) -> bool:
@@ -122,6 +128,27 @@ class BuiltContext:
 
     def by_marker(self) -> dict:
         return {passage.marker: passage for passage in self.passages}
+
+    def without_model_judged(self) -> "BuiltContext":
+        """The same context minus passages only a model was asked to judge.
+
+        What a fallback that merely QUOTES may use: quoting cannot tell that
+        a passage is beside the point, so it gets only the passages the
+        reranker itself vouched for. Markers are kept, so a quoted sentence
+        still resolves against the full context in grounding.
+        """
+        kept = [p for p in self.passages if not p.model_judged]
+        if len(kept) == len(self.passages):
+            return self
+        return BuiltContext(
+            passages=kept,
+            characters=sum(len(p.text) for p in kept),
+            dropped_for_budget=self.dropped_for_budget,
+            dropped_as_duplicate=self.dropped_as_duplicate,
+            dropped_as_tiny=self.dropped_as_tiny,
+            suspected_injections=sum(1 for p in kept if p.suspected_injection),
+            focus=self.focus,
+        )
 
 
 def _fingerprint(text: str) -> str:
@@ -211,6 +238,9 @@ def build(
                 suspected_injection=bool(matches),
                 injection_matches=matches,
                 table_header=tuple(metadata.get("header") or ()),
+                model_judged=bool(
+                    (getattr(candidate, "signals", None) or {}).get("model_judged")
+                ),
             )
         )
 

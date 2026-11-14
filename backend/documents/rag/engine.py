@@ -26,7 +26,7 @@ from documents.observability import telemetry, tracing
 from documents.search import service as search_service
 
 from . import context as context_builder
-from . import grounding, reranking, streaming, tables
+from . import grounding, judging, reranking, streaming, tables
 from .llm import ABSTENTION_TEXT
 
 # How many retrieved candidates are handed to the reranker. Larger than the
@@ -479,12 +479,10 @@ def _ask(
     # and was answered "not found" with the table in front of us. Tables that
     # retrieval ranked highly and that share terms with the question go on to
     # the answerer, whose own refusal and the grounding check still apply.
-    admitted = tables.admit_below_floor(
-        question,
-        reranked,
-        floor,
-        {hit.chunk.id: rank for rank, hit in enumerate(retrieval.hits, start=1)},
-    )
+    retrieval_ranks = {
+        hit.chunk.id: rank for rank, hit in enumerate(retrieval.hits, start=1)
+    }
+    admitted = tables.admit_below_floor(question, reranked, floor, retrieval_ranks)
     if admitted:
         admitted_ids = {id(item) for item in admitted}
         relevant = [
@@ -497,6 +495,37 @@ def _ask(
             f"{tables.ADMIT_WITHIN_RETRIEVAL_RANK} and the question shares "
             f"terms with their columns or cells"
         )
+
+    # What the reranker itself vouched for. Figure hints and the previewed
+    # sources describe THIS set only; passages a model is merely asked to
+    # judge (below) are not evidence of where an answer is.
+    evidence = relevant
+
+    # A generative model, not the score floor, decides whether a passage
+    # answers the question. See documents.rag.judging.
+    answerer = get_answerer()
+    if judging.model_can_judge(answerer):
+        judged = judging.admit(reranked, evidence, retrieval_ranks)
+        judged_ids = {id(item) for item in judged}
+        evidence_ids = {id(item) for item in evidence}
+        leading = judging.leading_chunks(
+            user, document_id, {item.chunk.id for item in reranked}
+        )
+        if judged or leading:
+            relevant = [
+                item
+                for item in reranked
+                if id(item) in evidence_ids or id(item) in judged_ids
+            ] + leading
+            notes.append(
+                f"{len(judged) + len(leading)} passage(s) below the relevance "
+                f"floor ({floor:.3f}) were passed to the generative model to "
+                f"judge: the reranker ranked them in its top "
+                f"{getattr(settings, 'RAG_MIN_PASSAGES', judging.DEFAULT_MIN_PASSAGES)}"
+                f" or retrieval in its top "
+                f"{getattr(settings, 'RAG_ADMIT_RETRIEVAL_TOP', judging.DEFAULT_RETRIEVAL_TOP)}"
+                f"{', or they open the document asked about' if leading else ''}"
+            )
 
     if not relevant:
         # No relevant_document_ids: nothing passed the floor, so no figure
@@ -545,7 +574,7 @@ def _ask(
             started,
             retrieved=len(retrieval.hits),
             retrieved_document_ids=ranked_document_ids(reranked),
-            relevant_document_ids=ranked_document_ids(relevant),
+            relevant_document_ids=ranked_document_ids(evidence),
             reranked=len(reranked),
             reranker_name=reranker.name,
             semantic_retrieval=retrieval.semantic,
@@ -559,11 +588,15 @@ def _ask(
     # The passages the answer is about to be written from - authorized, above
     # the floor and inside the budget - so a reader sees where it is looking
     # before the first word. Titles and pages only.
-    streaming.sources(built.passages)
+    # Not the passages a model was only asked to judge: a reader would be
+    # shown titles of documents the answer may turn out to have nothing to do
+    # with.
+    previewed = [passage for passage in built.passages if not passage.model_judged]
+    if previewed:
+        streaming.sources(previewed)
     streaming.status(streaming.WRITING)
 
     # --- Answer -----------------------------------------------------------
-    answerer = get_answerer()
     stage_started = time.monotonic()
     response = answerer.answer(question=question, context=built, prompt=prompt)
     timings["generation"] = _elapsed_ms(stage_started)
@@ -616,7 +649,7 @@ def _ask(
             Abstention.ANSWERER_FAILED if failed else Abstention.MODEL_ABSTAINED,
             started,
             notes=notes,
-            relevant_document_ids=ranked_document_ids(relevant),
+            relevant_document_ids=ranked_document_ids(evidence),
             **common,
         )
 
@@ -640,7 +673,7 @@ def _ask(
             support_ratio=report.support_ratio,
             grounding_failures=list(report.failures),
             notes=notes,
-            relevant_document_ids=ranked_document_ids(relevant),
+            relevant_document_ids=ranked_document_ids(evidence),
             **common,
         )
 

@@ -304,8 +304,13 @@ class ClaudeAnswerer:
                     "error": type(exc).__name__,
                 },
             )
+            # Quoting cannot tell that a passage is beside the point, so it
+            # gets only the passages the reranker vouched for - not the ones a
+            # model was handed to judge (rag.judging).
             response = self._fallback.answer(
-                question=question, context=context, prompt=prompt
+                question=question,
+                context=context.without_model_judged(),
+                prompt=prompt,
             )
             response.metadata = {
                 **response.metadata,
