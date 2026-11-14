@@ -76,6 +76,27 @@ class Command(BaseCommand):
                 "pipeline, any movement is a real change."
             ),
         )
+        parser.add_argument(
+            "--chat-path",
+            action="store_true",
+            help=(
+                "Also do what chat does when the documents had nothing: with "
+                "CHAT_GENERAL_KNOWLEDGE on, answer a clean 'not found' from "
+                "general knowledge, and count how many questions the "
+                "documents DO answer got that reply. One more model call per "
+                "such case."
+            ),
+        )
+        parser.add_argument(
+            "--pause",
+            type=float,
+            default=0.0,
+            help=(
+                "Seconds to wait between cases. A free tier answers a few "
+                "requests a minute, and a run that outpaces it measures the "
+                "quota, not the system."
+            ),
+        )
 
     def handle(self, *args, **options):
         if options["load"]:
@@ -113,7 +134,13 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Running {dataset} as {user.username}...")
         try:
-            run = evaluation.run_dataset(dataset, user, label=options["label"])
+            run = evaluation.run_dataset(
+                dataset,
+                user,
+                label=options["label"],
+                chat_path=options["chat_path"],
+                pause=options["pause"],
+            )
         except evaluation.EvaluationScopeError as exc:
             raise CommandError(str(exc)) from exc
 
@@ -258,6 +285,7 @@ class Command(BaseCommand):
             "groundedness",
             "citation_accuracy",
             "source_coverage",
+            "correctness",
             "abstention_accuracy",
             "coverage",
         ):
@@ -268,6 +296,13 @@ class Command(BaseCommand):
         self.stdout.write(
             f"    missed abstentions   {generation.get('missed_abstentions')}"
         )
+        system = run.metrics.get("system", {})
+        if "general_replies" in system:
+            self.stdout.write(
+                f"    general replies      {system['general_replies']} "
+                f"({system['general_replies_to_answerable']} to questions the "
+                f"documents answer)"
+            )
 
     def _print_comparison(self, report):
         self.stdout.write("\n  Regression check")

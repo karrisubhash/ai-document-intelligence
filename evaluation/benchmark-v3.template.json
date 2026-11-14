@@ -1,0 +1,221 @@
+{
+  "name": "institutional-v3",
+  "version": "v3",
+  "description": "Built to measure ANSWERS, not retrieval, once a generative model is writing them. v2 asks questions in the documents' own words and scores whether the right document came back; what a person complained about was different: correct answers discarded as 'not found'. So v3 asks the same corpus questions the way people ask them - paraphrased with no shared words, a date or year written another way than the document writes it, a number spoken as a word, two questions in one, 'is it mandatory' - and, as important, questions that look answerable and are not (an entity or a year the documents do not cover) which a more willing system must still refuse. Score it with `evaluate --chat-path` so a general-knowledge reply to a question the documents answer is counted, and read `correctness` (the expected answer's key facts are in the answer) beside `false_abstentions` and `missed_abstentions`. Offline (extractive answerer) it is a regression baseline for the quoting path; it only becomes interesting with a model.",
+  "cases": [
+    {
+      "question": "How often do I need to show up to class to be allowed to sit exams?",
+      "expected_answer": "75 percent",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. No word of the clause: 'show up' for attendance, 'sit exams' for the end-semester examination."
+    },
+    {
+      "question": "I was unwell and my presence is at 70 percent. Can I still sit the exam?",
+      "expected_answer": "condonation on medical grounds with a certificate",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE + CONDITIONAL. The figure is the asker's, so the answer has no figure to match; correctness falls back to content words."
+    },
+    {
+      "question": "What happens if my attendance is under sixty-five percent?",
+      "expected_answer": "condonation is not permitted below 65 percent",
+      "relevant_documents": ["@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "NUMBER WORD in the question; the document writes 65."
+    },
+    {
+      "question": "What's the maximum number of books a postgraduate student can have out at once?",
+      "expected_answer": "six books",
+      "relevant_documents": ["@library-rules"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Have out at once' for 'borrow at one time'; the document says 'six' as a word."
+    },
+    {
+      "question": "How much is the penalty for returning library books late?",
+      "expected_answer": "5 rupees per day per book",
+      "relevant_documents": ["@library-rules"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Penalty' for 'fine'."
+    },
+    {
+      "question": "When do I have to be back in the hostel on Saturday nights?",
+      "expected_answer": "11 pm",
+      "relevant_documents": ["@hostel-regulations"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Be back' for 'curfew'."
+    },
+    {
+      "question": "By which date must I sign up with the placement cell?",
+      "expected_answer": "15 August",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "DATE. The answer will say '15th August' or 'August 15'."
+    },
+    {
+      "question": "What do I pay if I lose my bus pass?",
+      "expected_answer": "200 rupees",
+      "relevant_documents": ["@transport-circular"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Lose' for 'lost pass', 'replaced' for 'pay'."
+    },
+    {
+      "question": "My family earns two lakh rupees a year. What financial help can I get?",
+      "expected_answer": "means-tested aid covering the examination fee in full and up to 40 percent of hostel charges",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. Income given in lakh; the document writes 300000 rupees."
+    },
+    {
+      "question": "How many days do I have to file a complaint after something happens?",
+      "expected_answer": "30 days",
+      "relevant_documents": ["@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Complaint' for 'grievance'."
+    },
+    {
+      "question": "Who handles an appeal against the committee's decision, and how soon must it be made?",
+      "expected_answer": "the Director, within 15 days",
+      "relevant_documents": ["@grievance-procedure"],
+      "relevant_pages": [1],
+      "notes": "COMPOUND, one clause."
+    },
+    {
+      "question": "What do I need to bring to be let into the exam hall?",
+      "expected_answer": "the institute identity card",
+      "relevant_documents": ["@examination-policy"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. No figure: correctness falls back to content words."
+    },
+    {
+      "question": "How long must my account password be?",
+      "expected_answer": "at least 12 characters",
+      "relevant_documents": ["@it-acceptable-use"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE."
+    },
+    {
+      "question": "How many days of casual leave do employees get each year?",
+      "expected_answer": "12 days",
+      "relevant_documents": ["@staff-attendance-leave"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Employees' for 'staff member'."
+    },
+    {
+      "question": "When does a staff member's arrival count as late?",
+      "expected_answer": "after 9.15 am",
+      "relevant_documents": ["@staff-attendance-leave"],
+      "relevant_pages": [1],
+      "notes": "TIME."
+    },
+    {
+      "question": "What is the last day to submit applications for financial aid?",
+      "expected_answer": "30 September",
+      "relevant_documents": ["@scholarship-rules"],
+      "relevant_pages": [1],
+      "notes": "DATE. The answer will say '30th September' or 'September 30'."
+    },
+    {
+      "question": "Which academic year does the bus circular cover?",
+      "expected_answer": "2024-25",
+      "relevant_documents": ["@transport-circular"],
+      "relevant_pages": [1],
+      "notes": "YEAR RANGE. A model writes '2024-2025' or '2024 to 2025'."
+    },
+    {
+      "question": "What is the B.Tech ECE tuition fee for 2024-25?",
+      "expected_answer": "82000",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE + YEAR RANGE. The year is in the document's title, not in the row."
+    },
+    {
+      "question": "When must fees be paid by, and what is the late surcharge?",
+      "expected_answer": "the last working day of July; 500 rupees per week",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "COMPOUND, one passage."
+    },
+    {
+      "question": "What is the minimum attendance for exams, and how many books can an undergraduate borrow?",
+      "expected_answer": "75 percent, and four books",
+      "relevant_documents": ["@academic-regulations", "@library-rules"],
+      "relevant_pages": [1],
+      "notes": "COMPOUND across two documents. A model is given it whole."
+    },
+    {
+      "question": "How much is the library fine per day, and what is the hostel curfew on weekdays?",
+      "expected_answer": "5 rupees per day, and 10 pm",
+      "relevant_documents": ["@library-rules", "@hostel-regulations"],
+      "relevant_pages": [1],
+      "notes": "COMPOUND across two documents."
+    },
+    {
+      "question": "Is it mandatory to register with the placement cell, and what is the deadline?",
+      "expected_answer": "registration is not automatic; before 15 August",
+      "relevant_documents": ["@placement-policy"],
+      "relevant_pages": [1],
+      "notes": "'Is it mandatory' must not be read as a follow-up; COMPOUND."
+    },
+    {
+      "question": "How is earned leave accrued, and what is the most that can be accumulated?",
+      "expected_answer": "2.5 days per completed month, up to 300 days",
+      "relevant_documents": ["@staff-attendance-leave"],
+      "relevant_pages": [1],
+      "notes": "ONE CLAUSE, TWO FIGURES, in the middle of a multi-chunk document."
+    },
+    {
+      "question": "What happens to a probationer whose attendance is below the minimum?",
+      "expected_answer": "the probation is extended by six months",
+      "relevant_documents": ["@staff-attendance-leave"],
+      "relevant_pages": [1],
+      "notes": "PARAPHRASE. 'Probationer' for 'staff member on probation'; the document writes 'six' as a word."
+    },
+    {
+      "question": "What attendance does a scholarship holder need compared with the exam requirement?",
+      "expected_answer": "85 percent, higher than the 75 percent for examinations",
+      "relevant_documents": ["@scholarship-rules", "@academic-regulations"],
+      "relevant_pages": [1],
+      "notes": "CROSS-DOCUMENT. Two thresholds, two documents."
+    },
+    {
+      "question": "Which programme has the lowest tuition?",
+      "expected_answer": "B.Tech MECH, 78000",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE comparison: no cell states the answer."
+    },
+    {
+      "question": "What is the exam fee for M.Tech CSE?",
+      "expected_answer": "3000",
+      "relevant_documents": ["@fee-structure"],
+      "relevant_pages": [1],
+      "notes": "TABLE lookup."
+    },
+    {
+      "question": "What is the tuition fee for the PhD programme?",
+      "expect_abstention": true,
+      "notes": "ENTITY SWAP. The fee table lists B.Tech and M.Tech only; a more willing system must not answer with a row that is not PhD's."
+    },
+    {
+      "question": "What is the hostel fee for B.Arch students?",
+      "expect_abstention": true,
+      "notes": "ENTITY SWAP. No B.Arch row."
+    },
+    {
+      "question": "How many days of casual leave do students get each year?",
+      "expect_abstention": true,
+      "notes": "ENTITY SWAP. Casual leave is for staff; answering '12 days' is the failure."
+    },
+    {
+      "question": "What does a bus pass cost for the 2023-24 year?",
+      "expect_abstention": true,
+      "notes": "YEAR SWAP. The circular supersedes the 2023 one and gives only 2024-25's price."
+    },
+    {
+      "question": "What is on the cafeteria menu this week?",
+      "expect_abstention": true,
+      "notes": "UNRELATED. Nothing in the corpus."
+    }
+  ]
+}

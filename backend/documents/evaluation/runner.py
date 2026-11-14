@@ -25,8 +25,9 @@ from documents.processing.chunking.exceptions import (
     EmbeddingProviderUnavailable,
 )
 from documents.processing.chunking.service import CHUNKING_STRATEGY, CHUNKING_VERSION
+from documents.rag import general
 
-from . import metrics
+from . import correctness, metrics
 
 # 1 and 3 say whether the right thing is at the top; 10 says whether it was
 # found at all.
@@ -115,6 +116,10 @@ def score_case(answer, case, ks=DEFAULT_KS) -> dict:
         scores["token_overlap"] = round(
             metrics.token_overlap(answer.answer, case.expected_answer), 4
         )
+        # An abstention did not give the answer, whatever it says.
+        scores["correct"] = (not answer.abstained) and correctness.is_correct(
+            answer.answer, case.expected_answer
+        )
 
     return scores
 
@@ -151,16 +156,35 @@ def run_dataset(
     *,
     label: str = "",
     ks=DEFAULT_KS,
+    chat_path: bool = False,
+    pause: float = 0.0,
 ) -> EvaluationRun:
-    """Execute every case and store per-case results plus aggregates."""
+    """Execute every case and store per-case results plus aggregates.
+
+    `chat_path` also does what chat does when the documents had nothing: with
+    CHAT_GENERAL_KNOWLEDGE on, a clean "not found" is answered from general
+    knowledge. Such a case is counted as not answered from the documents - and
+    counted, because on a question the documents DO answer, that reply is the
+    failure a reader complains about ("it told me my documents don't cover it").
+    It spends one more model call per such case.
+
+    `pause` waits that many seconds between cases, so a free tier's
+    requests-per-minute limit is not what is being measured.
+    """
     check_runner_scope(dataset, user)
     started = time.monotonic()
 
+    configuration = capture_configuration()
+    if chat_path:
+        configuration["chat_path"] = {
+            "general_knowledge": general.enabled(),
+            "pause_seconds": pause,
+        }
     run = EvaluationRun.objects.create(
         dataset=dataset,
         label=label,
         run_by=user,
-        configuration=capture_configuration(),
+        configuration=configuration,
         cases_total=dataset.cases.count(),
     )
 
@@ -168,14 +192,29 @@ def run_dataset(
     generation_cases = []
     latencies = []
     degraded = {"reranker": 0, "answerer": 0}
+    general_replies = {"all": 0, "answerable": 0}
 
     try:
-        for case in dataset.cases.all():
+        for position, case in enumerate(dataset.cases.all()):
+            if pause and position:
+                time.sleep(pause)
             answer = rag.ask(user, case.question)
+
+            general_reply = False
+            if chat_path and general.should_answer(answer):
+                general_reply = general.answer(case.question) is not None
+                general_replies["all"] += int(general_reply)
+                general_replies["answerable"] += int(
+                    general_reply and not case.expect_abstention
+                )
 
             retrieved = list(answer.retrieved_document_ids)
             cited = [citation["document_id"] for citation in answer.citations]
             relevant = [int(document_id) for document_id in case.relevant_documents]
+
+            scores = score_case(answer, case, ks=ks)
+            if general_reply:
+                scores["general_reply"] = True
 
             EvaluationCaseResult.objects.create(
                 run=run,
@@ -186,7 +225,7 @@ def run_dataset(
                 retrieved_documents=retrieved,
                 cited_documents=cited,
                 citations=answer.citations,
-                scores=score_case(answer, case, ks=ks),
+                scores=scores,
                 duration_ms=answer.duration_ms,
             )
 
@@ -205,6 +244,7 @@ def run_dataset(
                     "relevant_documents": relevant,
                     "answer": answer.answer,
                     "expected_answer": case.expected_answer,
+                    "correct": scores.get("correct"),
                 }
             )
             latencies.append(answer.duration_ms)
@@ -222,6 +262,18 @@ def run_dataset(
                     **_system_metrics(latencies),
                     "degraded_reranks": degraded["reranker"],
                     "answerer_fallbacks": degraded["answerer"],
+                    # Only in chat-path mode, so an ordinary run's metrics
+                    # keep the keys its baseline was written with.
+                    **(
+                        {
+                            "general_replies": general_replies["all"],
+                            "general_replies_to_answerable": general_replies[
+                                "answerable"
+                            ],
+                        }
+                        if chat_path
+                        else {}
+                    ),
                 },
             }
             # The configuration was captured before any case ran, from the

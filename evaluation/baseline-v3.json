@@ -1,0 +1,86 @@
+{
+  "dataset": "institutional-v3",
+  "dataset_version": "v3",
+  "configuration": {
+    "embedding": {
+      "provider": "hashing-baseline",
+      "version": "0.1.0",
+      "dimensions": 384,
+      "semantic": false
+    },
+    "reranker": {
+      "name": "lexical-reranker",
+      "version": "0.1.0",
+      "semantic": false
+    },
+    "answerer": {
+      "name": "extractive-answerer",
+      "version": "0.1.0",
+      "generative": false
+    },
+    "chunking": {
+      "strategy": "page-bounded-overlap",
+      "version": "chunking-v1",
+      "size": 1000,
+      "overlap": 150
+    },
+    "retrieval": {
+      "depth": 20,
+      "relevance_floor": 0.15,
+      "candidates": 50,
+      "context_budget": 8000,
+      "max_passages": 8
+    }
+  },
+  "metrics": {
+    "retrieval": {
+      "recall_at_k": {
+        "1": 0.7963,
+        "3": 0.8519,
+        "5": 1.0,
+        "10": 1.0
+      },
+      "precision_at_k": {
+        "1": 0.8519,
+        "3": 0.3086,
+        "5": 0.2222,
+        "10": 0.1111
+      },
+      "mrr": 0.8901,
+      "map": 0.8679,
+      "ndcg_at_k": {
+        "1": 0.8519,
+        "3": 0.8417,
+        "5": 0.9055,
+        "10": 0.9055
+      },
+      "cases": 27
+    },
+    "generation": {
+      "groundedness": 0.9928,
+      "citation_accuracy": 0.7536,
+      "source_coverage": 0.7826,
+      "token_overlap": 0.7335,
+      "correctness": 0.5185,
+      "correct_answers": 14,
+      "answers_scored": 27,
+      "abstention_accuracy": 0.625,
+      "coverage": 0.7188,
+      "answered": 23,
+      "abstained": 9,
+      "correct_abstentions": 1,
+      "false_abstentions": 8,
+      "missed_abstentions": 4,
+      "cases": 32
+    },
+    "system": {
+      "cases": 32,
+      "latency_ms_mean": 43.7,
+      "latency_ms_p50": 40,
+      "latency_ms_p95": 69,
+      "latency_ms_max": 71,
+      "degraded_reranks": 0,
+      "answerer_fallbacks": 0
+    }
+  }
+}

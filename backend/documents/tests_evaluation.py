@@ -5,6 +5,8 @@ number this project reports gets measured against, so they are tested
 exhaustively by hand-worked examples rather than sampled through the stack.
 """
 
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.db import connection
@@ -16,7 +18,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import UserProfile
 from documents import rag
-from documents.evaluation import loader, metrics, runner
+from documents.evaluation import correctness, loader, metrics, runner
 from documents.models import (
     Conversation,
     Document,
@@ -153,6 +155,109 @@ class GenerationMetricTests(TestCase):
 
 
 # --- Regression comparison ---------------------------------------------------
+
+
+class CorrectnessTests(TestCase):
+    """ "Right" as opposed to "supported": the answer holds the key facts."""
+
+    def test_the_same_figure_in_another_spelling_is_correct(self):
+        for answer, expected in (
+            ("The minimum is 75% attendance.", "75 percent"),
+            ("A student may borrow 4 books.", "four books"),
+            ("Pay by 31 March 2025.", "31.03.2025"),
+            ("The 2024-2025 fee applies.", "2024-25"),
+            ("Rs. 1,200 per semester.", "1200 rupees"),
+        ):
+            with self.subTest(answer=answer):
+                self.assertTrue(correctness.is_correct(answer, expected))
+
+    def test_a_wrong_or_missing_figure_is_not(self):
+        for answer, expected in (
+            ("The minimum is 80 percent.", "75 percent"),
+            ("A student may borrow books.", "four books"),
+            ("Pay by 30 March 2025.", "31.03.2025"),
+            ("The fee is 5000 and the fine is 100.", "5000 and 200"),
+        ):
+            with self.subTest(answer=answer):
+                self.assertFalse(correctness.is_correct(answer, expected))
+
+    def test_every_figure_the_expected_answer_states_must_be_there(self):
+        expected = "Rs 500 per day, up to 30 days"
+
+        self.assertTrue(
+            correctness.is_correct("500 rupees a day for 30 days", expected)
+        )
+        self.assertFalse(correctness.is_correct("500 rupees a day", expected))
+
+    def test_with_no_figure_to_find_it_falls_back_to_the_content_words(self):
+        expected = "Submission dates may be deferred on written application"
+
+        self.assertTrue(
+            correctness.is_correct(
+                "You can defer the submission date by written application.", expected
+            )
+        )
+        self.assertFalse(
+            correctness.is_correct("The library opens at the usual hour.", expected)
+        )
+
+    def test_an_empty_answer_or_expectation_is_never_correct(self):
+        self.assertFalse(correctness.is_correct("", "75 percent"))
+        self.assertFalse(correctness.is_correct("75 percent", ""))
+        self.assertFalse(correctness.is_correct("   ", "75 percent"))
+
+
+class CorrectnessAggregationTests(TestCase):
+    def case(self, **overrides):
+        base = {
+            "abstained": False,
+            "expected_abstention": False,
+            "groundedness": 1.0,
+            "cited_documents": [],
+            "relevant_documents": [],
+            "answer": "a",
+            "expected_answer": "a",
+            "correct": True,
+        }
+        return {**base, **overrides}
+
+    def test_an_abstention_on_an_answerable_question_is_not_correct(self):
+        report = metrics.aggregate_generation(
+            [
+                self.case(),
+                self.case(correct=False),
+                self.case(abstained=True, correct=False),
+                # No expected answer: not part of the denominator.
+                self.case(expected_answer="", correct=None),
+                self.case(abstained=True, expected_abstention=True, expected_answer=""),
+            ]
+        ).to_dict()
+
+        self.assertEqual(report["answers_scored"], 3)
+        self.assertEqual(report["correct_answers"], 1)
+        self.assertEqual(report["correctness"], round(1 / 3, 4))
+
+    def test_the_new_metrics_read_in_the_right_direction(self):
+        self.assertEqual(metrics.metric_direction("generation.correctness"), "higher")
+        self.assertEqual(
+            metrics.metric_direction("generation.correct_answers"), "higher"
+        )
+        self.assertEqual(
+            metrics.metric_direction("generation.answers_scored"), "neutral"
+        )
+        self.assertEqual(
+            metrics.metric_direction("system.general_replies_to_answerable"), "lower"
+        )
+
+    def test_a_baseline_without_correctness_is_not_called_a_regression(self):
+        """New metrics are reported as added; the CI baselines predate them."""
+        before = {"generation": {"coverage": 0.6}}
+        after = {"generation": {"coverage": 0.6, "correctness": 0.4}}
+
+        report = metrics.compare(before, after)
+
+        self.assertEqual(report["regressions"], [])
+        self.assertIn("generation.correctness", report["added"])
 
 
 class ComparisonTests(TestCase):
@@ -409,6 +514,80 @@ class EvaluationRunTests(TestCase):
 
         self.assertEqual(generation["correct_abstentions"], 1)
         self.assertEqual(generation["missed_abstentions"], 0)
+
+    def test_correctness_is_scored_against_the_expected_answer(self):
+        run = runner.run_dataset(self.dataset(), self.user)
+        generation = run.metrics["generation"]
+
+        # Two cases have an expected answer; the abstention case has none.
+        self.assertEqual(generation["answers_scored"], 2)
+        self.assertGreaterEqual(generation["correct_answers"], 1)
+        self.assertEqual(
+            generation["correctness"],
+            round(generation["correct_answers"] / 2, 4),
+        )
+        attendance = EvaluationCaseResult.objects.get(
+            run=run, case__question__startswith="What is the minimum attendance"
+        )
+        self.assertIs(attendance.scores["correct"], True)
+
+    def test_pause_waits_between_cases_and_not_before_the_first(self):
+        with mock.patch.object(runner.time, "sleep") as sleep:
+            runner.run_dataset(self.dataset(), self.user, pause=2.5)
+
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_called_with(2.5)
+
+    def test_an_ordinary_run_neither_pauses_nor_adds_chat_keys(self):
+        with mock.patch.object(runner.time, "sleep") as sleep:
+            run = runner.run_dataset(self.dataset(), self.user)
+
+        sleep.assert_not_called()
+        self.assertNotIn("general_replies", run.metrics["system"])
+        self.assertNotIn("chat_path", run.configuration)
+
+    def test_the_chat_path_counts_general_replies_to_answerable_questions(self):
+        reply = mock.Mock(text="General knowledge")
+        with (
+            mock.patch.object(runner.general, "should_answer", return_value=True),
+            mock.patch.object(runner.general, "answer", return_value=reply) as answer,
+        ):
+            run = runner.run_dataset(self.dataset(), self.user, chat_path=True)
+
+        self.assertEqual(answer.call_count, 3)
+        system = run.metrics["system"]
+        self.assertEqual(system["general_replies"], 3)
+        # Two of the three are questions the documents answer.
+        self.assertEqual(system["general_replies_to_answerable"], 2)
+        self.assertTrue(run.configuration["chat_path"])
+        self.assertTrue(
+            EvaluationCaseResult.objects.filter(
+                run=run, scores__general_reply=True
+            ).exists()
+        )
+
+    def test_a_general_reply_is_not_a_correct_answer(self):
+        """An abstained question did not get its answer, whatever replaced
+        the abstention."""
+        with (
+            mock.patch.object(
+                runner.rag,
+                "ask",
+                return_value=rag.RagAnswer(
+                    question="q",
+                    answer=rag.ABSTENTION_TEXT,
+                    abstained=True,
+                    abstention_reason=rag.Abstention.NO_RELEVANT_PASSAGES,
+                ),
+            ),
+            mock.patch.object(runner.general, "should_answer", return_value=True),
+            mock.patch.object(
+                runner.general, "answer", return_value=mock.Mock(text="75 percent")
+            ),
+        ):
+            run = runner.run_dataset(self.dataset(), self.user, chat_path=True)
+
+        self.assertEqual(run.metrics["generation"]["correct_answers"], 0)
 
     def test_configuration_is_captured_with_the_metrics(self):
         """Section 19.2: a score detached from what produced it cannot be

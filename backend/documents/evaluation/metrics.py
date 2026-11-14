@@ -211,10 +211,22 @@ class GenerationReport:
     false_abstentions: int = 0
     missed_abstentions: int = 0
     cases: int = 0
+    # Of the cases with an expected answer, how many were answered with its key
+    # facts (documents.evaluation.correctness). An abstention is NOT correct
+    # here: this is the number a user lives with, "did I get the right answer".
+    # `correct` is None on a case with no expected answer.
+    correct_answers: int = 0
+    answers_scored: int = 0
 
     @property
     def coverage(self) -> float:
         return self.answered / self.cases if self.cases else 0.0
+
+    @property
+    def correctness(self) -> float:
+        return (
+            self.correct_answers / self.answers_scored if self.answers_scored else 0.0
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -222,6 +234,9 @@ class GenerationReport:
             "citation_accuracy": round(self.citation_accuracy, 4),
             "source_coverage": round(self.source_coverage, 4),
             "token_overlap": round(self.token_overlap, 4),
+            "correctness": round(self.correctness, 4),
+            "correct_answers": self.correct_answers,
+            "answers_scored": self.answers_scored,
             "abstention_accuracy": round(self.abstention_accuracy, 4),
             "coverage": round(self.coverage, 4),
             "answered": self.answered,
@@ -287,6 +302,13 @@ def aggregate_generation(per_case) -> GenerationReport:
         abstention_correct(c["abstained"], c["expected_abstention"]) for c in cases
     )
 
+    # Correctness is counted over every case that HAS an expected answer,
+    # abstentions included as not correct: a refused question did not get its
+    # answer.
+    scored = [c for c in cases if c.get("expected_answer")]
+    report.answers_scored = len(scored)
+    report.correct_answers = sum(1 for c in scored if c.get("correct"))
+
     # Answer-quality metrics are averaged over ANSWERED cases only. Folding
     # abstentions in at 0.0 would make a cautious system look inaccurate
     # rather than cautious, which is the opposite of what this project wants
@@ -328,12 +350,21 @@ LOWER_IS_BETTER = (
     # (system.degraded_reranks, system.answerer_fallbacks).
     "degraded",
     "fallback",
+    # An answerable question that chat answered from general knowledge instead
+    # of from the documents (system.general_replies_to_answerable).
+    "general_replies",
 )
 
 # Metrics that describe the shape of a run rather than its quality. A run
 # over more cases is not "better", so these are reported as changed without
 # being called a regression or an improvement either way.
-NEUTRAL = ("cases", "answered", "abstained", "correct_abstentions")
+NEUTRAL = (
+    "cases",
+    "answered",
+    "abstained",
+    "correct_abstentions",
+    "answers_scored",
+)
 
 
 def metric_direction(key: str) -> str:

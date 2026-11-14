@@ -410,6 +410,34 @@ jobs:
         env:
           DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
 
+      # v3 asks the same corpus questions the way people ask them: paraphrased,
+      # dates and year ranges written another way, compound, and entity-swap
+      # questions that must be refused. It scores ANSWERS (`correctness`), which
+      # only moves with a model - so here, offline, it gates the quoting path
+      # that a model's failures fall back to. Deterministic like v2: two local
+      # runs agreed exactly (2026-11-14). Its corpus is a subset of v2's, so
+      # seeding prunes the documents it does not use.
+      - name: Seed the v3 corpus
+        run: >
+          python backend/manage.py seed_evaluation
+          --template evaluation/benchmark-v3.template.json
+          --output evaluation/benchmark-v3.json --prune
+        env:
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
+
+      - name: Evaluate v3 against its baseline
+        run: |
+          python backend/manage.py evaluate \
+            --load evaluation/benchmark-v3.json \
+            --dataset institutional-v3 \
+            --dataset-version v3 \
+            --as-user ci-evaluator \
+            --label "${GITHUB_SHA::7}-v3" \
+            --baseline evaluation/baseline-v3.json \
+            --fail-on-regression
+        env:
+          DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
+
       # The Search endpoint, scored per PASSAGE in the order it returns them
       # (docs/evaluation/search-relevance.md). Its own user AND department:
       # visibility is owner-or-same-department, so under the shared
