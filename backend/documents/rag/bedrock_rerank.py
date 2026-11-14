@@ -44,6 +44,7 @@ import threading
 
 from django.conf import settings
 
+from . import tables
 from .reranking import LexicalReranker, RerankedChunk
 
 logger = logging.getLogger("adi.rerank")
@@ -192,7 +193,9 @@ class BedrockReranker:
         client = self._get_client()
         region = getattr(self, "_region_cached", "") or self._region()
 
-        texts = [candidate.chunk.text for candidate in candidates]
+        # A table chunk is scored with its title and column labels in front;
+        # see rag.tables.
+        texts = [tables.scoring_text(candidate.chunk) for candidate in candidates]
 
         response = client.rerank(
             queries=[{"type": "TEXT", "textQuery": {"text": query}}],

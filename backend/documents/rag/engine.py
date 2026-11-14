@@ -26,7 +26,7 @@ from documents.observability import telemetry, tracing
 from documents.search import service as search_service
 
 from . import context as context_builder
-from . import grounding, reranking, streaming
+from . import grounding, reranking, streaming, tables
 from .llm import ABSTENTION_TEXT
 
 # How many retrieved candidates are handed to the reranker. Larger than the
@@ -435,6 +435,31 @@ def _ask(
 
     floor = resolve_relevance_floor(reranker, relevance_floor, degraded=degraded)
     relevant = [item for item in reranked if item.score >= floor]
+
+    # A reranker judges whether one passage answers a question, which a table
+    # rarely does for a question that compares, counts or adds: "who has the
+    # highest earned leave?" scored a staff table 0.14 against a floor of 0.30
+    # and was answered "not found" with the table in front of us. Tables that
+    # retrieval ranked highly and that share terms with the question go on to
+    # the answerer, whose own refusal and the grounding check still apply.
+    admitted = tables.admit_below_floor(
+        question,
+        reranked,
+        floor,
+        {hit.chunk.id: rank for rank, hit in enumerate(retrieval.hits, start=1)},
+    )
+    if admitted:
+        admitted_ids = {id(item) for item in admitted}
+        relevant = [
+            item for item in reranked if item.score >= floor or id(item) in admitted_ids
+        ]
+        notes.append(
+            f"{len(admitted)} table passage(s) scored below the relevance "
+            f"floor (best {admitted[0].score:.3f} < {floor:.3f}) and were "
+            f"passed to the answerer anyway: retrieval ranked them in its top "
+            f"{tables.ADMIT_WITHIN_RETRIEVAL_RANK} and the question shares "
+            f"terms with their columns or cells"
+        )
 
     if not relevant:
         # No relevant_document_ids: nothing passed the floor, so no figure

@@ -98,7 +98,7 @@ from django.conf import settings
 
 from documents.processing.model_cache import load_cached_first
 
-from . import reranking
+from . import reranking, tables
 from .reranking import LexicalReranker, RerankedChunk
 
 logger = logging.getLogger("adi.rerank")
@@ -488,7 +488,10 @@ class LocalCrossEncoderReranker:
         truncated = set()
 
         for index, candidate in enumerate(candidates):
-            text = (candidate.chunk.text or "").strip()
+            # A table chunk is judged with its title and column labels in
+            # front; the rows alone say nothing about what they are rows of
+            # (see rag.tables).
+            text = tables.scoring_text(candidate.chunk)
             if not text:
                 continue
             if len(text) > MAX_PASSAGE_CHARS:

@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 
+from . import tables
 from .llm import is_abstention
 from .reranking import _terms
 
@@ -244,6 +245,13 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
 
     # --- Check 3: every stated fact is in a cited passage ----------------
     supported_facts = _facts(supporting)
+    # A total, count, average, highest or lowest value that the cited tables'
+    # own rows imply is not written anywhere, and is not an invention: it is
+    # recomputed here, from the cells, rather than taken on the model's word.
+    derived = tables.derived_figures(
+        [by_marker[marker] for marker in cited if marker in by_marker]
+    )
+    supported_facts |= derived
     stated_facts = _answer_facts(answer_text)
     supported_cores = {_numeric_core(fact) for fact in supported_facts} - {None}
 
@@ -262,7 +270,9 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
         )
 
     # --- Check 4: the prose is drawn from those passages ------------------
-    support_terms = set(_prose_terms(supporting))
+    # A derived figure is evidence here too: "The total is 15,000" would
+    # otherwise score as a sentence about words the table never uses.
+    support_terms = set(_prose_terms(supporting)) | set(_prose_terms(" ".join(derived)))
     answer_terms = _prose_terms(MARKER.sub(" ", answer_text))
 
     if not answer_terms:

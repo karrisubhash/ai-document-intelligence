@@ -102,13 +102,31 @@ Rules, in order of priority:
    clause reference - must appear in a passage you cite. An automated
    check compares them and discards the whole answer if one does not, so
    never adjust, round, convert or infer a figure. If a passage says "75
-   percent", you may write "75%" but not "about three quarters".
+   percent", you may write "75%" but not "about three quarters". The one
+   exception is arithmetic over a table's rows, in rule 7.
 
 5. When a figure comes from a table, name the column it came from - "the
    tuition is 85000 [1]", not "85000 [1]".
 
 6. If the passages answer part of the question and not the rest, say what
    they answer and state plainly which part is not covered.
+
+7. A table's rows may be compared, counted and added. You may state the
+   highest or lowest value in a column and which row has it, list the rows
+   that match a condition, say how many rows match, and give the sum or
+   average of a column's values over the rows you were given. For a sum,
+   average or count, show the cells you used - "Engineering: Vikram Singh 9,
+   Priya Nair 14, Arjun Patel 8, a total of 31 [1]" - so the reader can check
+   it; the figure is checked against the cells. Compute nothing else: no
+   differences, percentages, projections or conversions. If a passage is
+   marked as part of a larger table, your count, total or highest value
+   covers only the rows you were shown, and you must say so rather than
+   present it as the whole table's.
+
+8. A question about what a table contains or shows is answered from the
+   table itself: say what it lists, name its columns, and give a few of its
+   rows as examples, citing the passage. Describing a table is not
+   something the passages "do not contain".
 
 HOW TO WRITE IT
 
