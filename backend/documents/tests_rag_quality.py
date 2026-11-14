@@ -4,6 +4,7 @@ Each class pins one way a correct answer used to be lost, and the guard
 that keeps the fix from turning into an invented one.
 """
 
+import contextlib
 from unittest import mock
 
 from django.core.files.base import ContentFile
@@ -15,11 +16,13 @@ from documents.models import Document, ProcessingJob
 from documents.processing.pipeline import run_pipeline
 from documents.rag import context as ctx
 from documents.rag import engine, facts, followup, grounding, judging
-from documents.rag.gateway import Gateway
+from documents.rag import gateway as gateway_module
+from documents.rag.gateway import Gateway, Plan
 from documents.rag.llm import ABSTENTION_TEXT, ExtractiveAnswerer, declines_to_answer
 from documents.rag.reranking import RerankedChunk
 from documents.search import service as search_service
 from documents.tests import MEDIA_ROOT, make_user
+from documents.tests_llm_gateway import GatewayTestCase, ModelClient, build, wire
 from documents.tests_providers import (
     PASSAGE,
     FakeSearchResponse,
@@ -176,10 +179,13 @@ def ranked(*pairs):
 
 
 class FakeGateway(Gateway):
-    """A gateway that only answers `available`."""
+    """A gateway that only says whether a model will be tried."""
 
     def __init__(self, available):
         self._available = available
+
+    def plan(self, purpose, **kwargs):
+        return Plan([object()] if self._available else [])
 
     def available(self, purpose):
         return self._available
@@ -263,11 +269,8 @@ class ModelJudgesRelevanceTests(TestCase):
         return answer, hints_called
 
     def generative(self, reply):
-        answerer = answerer_with(StubChatClient(completion(reply)))
-        # Capacity is a budget lookup; the answer itself still runs through
-        # the real gateway and the stub client.
-        answerer.gateway.available = lambda purpose: True
-        return answerer
+        # The real gateway and the stub client: its plan has a link to try.
+        return answerer_with(StubChatClient(completion(reply)))
 
     def test_a_correct_paraphrase_below_the_floor_is_answered_by_the_model(self):
         answer, _ = self.ask(
@@ -840,9 +843,7 @@ class ModelContextTests(TestCase):
         return answer, build
 
     def generative(self, client):
-        answerer = answerer_with(client)
-        answerer.gateway.available = lambda purpose: True
-        return answerer
+        return answerer_with(client)
 
     def test_a_model_is_shown_neighbours_and_a_bigger_context(self):
         client = StubChatClient(completion("It keeps records of enrolment [1]."))
@@ -994,7 +995,13 @@ class RejectedAnswerTests(TestCase):
 
     def ask(self, client, *passages, available=True):
         answerer = answerer_with(client)
-        answerer.gateway.available = lambda purpose: available
+        # "No model will be tried" is forced on the check itself: the answer is
+        # still written through the real gateway and the stub client.
+        capacity = (
+            contextlib.nullcontext()
+            if available
+            else mock.patch.object(judging, "model_can_judge", return_value=False)
+        )
         found = hits(
             *[
                 (chunk(n, text), 1.0 - n / 10)
@@ -1014,6 +1021,7 @@ class RejectedAnswerTests(TestCase):
                 ),
             ),
             mock.patch.object(engine, "_figure_hints", return_value=[]),
+            capacity,
         ):
             return rag.ask(None, "What is the tuition per year for the programme?")
 
@@ -1143,3 +1151,41 @@ class VectorSearchStaysExactTests(TestCase):
 
         self.assertEqual(built.query.order_by, ("distance", "id"))
         self.assertTrue(0 < len(list(built)) <= 5)
+
+
+class RestingLinkTests(GatewayTestCase):
+    """Chat tries a link that is resting after a rate limit rather than give
+    up, and on a free tier most links are resting most of the time. Asking for
+    a READY one switched the whole model-judged path off exactly when the site
+    was busiest."""
+
+    def rested(self):
+        chain = build("groq")
+        wire(chain, "groq", ModelClient({"openai/gpt-oss-120b": 429}))
+        with self.assertRaises(gateway_module.Unavailable):
+            chain.complete(
+                [{"role": "user", "content": "q"}],
+                purpose=gateway_module.CHAT,
+                max_tokens=8,
+            )
+        return chain
+
+    def test_a_resting_link_still_counts_for_chat(self):
+        chain = self.rested()
+        answerer = mock.Mock(generative=True, gateway=chain)
+
+        self.assertFalse(chain.available(gateway_module.CHAT))
+        self.assertTrue(judging.model_can_judge(answerer))
+
+    def test_but_not_for_work_that_waits_its_turn(self):
+        chain = self.rested()
+        answerer = mock.Mock(generative=True, gateway=chain)
+
+        with gateway_module.purpose(gateway_module.BRIEF):
+            self.assertFalse(judging.model_can_judge(answerer))
+
+    def test_a_chain_with_no_key_is_never_tried(self):
+        chain = build("groq")
+        answerer = mock.Mock(generative=True, gateway=chain)
+
+        self.assertFalse(judging.model_can_judge(answerer))

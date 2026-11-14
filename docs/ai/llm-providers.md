@@ -102,8 +102,10 @@ every question a wasted round trip.
 
 ## What a model is shown, and what happens when it is wrong
 
-These apply only while a model can write the answer now (a link is ready); a quote keeps
-the settings it was measured with. They are all in `.env.example`.
+These apply only while a model will be tried for the answer - a link that is resting after
+a rate limit still counts for chat, which tries it rather than give up, and a chain with no
+key or every link used up for the day does not. A quote keeps the settings it was measured
+with. They are all in `.env.example`.
 
 - **The model judges relevance, not the score floor.** The small reranker scores a correct
   paraphrase 0.00-0.08 against a floor of 0.30, so the model never saw it and the reader was

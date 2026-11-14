@@ -61,9 +61,18 @@ def model_can_judge(answerer) -> bool:
     """Whether a generative model is expected to write this answer.
 
     `generative is True` rather than truthiness: a test double's attributes
-    are all truthy. And a gateway with no link ready returns False, so the
-    answer that is about to be a quote is not handed passages a quote cannot
-    judge. The check reads the budget and sends nothing.
+    are all truthy. And a gateway that will not attempt a model at all (no
+    key, or every link used up for the day) returns False, so the answer that
+    is about to be a quote is not handed passages a quote cannot judge.
+
+    The test is whether a model will be TRIED, not whether one is ready. Chat
+    tries a link that is resting after a rate limit rather than give up
+    (rag.gateway: "tried last"), and on a free tier with a handful of requests
+    a minute per model most links are resting most of the time: asking for a
+    ready one switched this whole path off exactly when the site was busiest.
+    A resting link that fails again leaves a quote, which never sees the
+    passages only a model was asked to judge. The check reads the budget and
+    sends nothing.
     """
     if not enabled() or getattr(answerer, "generative", False) is not True:
         return False
@@ -74,7 +83,7 @@ def model_can_judge(answerer) -> bool:
         return True
 
     try:
-        return bool(gateway.available(gateway_module.current_purpose()))
+        return bool(gateway.plan(gateway_module.current_purpose()).links)
     except Exception:  # noqa: BLE001 - a budget outage must not decide answers
         # The gateway makes its own decision when the call is made, and the
         # quoting fallback never sees model_judged passages either way.
