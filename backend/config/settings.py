@@ -499,6 +499,14 @@ OCR_DETECT_ROTATION = os.getenv("OCR_DETECT_ROTATION", "True").lower() == "true"
 OCR_EMBEDDED_IMAGES = os.getenv("OCR_EMBEDDED_IMAGES", "True").lower() == "true"
 OCR_EMBEDDED_IMAGES_MAX = int(os.getenv("OCR_EMBEDDED_IMAGES_MAX", "20"))
 
+# Seconds the OCR of one document may take before later pages are read at a
+# lower resolution (300 -> 200 -> 150 -> 100 DPI) rather than the whole
+# document timing out. Set under CELERY_TASK_SOFT_TIME_LIMIT (900) with room
+# left for what follows OCR: classification, extraction and chunking. A
+# rotated or noisy page costs two to five times a clean one, so a long scan
+# cannot be budgeted by pages alone.
+OCR_TIME_BUDGET_SECONDS = int(os.getenv("OCR_TIME_BUDGET_SECONDS", "540"))
+
 # Dotted path to a LAYOUT classifier (a DocumentClassifier). Empty means it
 # is not run - it never guesses a label. Its verdict is a page-layout class
 # (letter, memo, form... - the 16 RVL-CDIP classes for the bundled baseline)

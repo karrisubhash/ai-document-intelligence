@@ -10,6 +10,7 @@ tested with mocks so each branch is exercised on purpose.
 
 import os
 import tempfile
+import types
 from io import BytesIO
 from unittest import mock
 
@@ -146,7 +147,11 @@ class OrientationTests(SimpleTestCase):
         detect.assert_not_called()  # the tag was enough; no second opinion needed
 
     def test_a_better_rotated_reading_replaces_the_first(self):
-        poor = ([geometry.Word("xq", 0, 10, 0, 10)], 31.0)
+        # Something to judge by - a handful of doubtful words, not a blank page.
+        poor = (
+            [geometry.Word("xqz", i * 20, i * 20 + 15, 0, 10) for i in range(4)],
+            31.0,
+        )
         good = (
             [
                 geometry.Word(word, i * 50, i * 50 + 40, 0, 10)
@@ -156,8 +161,10 @@ class OrientationTests(SimpleTestCase):
         )
 
         with (
-            mock.patch.object(ocr, "_recognise", side_effect=[poor, good]),
+            mock.patch.object(ocr, "_read", side_effect=[poor, good]),
             mock.patch.object(ocr, "_orientation", return_value=90),
+            # The block reading that follows a poor one is not what this tests.
+            mock.patch.object(ocr, "_recognise", return_value=([], None)),
         ):
             page = ocr.read_page(text_image("anything"))
 
@@ -167,20 +174,111 @@ class OrientationTests(SimpleTestCase):
     def test_a_worse_rotated_reading_is_not_kept(self):
         """Orientation detection can be wrong; the first reading stands
         unless turning the page actually reads better."""
-        first = ([geometry.Word("Registrar", 0, 60, 0, 10)], 55.0)
-        worse = ([geometry.Word("xq", 0, 10, 0, 10)], 20.0)
+        first = (
+            [geometry.Word("Registrar", i * 70, i * 70 + 60, 0, 10) for i in range(4)],
+            55.0,
+        )
+        worse = (
+            [geometry.Word("xq", i * 20, i * 20 + 10, 0, 10) for i in range(3)],
+            20.0,
+        )
+        readings = iter([first])
+
+        def read(image, languages):
+            return next(readings, worse)
 
         with (
-            mock.patch.object(ocr, "_recognise", side_effect=[first, worse]),
+            mock.patch.object(ocr, "_read", side_effect=read),
             mock.patch.object(ocr, "_orientation", return_value=180),
+            mock.patch.object(ocr, "_recognise", return_value=([], None)),
         ):
             page = ocr.read_page(text_image("anything"))
 
         self.assertEqual(page.rotation, 0)
-        self.assertEqual(page.text, "Registrar")
+        self.assertEqual(page.text, "Registrar Registrar Registrar Registrar")
+
+    def test_when_the_guess_is_wrong_the_other_turns_are_tried(self):
+        """Tesseract's orientation guess is often absent on dense small print;
+        a page that still reads as nonsense is turned until it reads."""
+        junk = (
+            [
+                geometry.Word(token, i * 20, i * 20 + 15, 0, 10, confidence=40.0)
+                for i, token in enumerate("a b c d e f g h i j k l".split())
+            ],
+            60.0,
+        )
+        clean = (
+            [
+                geometry.Word(w, i * 60, i * 60 + 50, 0, 10, confidence=95.0)
+                for i, w in enumerate(
+                    "Precinct report for the county registrar office".split()
+                )
+            ],
+            95.0,
+        )
+        tried = []
+
+        def read(image, languages):
+            tried.append(image.size)
+            # The turned-270 page is landscape (3000 wide); only it reads.
+            return clean if image.size == (3000, 2000) and len(tried) == 3 else junk
+
+        with (
+            mock.patch.object(ocr, "_read", side_effect=read),
+            mock.patch.object(ocr, "_orientation", return_value=0),
+            mock.patch.object(ocr, "_recognise", return_value=([], None)),
+        ):
+            page = ocr.read_page(Image.new("L", (2000, 3000), 255))
+
+        # upright, then 90 (junk), then 270 (reads) - and it stops there.
+        self.assertEqual(len(tried), 3)
+        self.assertEqual(page.rotation, 270)
+        self.assertIn("Precinct report", page.text)
+
+    def test_a_well_read_page_is_never_turned(self):
+        clean = (
+            [
+                geometry.Word(w, i * 60, i * 60 + 50, 0, 10, confidence=95.0)
+                for i, w in enumerate(
+                    "Precinct report for the county registrar office".split()
+                )
+            ],
+            95.0,
+        )
+
+        with (
+            mock.patch.object(ocr, "_read", return_value=clean) as read,
+            mock.patch.object(ocr, "_orientation") as detect,
+        ):
+            ocr.read_page(Image.new("L", (2000, 3000), 255))
+
+        read.assert_called_once()
+        detect.assert_not_called()
+
+    def test_a_numeric_table_read_confidently_is_not_suspected(self):
+        numbers = (
+            [
+                geometry.Word(str(n % 90), i * 12, i * 12 + 8, 0, 10, confidence=93.0)
+                for i, n in enumerate(range(60))
+            ],
+            93.0,
+        )
+
+        self.assertFalse(ocr._suspect(*numbers))
+
+    def test_plausible_nonsense_is_suspected(self):
+        nonsense = (
+            [
+                geometry.Word(token, i * 12, i * 12 + 8, 0, 10, confidence=55.0)
+                for i, token in enumerate("| = a o 6 3 8 F i Q".split() * 4)
+            ],
+            63.0,
+        )
+
+        self.assertTrue(ocr._suspect(*nonsense))
 
     def test_unsure_orientation_changes_nothing(self):
-        osd = {"rotate": 90, "orientation_conf": 0.4}
+        osd = {"rotate": 90, "orientation_conf": 0.1}
 
         with mock.patch.object(ocr.pytesseract, "image_to_osd", return_value=osd):
             self.assertEqual(ocr._orientation(text_image("x")), 0)
@@ -204,6 +302,126 @@ class OrientationTests(SimpleTestCase):
             ocr.read_page(text_image("anything"))
 
         detect.assert_not_called()
+
+
+class FallbackTests(SimpleTestCase):
+    """Tesseract's automatic layout sometimes finds no text at all in a page it
+    reads perfectly well a third smaller or as one block. A reader that
+    silently returns nothing is not acceptable."""
+
+    GOOD = (
+        [
+            geometry.Word(w, 100 + i * 60, 160 + i * 60, 50, 60)
+            for i, w in enumerate("One two three four five six".split())
+        ],
+        93.0,
+    )
+    NOTHING = ([], None)
+
+    def image(self):
+        return Image.new("L", (3000, 2000), 255)
+
+    def test_a_good_first_reading_is_the_only_one(self):
+        with mock.patch.object(ocr, "_recognise", return_value=self.GOOD) as read:
+            ocr._read(self.image(), "eng")
+
+        read.assert_called_once()
+
+    def test_an_empty_reading_is_retried_smaller_and_scaled_back(self):
+        with mock.patch.object(
+            ocr, "_recognise", side_effect=[self.NOTHING, self.GOOD]
+        ) as read:
+            words, confidence = ocr._read(self.image(), "eng")
+
+        self.assertEqual(read.call_count, 2)
+        smaller = read.call_args_list[1].args[0]
+        self.assertEqual(smaller.size, (2010, 1340))
+        # Words found in the smaller image are placed back in the full-size one.
+        self.assertAlmostEqual(words[0].x0, 100 / ocr.FALLBACK_SCALE)
+        self.assertEqual(confidence, 93.0)
+
+    def test_the_better_of_two_poor_readings_is_kept(self):
+        weak = ([geometry.Word("xq", 0, 10, 0, 10)], 40.0)
+        stronger = (
+            [
+                geometry.Word(w, i * 50, i * 50 + 40, 0, 10)
+                for i, w in enumerate("a b c".split())
+            ],
+            55.0,
+        )
+
+        with mock.patch.object(ocr, "_recognise", side_effect=[weak, stronger, weak]):
+            words, confidence = ocr._read(self.image(), "eng")
+
+        self.assertEqual(len(words), 3)
+
+    def test_junk_does_not_outscore_a_few_real_words(self):
+        """A page read sideways yields plenty of tokens - at 30-45 percent, or
+        as confident one-character bars and equals signs - and counting those
+        lets junk outscore a clean reading with fewer words."""
+        doubtful = [
+            geometry.Word("xqz", i * 20, i * 20 + 15, 0, 10, confidence=38.0)
+            for i in range(80)
+        ]
+        confident_noise = [
+            geometry.Word("|", i * 20, i * 20 + 3, 0, 10, confidence=92.0)
+            for i in range(80)
+        ]
+        clean = [
+            geometry.Word(w, i * 60, i * 60 + 50, 0, 10, confidence=95.0)
+            for i, w in enumerate("Registrar of the examination cell".split())
+        ]
+
+        self.assertGreater(ocr._worth(clean, 95.0), ocr._worth(doubtful, 38.0))
+        self.assertGreater(ocr._worth(clean, 95.0), ocr._worth(confident_noise, 92.0))
+
+    def test_reading_as_one_block_is_the_last_resort(self):
+        order = []
+
+        def recognise(image, languages, config=""):
+            order.append(config or "auto")
+            return self.GOOD if config else self.NOTHING
+
+        with (
+            mock.patch.object(ocr, "_recognise", side_effect=recognise),
+            mock.patch.object(ocr, "_orientation") as detect,
+        ):
+            page = ocr.read_page(self.image())
+
+        # The ordinary reading, that again smaller - then the block. A page with
+        # nothing on it has no orientation to find, so none is looked for.
+        self.assertEqual(order, ["auto", "auto", "--psm 6"])
+        detect.assert_not_called()
+        self.assertEqual(page.words, 6)
+
+    def test_a_blank_page_is_not_turned_four_ways(self):
+        with (
+            mock.patch.object(ocr, "_recognise", return_value=self.NOTHING) as read,
+            mock.patch.object(ocr, "_orientation") as detect,
+        ):
+            ocr.read_page(self.image())
+
+        # Ordinary, smaller, block: three passes, however empty the page.
+        self.assertEqual(read.call_count, 3)
+        detect.assert_not_called()
+
+    def test_when_every_attempt_finds_nothing_the_page_is_empty_not_an_error(self):
+        with mock.patch.object(ocr, "_recognise", return_value=self.NOTHING):
+            page = ocr.read_page(self.image())
+
+        self.assertEqual(page.text, "")
+        self.assertIsNone(page.confidence)
+
+    def test_picture_words_are_scaled_back_to_the_picture_after_a_retry(self):
+        picture = Image.new("L", (1500, 800), 255)
+
+        with mock.patch.object(
+            ocr, "_recognise", side_effect=[self.NOTHING, self.GOOD]
+        ):
+            words = ocr.read_words(picture)
+
+        self.assertTrue(words)
+        self.assertLess(max(w.x1 for w in words), 1500 + 1)
 
 
 class ImagePreparationTests(SimpleTestCase):
@@ -349,6 +567,75 @@ class FileTests(SimpleTestCase):
                 handle.write("BMW service schedule for the college fleet\n")
 
             self.assertEqual(ingestion.detect_file_type(path), FileType.TXT)
+
+
+class OcrBudgetTests(SimpleTestCase):
+    """A long scan must finish inside the task limit, so the stage trades
+    resolution for time when the pages left will not fit. Time is a fake clock
+    that each page advances by what it would cost at the resolution used."""
+
+    COST = {300: 200.0, 200: 90.0, 150: 40.0, 100: 20.0}
+
+    def run_stage(self, pages, budget, cost=None):
+        cost = cost or self.COST
+        clock = {"now": 0.0}
+        used = []
+
+        def page(path, number, dpi):
+            used.append(dpi)
+            clock["now"] += cost[dpi]
+            return ocr.OcrPage(text=f"page {number}", words=3, confidence=90.0)
+
+        context = IngestionContext(
+            document_version=None,
+            file_path="x.pdf",
+            file_type=FileType.PDF,
+            pages=[ExtractedPage(page_number=n) for n in range(1, pages + 1)],
+        )
+        with (
+            override_settings(OCR_TIME_BUDGET_SECONDS=budget, OCR_DPI=300),
+            mock.patch.object(ocr, "ocr_pdf_page", side_effect=page),
+            # The stage's own reference to `time`, not the module itself: patching
+            # time.monotonic would change the clock for everything running.
+            mock.patch.object(
+                ocr_stage,
+                "time",
+                types.SimpleNamespace(monotonic=lambda: clock["now"]),
+            ),
+        ):
+            result = ocr_stage.run(context)
+        return used, result, context
+
+    def test_a_document_that_fits_is_read_at_full_resolution(self):
+        used, result, _ = self.run_stage(pages=3, budget=2000)
+
+        self.assertEqual(used, [300, 300, 300])
+        self.assertNotIn("dpi_lowered_from", result.metadata)
+
+    def test_a_long_scan_steps_down_until_it_fits(self):
+        used, result, context = self.run_stage(pages=10, budget=1000)
+
+        # 300 would need 2000s; 200 would need ~900 more after the first
+        # page - not enough; 150 fits.
+        self.assertEqual(used[:3], [300, 200, 150])
+        self.assertEqual(set(used[2:]), {150})
+        self.assertEqual(result.metadata["dpi_lowered_from"], 300)
+        self.assertEqual(result.metadata["dpi_final"], 150)
+        self.assertIn("lowered from 300 to 150", result.message)
+        # Each page records the resolution it was actually read at.
+        self.assertEqual([p.metadata["dpi"] for p in context.pages], used)
+
+    def test_it_never_goes_below_the_lowest_resolution(self):
+        used, _, _ = self.run_stage(pages=6, budget=1)
+
+        self.assertEqual(min(used), 100)
+        self.assertEqual(used[-1], 100)
+
+    def test_the_last_page_is_never_made_cheaper_for_nobody(self):
+        used, result, _ = self.run_stage(pages=1, budget=1)
+
+        self.assertEqual(used, [300])
+        self.assertNotIn("dpi_lowered_from", result.metadata)
 
 
 class OcrStageTests(SimpleTestCase):

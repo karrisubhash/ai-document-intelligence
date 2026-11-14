@@ -46,12 +46,43 @@ SMALL_SIDE = 1200
 UPSCALE = 2
 
 # A reading under this mean word confidence, or with fewer words than this,
-# is suspected of being a sideways page and gets an orientation check.
+# is a poor one: it is tried again another way, and suspected of being a
+# sideways page.
 POOR_CONFIDENCE = 65.0
 FEW_WORDS = 5
 
-# Tesseract's orientation confidence: ~9 on a clear page, ~0 on noise.
-MIN_ORIENTATION_CONFIDENCE = 1.5
+# Tesseract's automatic page layout is a gamble at some sizes: a dense
+# landscape page, skewed and JPEG-compressed, read at 300 DPI returned
+# nothing at all - not a bad reading, no words - while the same page a third
+# smaller, or read as one uniform block of text, gave 400 of its 430. So a
+# poor reading is retried at this fraction of the size, then as one block.
+FALLBACK_SCALE = 0.67
+
+# A word Tesseract is at least this sure of counts as read. Readings are
+# compared by how many such words they have, not by how many words they
+# have: a page read sideways, or as the wrong block, yields plenty of words
+# - at 30-45 percent - and counting those lets junk outscore a clean reading
+# with fewer words.
+CONFIDENT_WORD = 60.0
+FALLBACK_CONFIG = "--psm 6"
+
+# Tesseract's orientation confidence below which it is saying nothing at all:
+# ~9 on a clear page, 0.35 on a dense small-print one it still gets right.
+MIN_ORIENTATION_CONFIDENCE = 0.2
+
+# The other turns tried, in order, when Tesseract's own guess does not make
+# the page read well. Upside-down last: it is the rarest and the one OSD
+# most often reports as 0 rather than 180.
+QUARTER_TURNS = (90, 270, 180)
+
+# Fewer words than this and there is nothing to judge an orientation by.
+MIN_WORDS_TO_TURN = 3
+
+# Nonsense that looks like text: at least this many words, fewer than this
+# share of them sound, at a mean confidence under this.
+JUNK_MIN_WORDS = 10
+JUNK_SOUND_SHARE = 0.5
+JUNK_BELOW = 80.0
 
 # Tesseract reads some sideways pages correctly on its own - but reports each
 # word's box in the page's sideways frame, so line grouping and columns then
@@ -148,10 +179,12 @@ def prepare(image: Image.Image) -> tuple:
     return gray, scale
 
 
-def _recognise(image: Image.Image, languages: str) -> tuple:
+def _recognise(image: Image.Image, languages: str, config: str = "") -> tuple:
     """([geometry.Word], mean confidence or None) for a prepared image."""
     try:
-        data = pytesseract.image_to_data(image, lang=languages, output_type=Output.DICT)
+        data = pytesseract.image_to_data(
+            image, lang=languages, config=config, output_type=Output.DICT
+        )
     except Exception as exc:
         raise StageError(
             f"OCR failed: {exc}",
@@ -178,6 +211,7 @@ def _recognise(image: Image.Image, languages: str) -> tuple:
                 x1=left + data["width"][index],
                 top=top,
                 bottom=top + data["height"][index],
+                confidence=confidence,
             )
         )
         confidences.append(confidence)
@@ -186,8 +220,51 @@ def _recognise(image: Image.Image, languages: str) -> tuple:
     return words, mean
 
 
+def _poor(words: list, confidence) -> bool:
+    return confidence is None or confidence < POOR_CONFIDENCE or len(words) < FEW_WORDS
+
+
+def _read(image: Image.Image, languages: str) -> tuple:
+    """([geometry.Word], confidence) for an image, read the ordinary way.
+
+    One reading when it is good. When it is not - no words, few, or doubtful -
+    the same image is read smaller as well, and the better is kept. Words are
+    in the coordinates of the image passed in. Reading as one block of text is
+    not tried here: it is the mode that turns a sideways page into confident
+    noise, so it waits until the orientation has been checked.
+    """
+    best = _recognise(image, languages)
+    if not _poor(*best):
+        return best
+
+    size = (
+        max(1, round(image.width * FALLBACK_SCALE)),
+        max(1, round(image.height * FALLBACK_SCALE)),
+    )
+    smaller, confidence = _recognise(
+        image.resize(size, Image.Resampling.LANCZOS), languages
+    )
+    scaled = [
+        geometry.Word(
+            text=w.text,
+            x0=w.x0 / FALLBACK_SCALE,
+            x1=w.x1 / FALLBACK_SCALE,
+            top=w.top / FALLBACK_SCALE,
+            bottom=w.bottom / FALLBACK_SCALE,
+            confidence=w.confidence,
+        )
+        for w in smaller
+    ]
+    return (scaled, confidence) if _worth(scaled, confidence) > _worth(*best) else best
+
+
 def _orientation(image: Image.Image) -> int:
-    """Degrees clockwise to turn the page upright, 0 when unsure."""
+    """Degrees clockwise Tesseract says the page must be turned, 0 if it cannot say.
+
+    Only a first guess. Its confidence is a poor guide: it is 0.35 on a dense,
+    small-print page it gets exactly right and 1.8 on an upright one it calls
+    upside down. What decides is whether the turned page then reads better.
+    """
     try:
         osd = pytesseract.image_to_osd(image, output_type=Output.DICT)
     except Exception:
@@ -203,9 +280,50 @@ def _turn(image: Image.Image, clockwise: int) -> Image.Image:
     return image.rotate(-clockwise, expand=True, fillcolor=255)
 
 
+def _sound(word) -> bool:
+    """A word that looks like one: three characters or more, mostly letters or
+    digits, and one Tesseract is confident of. A page read the wrong way up or
+    the wrong way round yields plenty of one-character tokens - bars, equals
+    signs, stray letters - that it is surprisingly sure of."""
+    text = word.text
+    return (
+        len(text) >= 3
+        and sum(char.isalnum() for char in text) >= 0.6 * len(text)
+        and word.confidence >= CONFIDENT_WORD
+    )
+
+
 def _worth(words: list, confidence) -> float:
-    """One number to compare two readings of the same page by."""
-    return (confidence or 0.0) * len(words)
+    """One number to compare two readings of the same page by.
+
+    How many sound words it has, with mean confidence as the tie-break (it is
+    at most 100, so it can never outweigh a whole word).
+    """
+    return sum(1 for word in words if _sound(word)) + (confidence or 0.0) / 1000.0
+
+
+def _suspect(words: list, confidence) -> bool:
+    """Whether a reading looks wrong enough to try turning the page.
+
+    Not when there is next to nothing to read: a blank page - the back of a
+    sheet - has no orientation, and turning it four ways would cost a dozen
+    recognition passes to learn that. Nor a sparse page read confidently, such
+    as a cover or a signature sheet.
+
+    Otherwise: doubtful by confidence; or shaped like sideways text; or
+    plausible-looking nonsense - plenty of words, but mostly one or two
+    characters, at a confidence that is middling rather than high. A numeric
+    table is mostly short tokens too, but Tesseract reads it at high
+    confidence, so it is not suspected.
+    """
+    if len(words) < MIN_WORDS_TO_TURN:
+        return False
+    if (confidence or 0.0) < POOR_CONFIDENCE or _looks_sideways(words):
+        return True
+    if len(words) < JUNK_MIN_WORDS:
+        return False
+    sound = sum(1 for word in words if _sound(word))
+    return sound < JUNK_SOUND_SHARE * len(words) and (confidence or 0.0) < JUNK_BELOW
 
 
 def _looks_sideways(words: list) -> bool:
@@ -220,29 +338,46 @@ def _looks_sideways(words: list) -> bool:
 
 
 def read_page(image: Image.Image, languages: str | None = None) -> OcrPage:
-    """Read one page image: prepare it, OCR it, lay the words out."""
+    """Read one page image: prepare it, OCR it, lay the words out.
+
+    In order, stopping as soon as a reading is good: the ordinary reading, that
+    again smaller; then, if it looks wrong, the page turned - the way Tesseract
+    guesses first, then the other quarter turns - keeping a turn only if the
+    page reads better for it; and last, the page read as one uniform block.
+    """
     languages = resolve_languages(languages)
     prepared, _ = prepare(image)
 
-    words, confidence = _recognise(prepared, languages)
+    words, confidence = _read(prepared, languages)
     rotation = 0
+    upright = prepared
 
     sideways = _looks_sideways(words)
-    poor = confidence is None or confidence < POOR_CONFIDENCE or len(words) < FEW_WORDS
-    if settings.OCR_DETECT_ROTATION and (poor or sideways):
-        turn = _orientation(prepared)
-        if turn:
+    if settings.OCR_DETECT_ROTATION and _suspect(words, confidence):
+        guess = _orientation(prepared)
+        for turn in dict.fromkeys([guess, *QUARTER_TURNS]):
+            if not turn or turn == rotation:
+                continue
             rotated = _turn(prepared, turn)
-            again, again_confidence = _recognise(rotated, languages)
+            again, again_confidence = _read(rotated, languages)
             before = _worth(words, confidence)
             after = _worth(again, again_confidence)
-            keep = (
-                after >= SIDEWAYS_KEEPS_AT_LEAST * before
-                if sideways
-                else after > before
+            # A page that was plainly sideways takes the upright reading unless
+            # it is materially worse; otherwise it must simply be better.
+            keep = after > before or (
+                sideways and after >= SIDEWAYS_KEEPS_AT_LEAST * before
             )
             if keep:
                 words, confidence, rotation = again, again_confidence, turn
+                upright = rotated
+                sideways = False
+            if not _suspect(words, confidence):
+                break
+
+    if _poor(words, confidence):
+        block, block_confidence = _recognise(upright, languages, FALLBACK_CONFIG)
+        if _worth(block, block_confidence) > _worth(words, confidence):
+            words, confidence = block, block_confidence
 
     return _compose(words, confidence, rotation, languages)
 
@@ -277,7 +412,7 @@ def read_words(image: Image.Image, languages: str | None = None) -> list:
     passed in.
     """
     prepared, scale = prepare(image)
-    words, _ = _recognise(prepared, resolve_languages(languages))
+    words, _ = _read(prepared, resolve_languages(languages))
     if scale == 1.0:
         return words
     return [
@@ -287,6 +422,7 @@ def read_words(image: Image.Image, languages: str | None = None) -> list:
             x1=word.x1 / scale,
             top=word.top / scale,
             bottom=word.bottom / scale,
+            confidence=word.confidence,
         )
         for word in words
     ]

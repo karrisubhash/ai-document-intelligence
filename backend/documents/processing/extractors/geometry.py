@@ -100,6 +100,9 @@ class Word:
     x1: float
     top: float
     bottom: float
+    # How sure the reader was of this word, 0-100. Layout ignores it; whoever
+    # compares two readings of a page does not.
+    confidence: float = 100.0
 
     @property
     def height(self) -> float:
