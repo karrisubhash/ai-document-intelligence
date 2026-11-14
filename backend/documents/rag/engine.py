@@ -504,7 +504,8 @@ def _ask(
     # A generative model, not the score floor, decides whether a passage
     # answers the question. See documents.rag.judging.
     answerer = get_answerer()
-    if judging.model_can_judge(answerer):
+    model_writes = judging.model_can_judge(answerer)
+    if model_writes:
         judged = judging.admit(reranked, evidence, retrieval_ranks)
         judged_ids = {id(item) for item in judged}
         evidence_ids = {id(item) for item in evidence}
@@ -527,6 +528,20 @@ def _ask(
                 f"{', or they open the document asked about' if leading else ''}"
             )
 
+        # The chunks either side of the best passages, so an answer that runs
+        # over a chunk boundary reaches the model whole. Only around what the
+        # reranker vouched for, and after every other passage, so they fill
+        # whatever room is left and displace nothing.
+        beside = judging.neighbours(
+            user, evidence, {item.chunk.id for item in [*reranked, *relevant]}
+        )
+        if beside:
+            relevant = [*relevant, *beside]
+            notes.append(
+                f"{len(beside)} neighbouring passage(s) were added beside the "
+                f"best-ranked ones"
+            )
+
     if not relevant:
         # No relevant_document_ids: nothing passed the floor, so no figure
         # here is evidence of anything.
@@ -546,12 +561,25 @@ def _ask(
         )
 
     # --- Build context ----------------------------------------------------
+    # A model is shown more than a quote can use: see RAG_CONTEXT_BUDGET_GENERATIVE.
+    # The quoting path keeps its own, so what was measured for it does not move.
+    budget, max_passages = (
+        (
+            getattr(settings, "RAG_CONTEXT_BUDGET_GENERATIVE", 14000),
+            getattr(settings, "RAG_MAX_PASSAGES_GENERATIVE", 12),
+        )
+        if model_writes
+        else (
+            getattr(
+                settings, "RAG_CONTEXT_BUDGET", context_builder.DEFAULT_CONTEXT_BUDGET
+            ),
+            getattr(settings, "RAG_MAX_PASSAGES", 8),
+        )
+    )
     built = context_builder.build(
         relevant,
-        budget=getattr(
-            settings, "RAG_CONTEXT_BUDGET", context_builder.DEFAULT_CONTEXT_BUDGET
-        ),
-        max_passages=getattr(settings, "RAG_MAX_PASSAGES", 8),
+        budget=budget,
+        max_passages=max_passages,
         # A degraded cross-encoder scored lexically, so it gets the lexical
         # rules too.
         semantic_scores=bool(getattr(reranker, "semantic_scores", False))

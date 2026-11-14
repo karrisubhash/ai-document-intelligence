@@ -32,12 +32,14 @@ ranked first - are handed over with the rest, flagged `model_judged`:
 import re
 
 from django.conf import settings
+from django.db.models import Q
 
 from . import gateway as gateway_module
 from .reranking import RerankedChunk
 
 DEFAULT_MIN_PASSAGES = 6
 DEFAULT_RETRIEVAL_TOP = 2
+DEFAULT_NEIGHBOUR_ANCHORS = 3
 
 # How many opening chunks of a document the question is scoped to are read
 # even when none of them scored: "summarise this document" matches nothing in
@@ -148,6 +150,78 @@ def leading_chunks(user, document_id, taken_chunk_ids, *, limit=LEADING_CHUNKS) 
                 chunk=chunk,
                 score=0.0,
                 signals={"model_judged": True, "leading": True},
+            )
+        )
+    return items
+
+
+def neighbours(user, anchors, taken_chunk_ids, *, limit=None) -> list:
+    """The chunks just before and after the most relevant passages.
+
+    A list, a table of conditions or a procedure that runs over a chunk
+    boundary reaches the model as two halves of an answer, and the half
+    that was not retrieved is simply missing. These are the chunks either
+    side of the top `limit` anchors, in the same document and pass.
+
+    They are real chunks, so a citation to one is checked like any other.
+    They are fetched through the same authorized queryset as search (a
+    neighbour of a chunk you may read is in a document you may read, and that
+    is not left to assumption), flagged `model_judged` so a quote never uses
+    them, and returned after every anchor so they only fill the budget the
+    anchors left.
+    """
+    limit = (
+        getattr(settings, "RAG_NEIGHBOUR_ANCHORS", DEFAULT_NEIGHBOUR_ANCHORS)
+        if limit is None
+        else limit
+    )
+
+    wanted = {}
+    for item in anchors[:limit]:
+        chunk = item.chunk
+        content_id = getattr(chunk, "document_content_id", None)
+        index = getattr(chunk, "chunk_index", None)
+        if content_id is None or index is None:
+            continue
+        for step, side in ((-1, "before"), (1, "after")):
+            key = (content_id, index + step)
+            if index + step >= 0 and key not in wanted:
+                wanted[key] = (chunk.id, side)
+    if not wanted:
+        return []
+
+    from documents.search import service as search_service
+
+    condition = Q()
+    for content_id, index in wanted:
+        condition |= Q(document_content_id=content_id, chunk_index=index)
+
+    queryset, _ = search_service.authorized_chunks(user)
+    rows = {
+        (row.document_content_id, row.chunk_index): row
+        for row in queryset.filter(condition)
+        .exclude(id__in=list(taken_chunk_ids))
+        .select_related("document_version__document")
+        .defer(*search_service.CANDIDATE_DEFERRED_FIELDS)
+    }
+
+    items = []
+    for key, (anchor_id, side) in wanted.items():
+        row = rows.get(key)
+        if row is None:
+            continue
+        text = (row.text or "").strip()
+        if len(text) < MIN_CHARS or not _HAS_LETTER.search(text):
+            continue
+        items.append(
+            RerankedChunk(
+                chunk=row,
+                score=0.0,
+                signals={
+                    "model_judged": True,
+                    "neighbour_of": anchor_id,
+                    "side": side,
+                },
             )
         )
     return items

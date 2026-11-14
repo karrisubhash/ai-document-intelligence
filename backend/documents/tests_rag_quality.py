@@ -691,3 +691,190 @@ class EngineShowsTheCheckedAnswerTests(TestCase):
 
         self.assertFalse(answer.abstained, answer.grounding_failures)
         self.assertEqual([c["marker"] for c in answer.citations], [1])
+
+
+# --- Chunks beside the best ones, and more room for a model -----------------
+
+
+def index_handbook(owner):
+    """A document of several chunks, each line numbered so a chunk's place is
+    readable from its text."""
+    body = "\n".join(
+        f"Section {n}. " + ("The registry keeps records of enrolment. " * 12)
+        for n in range(1, 9)
+    ).encode()
+    document = Document.objects.create(
+        title="Registry Handbook",
+        document_type="REGULATION",
+        owner=owner,
+        department="Registry",
+    )
+    version = document.versions.create(
+        version_number=1,
+        file=ContentFile(body, name="handbook.txt"),
+        file_name="handbook.txt",
+        file_size=len(body),
+        uploaded_by=owner,
+    )
+    document.current_version = version
+    document.save(update_fields=["current_version"])
+    run_pipeline(ProcessingJob.objects.create(document_version=version).id)
+    return document
+
+
+@override_settings(
+    MEDIA_ROOT=MEDIA_ROOT,
+    DOCUMENT_EMBEDDING_PROVIDER="documents.processing.embedding.hashing.HashingEmbeddingProvider",
+)
+class NeighbourTests(TestCase):
+    def setUp(self):
+        self.owner = make_user("near_owner", department="Registry")
+        self.outsider = make_user("near_outsider", department="Physics")
+        self.document = index_handbook(self.owner)
+        version = self.document.current_version
+        version.refresh_from_db()
+        self.chunks = list(
+            version.chunks.filter(document_content=version.current_content).order_by(
+                "chunk_index"
+            )
+        )
+        self.assertGreaterEqual(len(self.chunks), 5)
+
+    def anchor(self, index):
+        return RerankedChunk(chunk=self.chunks[index], score=0.9, signals={})
+
+    def test_the_chunks_either_side_come_back_flagged_for_a_model(self):
+        beside = judging.neighbours(self.owner, [self.anchor(3)], set())
+
+        self.assertEqual(
+            [(i.chunk.chunk_index, i.signals["side"]) for i in beside],
+            [(2, "before"), (4, "after")],
+        )
+        self.assertTrue(all(i.signals["model_judged"] for i in beside))
+        self.assertTrue(
+            all(i.signals["neighbour_of"] == self.chunks[3].id for i in beside)
+        )
+
+    def test_the_first_chunk_has_nothing_before_it(self):
+        beside = judging.neighbours(self.owner, [self.anchor(0)], set())
+
+        self.assertEqual([i.signals["side"] for i in beside], ["after"])
+
+    def test_chunks_already_in_the_context_are_not_repeated(self):
+        taken = {self.chunks[4].id}
+
+        beside = judging.neighbours(self.owner, [self.anchor(3)], taken)
+
+        self.assertEqual([i.chunk.chunk_index for i in beside], [2])
+
+    def test_only_the_top_few_anchors_get_neighbours(self):
+        anchors = [self.anchor(1), self.anchor(3)]
+
+        beside = judging.neighbours(self.owner, anchors, set(), limit=1)
+
+        self.assertEqual(
+            {i.signals["neighbour_of"] for i in beside}, {self.chunks[1].id}
+        )
+
+    def test_someone_who_cannot_read_the_document_gets_no_neighbours(self):
+        self.assertEqual(judging.neighbours(self.outsider, [self.anchor(3)], set()), [])
+
+    def test_a_chunk_that_is_not_a_database_row_has_none(self):
+        self.assertEqual(
+            judging.neighbours(
+                self.owner, ranked(("A fake passage of enough text.", 0.9)), set()
+            ),
+            [],
+        )
+
+    def test_the_prompt_says_which_passage_a_neighbour_continues(self):
+        beside = judging.neighbours(self.owner, [self.anchor(3)], set())
+        built = ctx.build([self.anchor(3), *beside], semantic_scores=True)
+
+        prompt = ctx.render(built, "What does the registry keep?")
+
+        self.assertIn(
+            "the text directly before passage [1] in the same document", prompt
+        )
+        self.assertIn(
+            "the text directly after passage [1] in the same document", prompt
+        )
+        self.assertEqual([p.adjacent_marker for p in built.passages], [0, 1, 1])
+
+
+@override_settings(
+    MEDIA_ROOT=MEDIA_ROOT,
+    DOCUMENT_EMBEDDING_PROVIDER="documents.processing.embedding.hashing.HashingEmbeddingProvider",
+    RAG_ANSWERER_PROVIDER="groq",
+)
+class ModelContextTests(TestCase):
+    """What a model is shown, as opposed to what a quote is."""
+
+    def setUp(self):
+        self.owner = make_user("ctx_owner", department="Registry")
+        self.document = index_handbook(self.owner)
+        version = self.document.current_version
+        version.refresh_from_db()
+        self.chunks = list(
+            version.chunks.filter(document_content=version.current_content).order_by(
+                "chunk_index"
+            )
+        )
+
+    def ask(self, answerer, scores=None):
+        found = hits((self.chunks[3], 1.0))
+        with (
+            mock.patch.object(
+                engine.search_service, "search", return_value=FakeSearchResponse(found)
+            ),
+            mock.patch.object(engine, "get_answerer", return_value=answerer),
+            mock.patch.object(
+                engine, "get_reranker", return_value=LowScoreReranker(scores)
+            ),
+            mock.patch.object(
+                engine.context_builder, "build", wraps=engine.context_builder.build
+            ) as build,
+        ):
+            answer = rag.ask(self.owner, "What does the registry keep records of?")
+        return answer, build
+
+    def generative(self, client):
+        answerer = answerer_with(client)
+        answerer.gateway.available = lambda purpose: True
+        return answerer
+
+    def test_a_model_is_shown_neighbours_and_a_bigger_context(self):
+        client = StubChatClient(completion("It keeps records of enrolment [1]."))
+
+        answer, build = self.ask(
+            self.generative(client), scores={self.chunks[3].id: 0.9}
+        )
+
+        self.assertFalse(answer.abstained, answer.grounding_failures)
+        kwargs = build.call_args.kwargs
+        self.assertEqual(kwargs["budget"], 14000)
+        self.assertEqual(kwargs["max_passages"], 12)
+        prompt = client.calls[0]["messages"][1]["content"]
+        self.assertIn("the text directly before passage [1]", prompt)
+        self.assertIn("the text directly after passage [1]", prompt)
+        self.assertTrue(
+            any("neighbouring passage(s)" in note for note in answer.notes),
+            answer.notes,
+        )
+
+    def test_a_quote_is_given_neither(self):
+        answer, build = self.ask(ExtractiveAnswerer(), scores={self.chunks[3].id: 0.9})
+
+        kwargs = build.call_args.kwargs
+        self.assertEqual(kwargs["budget"], 8000)
+        self.assertEqual(kwargs["max_passages"], 8)
+        self.assertEqual(answer.passages_used, 1)
+
+    def test_a_quote_after_a_provider_failure_never_quotes_a_neighbour(self):
+        client = StubChatClient(raises=TimeoutError("timed out"))
+
+        answer, _ = self.ask(self.generative(client), scores={self.chunks[3].id: 0.9})
+
+        self.assertTrue(answer.answerer_fell_back)
+        for citation in answer.citations:
+            self.assertEqual(citation["chunk_id"], self.chunks[3].id)

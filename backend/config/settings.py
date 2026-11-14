@@ -951,6 +951,17 @@ RAG_MODEL_JUDGES_RELEVANCE = (
 RAG_MIN_PASSAGES = int(os.getenv("RAG_MIN_PASSAGES", "6"))
 RAG_ADMIT_RETRIEVAL_TOP = int(os.getenv("RAG_ADMIT_RETRIEVAL_TOP", "2"))
 
+# What a model is shown when it, not a quote, writes the answer. A model reads
+# a dozen passages as easily as eight, and an answer that spans a list or a
+# section needs the chunks around the one that scored best: the passages
+# either side of the top RAG_NEIGHBOUR_ANCHORS are added to whatever room
+# these leave. Roughly 3.5K tokens at 14,000 characters - inside Groq's 8K a
+# minute with the rules and a reply. The quoting path keeps RAG_CONTEXT_BUDGET
+# and RAG_MAX_PASSAGES above, so its measured behaviour does not move.
+RAG_CONTEXT_BUDGET_GENERATIVE = int(os.getenv("RAG_CONTEXT_BUDGET_GENERATIVE", "14000"))
+RAG_MAX_PASSAGES_GENERATIVE = int(os.getenv("RAG_MAX_PASSAGES_GENERATIVE", "12"))
+RAG_NEIGHBOUR_ANCHORS = int(os.getenv("RAG_NEIGHBOUR_ANCHORS", "3"))
+
 # Share of an answer's content words that must appear in the passages it
 # cites. This is the BACKSTOP behind grounding's fact check, not the gate -
 # see documents/rag/grounding.py for why it is no longer 0.55. Raising it
