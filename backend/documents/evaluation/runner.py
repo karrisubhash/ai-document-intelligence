@@ -86,6 +86,20 @@ def capture_configuration() -> dict:
             "candidates": getattr(settings, "SEARCH_CANDIDATES", None),
             "context_budget": getattr(settings, "RAG_CONTEXT_BUDGET", None),
             "max_passages": getattr(settings, "RAG_MAX_PASSAGES", None),
+            # What a MODEL is shown, which is what the live site's answers are
+            # written from; the two above are the quoting path's.
+            "context_budget_generative": getattr(
+                settings, "RAG_CONTEXT_BUDGET_GENERATIVE", None
+            ),
+            "max_passages_generative": getattr(
+                settings, "RAG_MAX_PASSAGES_GENERATIVE", None
+            ),
+            "model_judges_relevance": getattr(
+                settings, "RAG_MODEL_JUDGES_RELEVANCE", None
+            ),
+            "min_passages": getattr(settings, "RAG_MIN_PASSAGES", None),
+            "neighbour_anchors": getattr(settings, "RAG_NEIGHBOUR_ANCHORS", None),
+            "grounding_retry": getattr(settings, "RAG_GROUNDING_RETRY", None),
         },
     }
 

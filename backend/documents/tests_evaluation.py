@@ -181,6 +181,21 @@ class CorrectnessTests(TestCase):
             with self.subTest(answer=answer):
                 self.assertFalse(correctness.is_correct(answer, expected))
 
+    def test_a_citation_marker_is_not_a_figure_the_answer_states(self):
+        """ "[2]" is a reference. It satisfied an expected "2" the answer never
+        stated, which made a wrong answer measure as right."""
+        for answer, expected in (
+            ("You get 3 attempts [2].", "2 attempts"),
+            ("You get 3 attempts [2, 3].", "2 attempts"),
+            ("A student may borrow 4 books [1].", "1 book"),
+        ):
+            with self.subTest(answer=answer):
+                self.assertFalse(correctness.is_correct(answer, expected))
+
+        self.assertTrue(
+            correctness.is_correct("You get 2 attempts [2][3].", "2 attempts")
+        )
+
     def test_every_figure_the_expected_answer_states_must_be_there(self):
         expected = "Rs 500 per day, up to 30 days"
 

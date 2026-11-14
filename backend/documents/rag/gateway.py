@@ -297,8 +297,11 @@ def is_capacity(exc) -> bool:
         if exc.reason in (NO_CAPACITY, ALL_COOLING, RESERVED):
             return True
         cause = exc.__cause__
-        return cause is not None and _status(cause) in (429, 503)
-    return _status(exc) in (429, 503)
+        return cause is not None and _status(cause) in (413, 429, 503)
+    # 413 is a free tier's tokens-per-minute window refusing a request: the
+    # link is rested for a minute (see Gateway._failed), so it comes back by
+    # itself like the rest of these.
+    return _status(exc) in (413, 429, 503)
 
 
 def _without_retries(client):

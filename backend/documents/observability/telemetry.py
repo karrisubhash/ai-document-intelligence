@@ -196,6 +196,13 @@ def llm_called(response, duration_seconds: float):
 
 
 @_safe
+def grounding_recovery(outcome: str):
+    """A first draft that failed grounding, and how it ended: repaired,
+    retried_grounded or retried_failed."""
+    metrics.grounding_recoveries.labels(outcome=str(outcome)).inc()
+
+
+@_safe
 def rerank_degraded(reranker_name: str):
     metrics.rerank_degraded.labels(reranker=str(reranker_name)).inc()
 

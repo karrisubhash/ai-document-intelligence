@@ -192,7 +192,10 @@ def _unwrap(text: str) -> list:
 # a passage that was never in the context, and [2] silently attached an
 # unrelated passage. Parentheses keep the reference readable and the figure
 # checkable, and leave square brackets to the markers alone.
-DOCUMENT_BRACKET = re.compile(r"\[(\d{1,3})\]")
+#
+# A group ("earlier studies [2, 12]") is read as two citations by the check
+# that reads an answer's own "[1, 2]" as two, so it is neutralised too.
+DOCUMENT_BRACKET = re.compile(r"\[(\d{1,3}(?:\s*[,;]\s*\d{1,3})*)\]")
 
 
 def _neutralise_brackets(text: str) -> str:

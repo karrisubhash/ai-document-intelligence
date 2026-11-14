@@ -85,12 +85,27 @@ MAX_DEPENDENT_TERMS = 1
 # mandatory to...?" / "Is it possible for...?", not a reference to anything
 # said earlier. Read as a pronoun it made those questions "follow-ups", and
 # the previous turn's vocabulary was appended to the retrieval query.
-_EXPLETIVE_ADJECTIVES = (
-    r"possible|impossible|mandatory|compulsory|necessary|required|allowed"
-    r"|permitted|permissible|acceptable|advisable|optional|essential|legal"
-    r"|okay|ok|fine|true|worth|ever|enough|safe"
+#
+# It is a placeholder only when what the adjective is ABOUT follows it: "Is it
+# mandatory TO register", "Is it possible THAT...", "Is it possible FOR
+# students to defer". "Is it allowed on weekends?" and "Is it required for
+# part-time students?" refer to something said before, and were read as
+# independent questions. Adjectives that take a "for X" subject are the first
+# group; the rest take only a to-clause, a that-clause, "whether" or "if".
+_EXPLETIVE_WITH_SUBJECT = (
+    r"possible|impossible|necessary|mandatory|compulsory|advisable|essential"
+    r"|worth|permissible"
 )
-_EXPLETIVE_TAIL = rf"(?:be\s+)?(?:{_EXPLETIVE_ADJECTIVES})"
+_EXPLETIVE_CLAUSE_ONLY = (
+    r"required|allowed|permitted|acceptable|optional|legal|okay|ok|fine|true|ever"
+    r"|enough|safe"
+)
+_EXPLETIVE_TAIL = (
+    r"(?:be\s+)?(?:"
+    rf"(?:{_EXPLETIVE_WITH_SUBJECT})(?=\s+(?:to|that|whether|if|for)\b)"
+    rf"|(?:{_EXPLETIVE_CLAUSE_ONLY})(?=\s+(?:to|that|whether|if)\b)"
+    r")"
+)
 EXPLETIVE_IT = re.compile(rf"\s+{_EXPLETIVE_TAIL}\b", re.I)
 
 REFERRING = re.compile(

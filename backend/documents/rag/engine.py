@@ -16,6 +16,7 @@ would hide which part is failing.
 """
 
 import functools
+import logging
 import time
 from dataclasses import dataclass, field
 
@@ -28,6 +29,8 @@ from documents.search import service as search_service
 from . import context as context_builder
 from . import grounding, judging, reranking, streaming, tables
 from .llm import ABSTENTION_TEXT
+
+logger = logging.getLogger("adi.rag")
 
 # How many retrieved candidates are handed to the reranker. Larger than the
 # context can hold, because reranking is the step that decides which of them
@@ -271,6 +274,11 @@ def _figure_hints(document_ids) -> list:
         # extraction passes still have their figures, and pointing a reader
         # at a page of a superseded version is worse than saying nothing.
         .filter(document_version=F("document_version__document__current_version"))
+        # ...and only the extraction pass currently live for it, as the text
+        # query below is: a reprocess keeps the old pass's figures, and hinting
+        # at one of them while judging "was this page read" by the new pass
+        # compared two different extractions of the same page.
+        .filter(document_content=F("document_version__current_content"))
         .values_list(
             "document_version__document_id",
             "document_version__document__title",
@@ -345,6 +353,36 @@ def _figure_hints(document_ids) -> list:
         )
 
     return hints
+
+
+def _check(text, built):
+    """grounding.validate, failing CLOSED.
+
+    The check is the one thing standing between a model's words and a reader,
+    and it parses whatever the documents and the model happen to contain. If it
+    ever raises - a spelling nobody anticipated, a malformed passage - the
+    answer is WITHHELD, as it would be for any other failure, and the failure
+    is logged. It must not become a 500, and it must never become a pass.
+    """
+    try:
+        return grounding.validate(text, built, abstained=False)
+    except Exception:  # noqa: BLE001 - see above
+        logger.exception("grounding.check_failed")
+        report = grounding.GroundingReport(grounded=False, text=text or "")
+        report.failures.append(
+            "the grounding check itself failed on this answer, so it was withheld"
+        )
+        return report
+
+
+def _repair(report, built):
+    """grounding.repair_citations, which may only ever help: an error leaves
+    the answer as it was."""
+    try:
+        return grounding.repair_citations(report, built)
+    except Exception:  # noqa: BLE001
+        logger.exception("grounding.repair_failed")
+        return report.text, []
 
 
 def _abstain(question, reason, started, **extra) -> RagAnswer:
@@ -504,14 +542,22 @@ def _ask(
     # A generative model, not the score floor, decides whether a passage
     # answers the question. See documents.rag.judging.
     answerer = get_answerer()
-    model_writes = judging.model_can_judge(answerer)
+    # Whether a model will write this answer. The larger context, the chunks
+    # beside the best passages and the corrective retry follow from that;
+    # handing it the passages the floor rejects is a separate switch.
+    model_writes = judging.model_will_answer(answerer)
     if model_writes:
-        judged = judging.admit(reranked, evidence, retrieval_ranks)
+        judged = []
+        leading = []
+        if judging.enabled():
+            judged = judging.admit(reranked, evidence, retrieval_ranks)
+            # "Already in the context" means in the context: a passage that was
+            # retrieved but not admitted is not, and is exactly the chunk that
+            # continues a list.
+            in_context = {item.chunk.id for item in [*evidence, *judged]}
+            leading = judging.leading_chunks(user, document_id, in_context)
         judged_ids = {id(item) for item in judged}
         evidence_ids = {id(item) for item in evidence}
-        leading = judging.leading_chunks(
-            user, document_id, {item.chunk.id for item in reranked}
-        )
         if judged or leading:
             relevant = [
                 item
@@ -533,7 +579,7 @@ def _ask(
         # reranker vouched for, and after every other passage, so they fill
         # whatever room is left and displace nothing.
         beside = judging.neighbours(
-            user, evidence, {item.chunk.id for item in [*reranked, *relevant]}
+            user, evidence, {item.chunk.id for item in relevant}
         )
         if beside:
             relevant = [*relevant, *beside]
@@ -684,7 +730,7 @@ def _ask(
     # --- Verify before returning -----------------------------------------
     streaming.status(streaming.VERIFYING)
     stage_started = time.monotonic()
-    report = grounding.validate(response.text, built, abstained=False)
+    report = _check(response.text, built)
     timings["grounding"] = _elapsed_ms(stage_started)
 
     # A rejected answer that states figures the passages lack gets two chances
@@ -698,11 +744,12 @@ def _ask(
     #    exactly as the first answer was; if it fails again the FIRST failure
     #    stands, so the hallucination signal still counts it.
     if not report.ok and report.unsupported_facts and not report.invalid_markers:
-        repaired_text, repairs = grounding.repair_citations(report, built)
+        repaired_text, repairs = _repair(report, built)
         if repairs:
-            repaired = grounding.validate(repaired_text, built, abstained=False)
+            repaired = _check(repaired_text, built)
             if repaired.ok:
                 report = repaired
+                telemetry.grounding_recovery("repaired")
                 notes.append(
                     "added the citation the answer left out for "
                     + ", ".join(f"{fact} -> [{marker}]" for fact, marker in repairs)
@@ -713,7 +760,7 @@ def _ask(
             and getattr(settings, "RAG_GROUNDING_RETRY", True)
             and response.generative is True
             and not fell_back_from
-            and judging.model_can_judge(answerer)
+            and judging.model_will_answer(answerer)
         ):
             # A client was shown the first draft as it streamed.
             streaming.reset()
@@ -730,30 +777,43 @@ def _ask(
 
             second_fell_back = (second.metadata or {}).get("fell_back_from")
             second_report = (
-                grounding.validate(second.text, built, abstained=False)
+                _check(second.text, built)
                 if second.generative is True
                 and not second.abstained
                 and not second_fell_back
                 else None
             )
             retried = "; ".join(report.failures[:1])
+
+            # What this answer cost is both calls, whichever one is shown.
+            first_llm = dict(common.get("llm") or {})
+            second_llm = llm_metadata(second)
+            spent = {
+                key: (first_llm.get(key) or 0) + (second_llm.get(key) or 0)
+                for key in ("prompt_tokens", "completion_tokens")
+            }
+
             if second_report is not None and second_report.ok:
                 notes.append(
                     f"the first answer was rejected ({retried}); "
                     f"asked the model once more and its second answer was grounded"
                 )
                 response, report = second, second_report
+                telemetry.grounding_recovery("retried_grounded")
                 common.update(
                     model_name=response.model_name,
                     model_version=response.model_version,
                     generative=response.generative,
-                    llm=llm_metadata(response),
+                    llm={**second_llm, **spent} if second_llm else first_llm,
                 )
             else:
                 notes.append(
                     f"the first answer was rejected ({retried}); asked the model "
                     f"once more and it did not produce a grounded answer either"
                 )
+                telemetry.grounding_recovery("retried_failed")
+                if first_llm:
+                    common["llm"] = {**first_llm, **spent}
 
     if not report.ok:
         # The model said something; it could not be substantiated. Section

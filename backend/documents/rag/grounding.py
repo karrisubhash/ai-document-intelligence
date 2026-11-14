@@ -117,8 +117,7 @@ class GroundingReport:
     unsupported_facts: tuple = ()
     failures: list = field(default_factory=list)
     # The answer as it should be shown: citations written as a group
-    # ("[1, 2]") split into one marker each, and an off-by-one marker that
-    # points at no passage removed. Empty until validate() has run.
+    # ("[1, 2]") split into one marker each. Empty until validate() has run.
     text: str = ""
 
     @property
@@ -212,11 +211,41 @@ def _support_facts(text: str) -> set:
     """
     prepared = fact_forms.prepare(text)
     supported = _facts(prepared)
-    supported |= fact_forms.extract_dates(prepared)[1]
+    dates = fact_forms.extract_dates(prepared)[1]
+    # A full date also supports an answer that leaves its year out.
+    supported |= dates | fact_forms.year_less(dates)
     supported |= fact_forms.number_words(prepared)
     for fact in list(supported):
         supported |= fact_forms.range_years(fact)
     return supported
+
+
+# A year, or an academic year, as a title states one.
+YEAR_LIKE = re.compile(r"(?:19|20)\d{2}(?:-(?:19|20)\d{2})?")
+
+
+def _title_facts(text: str) -> set:
+    """The years a document's title states, as whole figures."""
+    years = {
+        fact for fact in _facts(fact_forms.prepare(text)) if YEAR_LIKE.fullmatch(fact)
+    }
+    for fact in list(years):
+        years |= fact_forms.range_years(fact)
+    return years
+
+
+def _fact_supported(fact: str, supported: set, cores: set) -> bool:
+    """Whether a figure the answer states is one the passages state.
+
+    The same figure, or the same bare number with a unit or currency stuck to
+    it. A RANGE ("2019-2021", "Rs 1500-2000") is supported by itself or by both
+    of its ends: a passage that says "from 2019 to 2021" states it, and an
+    answer that writes it with a dash must not lose to the dash.
+    """
+    if fact in supported or _numeric_core(fact) in cores:
+        return True
+    ends = fact_forms.range_parts(fact)
+    return bool(ends) and all(_fact_supported(end, supported, cores) for end in ends)
 
 
 def validate(answer_text: str, context, *, abstained: bool = False) -> GroundingReport:
@@ -237,34 +266,27 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
     # printed in a retrieved passage ("Government Order [12]") is the
     # document's own reference, quoted - not a citation of passage 12.
     # Counting it made a verbatim, correct quote fail as ungrounded.
+    #
+    # Read the way a citation is read: a document's own "[2, 12]" is two
+    # bracketed numbers, exactly as the answer's would be.
     quoted = {
         int(match.group(1))
         for passage in context.passages
-        for match in MARKER.finditer(passage.text)
+        for match in MARKER.finditer(fact_forms.normalize_markers(passage.text))
     }
     cited = tuple(
         marker
         for marker in extract_markers(answer_text)
         if marker in available or marker not in quoted
     )
-    invalid = tuple(marker for marker in cited if marker not in available)
-
-    # [0], or the marker one past the last passage, BESIDE markers that do
-    # resolve is a slip in counting, not a fabricated source - and the answer
-    # is right about everything the other markers point at. It is removed and
-    # said so, instead of discarding the answer. A citation to [7] among six
-    # passages, or any invalid marker when nothing else resolves, is still the
-    # cheapest hallucination signal there is, and still fails.
-    stray = {0, max(available) + 1} if available else set()
-    if invalid and len(invalid) < len(cited) and all(m in stray for m in invalid):
-        answer_text = re.sub(
-            r"[ \t]*\[(?:" + "|".join(str(m) for m in invalid) + r")\]", "", answer_text
-        )
-        report.text = answer_text
-        cited = tuple(marker for marker in cited if marker in available)
-        invalid = ()
     report.cited_markers = cited
 
+    # A citation to a passage that does not exist is the cheapest hallucination
+    # signal there is, and it stays fatal. It was once forgiven when it was
+    # only off by one ([0], or the number after the last passage) - and that
+    # let a whole uncited, unsourced sentence through with its marker quietly
+    # deleted.
+    invalid = tuple(marker for marker in cited if marker not in available)
     report.invalid_markers = invalid
     if invalid:
         report.grounded = False
@@ -287,6 +309,9 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
     supporting = " ".join(
         by_marker[marker].support_text for marker in cited if marker in by_marker
     )
+    titles = " ".join(
+        by_marker[marker].title_text for marker in cited if marker in by_marker
+    )
 
     # --- Check 3: every stated fact is in a cited passage ----------------
     supported_facts = _support_facts(supporting)
@@ -299,11 +324,17 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
     supported_facts |= derived
     stated_facts = _answer_facts(answer_text)
     supported_cores = {_numeric_core(fact) for fact in supported_facts} - {None}
+    # The year a document's title states ("Fee Structure 2024-25") is on the
+    # page the reader checks against, and is the year of every figure in it. It
+    # counts as a whole figure and nothing else: not through the bare-number
+    # equivalence above ("Hostel Rules v2" does not support "2 weeks"), and
+    # not a title's other digits.
+    supported_facts |= _title_facts(titles)
 
     unsupported_facts = sorted(
         fact
         for fact in stated_facts
-        if fact not in supported_facts and _numeric_core(fact) not in supported_cores
+        if not _fact_supported(fact, supported_facts, supported_cores)
     )
     report.unsupported_facts = tuple(unsupported_facts)
 
@@ -317,7 +348,11 @@ def validate(answer_text: str, context, *, abstained: bool = False) -> Grounding
     # --- Check 4: the prose is drawn from those passages ------------------
     # A derived figure is evidence here too: "The total is 15,000" would
     # otherwise score as a sentence about words the table never uses.
-    support_terms = set(_prose_terms(supporting)) | set(_prose_terms(" ".join(derived)))
+    support_terms = (
+        set(_prose_terms(supporting))
+        | set(_prose_terms(titles))
+        | set(_prose_terms(" ".join(derived)))
+    )
     answer_terms = _prose_terms(MARKER.sub(" ", answer_text))
 
     if not answer_terms:
@@ -364,7 +399,15 @@ def citations_for(answer_text: str, context) -> list:
 # needed more than two is an answer that was not written from what it cites.
 MAX_REPAIRS = 2
 
-_SENTENCE = re.compile(r"[^.!?\n]+(?:[.!?]+|\n|$)")
+# A full stop that ends a sentence is followed by whitespace; the one inside
+# "B.Tech", "3.5" or "15.03.2025" is not. A line break ends one too.
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
+_MARKER_TOKEN = re.compile(r"\[\d{1,3}\]")
+
+# What a clause and the passage it is attributed to must share besides the
+# figure: two words, so the clause is about what the passage is about and not
+# merely a number that happens to be in it.
+MIN_SHARED_WORDS = 2
 
 
 def _distinctive(fact: str) -> bool:
@@ -376,31 +419,52 @@ def _distinctive(fact: str) -> bool:
     return fact.startswith("date:") or len(re.sub(r"\D", "", fact)) >= 3
 
 
-def _supports(passage, fact: str) -> bool:
-    supported = _support_facts(passage.support_text)
+def _stated_in(passage, fact: str) -> bool:
+    """Whether the passage's OWN text states the figure: not its title (which
+    counts for a year and nothing else) and not its column labels."""
+    supported = _support_facts(passage.text)
     return fact in supported or (
         _numeric_core(fact) is not None
-        and _numeric_core(fact) in {_numeric_core(f) for f in supported} - {None}
+        and _numeric_core(fact) in ({_numeric_core(f) for f in supported} - {None})
     )
+
+
+def _words(text: str) -> set:
+    return {term for term in _prose_terms(text) if not any(c.isdigit() for c in term)}
 
 
 def repair_citations(report: GroundingReport, context):
     """(the answer with a marker added where one was missing, [(figure, marker)]).
 
-    An answer that cites [1] and states a figure that is written in [2], and
-    in no other passage, did not invent it: it forgot to cite [2], and was
-    discarded whole for it. When a distinctive figure is in exactly one
-    passage the answer did not cite, that passage's marker is added to the
-    sentence that states it. The result is checked again from scratch, so the
-    repair can only ever make a figure traceable, never excuse one that is not
-    in the context. Never done for an answer that cites nothing valid.
+    An answer that cites [1] for one clause and states a figure in a LATER
+    clause that is written in [2], and in no other passage, did not invent it:
+    it forgot to cite [2], and was discarded whole for it. The marker is added
+    to that clause. It is deliberately narrow, because what it excuses is a
+    figure the answer's own citations do not support:
+
+    - Only a figure stated AFTER the last marker of its sentence. A figure that
+      a marker follows ("The B.Tech hostel fee is Rs 85,000 [1]") is the model's
+      own attribution, and if [1] does not state it the model mixed passages up:
+      that is the failure the check exists to catch, and it is not repaired.
+    - Only from a passage's own text, in exactly one uncited passage, and only
+      when the clause shares at least two words with it.
+    - Never a table row, never for an answer that cites nothing valid, at most
+      twice, and the result is checked again from scratch.
     """
     text = report.text
     cited = set(report.cited_markers)
     if not report.unsupported_facts or not cited or report.invalid_markers:
         return text, []
 
+    spans = []
+    start = 0
+    for match in _SENTENCE_BREAK.finditer(text):
+        spans.append((start, match.start()))
+        start = match.end()
+    spans.append((start, len(text)))
+
     repairs = []
+    insertions = {}
     for fact in report.unsupported_facts:
         if len(repairs) >= MAX_REPAIRS:
             break
@@ -409,23 +473,31 @@ def repair_citations(report: GroundingReport, context):
         owners = [
             passage
             for passage in context.passages
-            if passage.marker not in cited and _supports(passage, fact)
+            if passage.marker not in cited and _stated_in(passage, fact)
         ]
         if len(owners) != 1:
             continue
-        marker = owners[0].marker
+        owner = owners[0]
 
-        for sentence in _SENTENCE.finditer(text):
-            if fact not in _answer_facts(sentence.group(0)):
+        for begin, finish in spans:
+            sentence = text[begin:finish]
+            if sentence.count("|") >= 2:
                 continue
-            body = sentence.group(0)
-            # Before the sentence's own full stop, where a marker belongs.
-            tail = re.search(r"[.!?\s]*$", body).group(0)
-            end = sentence.end() - len(tail)
-            text = f"{text[:end]} [{marker}]{text[end:]}"
-            repairs.append((fact, marker))
+            markers = list(_MARKER_TOKEN.finditer(sentence))
+            clause_begin = begin + (markers[-1].end() if markers else 0)
+            clause = text[clause_begin:finish]
+            if fact not in _answer_facts(clause):
+                continue
+            if len(_words(clause) & _words(owner.text)) < MIN_SHARED_WORDS:
+                continue
+            position = clause_begin + len(clause.rstrip(".!?;:, \t\n"))
+            insertions.setdefault(position, set()).add(owner.marker)
+            repairs.append((fact, owner.marker))
             break
 
+    for position in sorted(insertions, reverse=True):
+        marks = "".join(f" [{marker}]" for marker in sorted(insertions[position]))
+        text = text[:position] + marks + text[position:]
     return text, repairs
 
 

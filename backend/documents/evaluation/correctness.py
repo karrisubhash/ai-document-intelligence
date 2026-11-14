@@ -46,14 +46,15 @@ def is_correct(answer: str, expected: str) -> bool:
     if not (answer or "").strip() or not (expected or "").strip():
         return False
 
+    # A citation marker is a reference, not a figure the answer states:
+    # "You get 3 attempts [2]." must not satisfy an expected "2 attempts".
+    answer = grounding.MARKER.sub(" ", fact_forms.normalize_markers(answer))
+
     required = expected_facts(expected)
     if required:
         present = grounding._support_facts(answer)
         cores = {grounding._numeric_core(fact) for fact in present} - {None}
-        return all(
-            fact in present or grounding._numeric_core(fact) in cores
-            for fact in required
-        )
+        return all(grounding._fact_supported(fact, present, cores) for fact in required)
 
     wanted = set(grounding._prose_terms(expected))
     if not wanted:

@@ -244,7 +244,12 @@ def names_what_the_passages_lack(question: str, passages) -> str:
     "computer", "complaint" for "grievance"): those stay with the overlap
     rules.
     """
-    support = " ".join(getattr(p, "support_text", p.text) for p in passages)
+    # Titles count as present here: this only decides whether to REFUSE, so
+    # being generous about what a document mentions is the cautious direction.
+    support = " ".join(
+        f"{getattr(p, 'support_text', p.text)} {getattr(p, 'title_text', '')}"
+        for p in passages
+    )
 
     present = _letters_only(support)
     for token in sorted(_identifier_tokens(question)):
@@ -257,6 +262,7 @@ def names_what_the_passages_lack(question: str, passages) -> str:
     asked = distinctive_figures(question)
     if asked:
         known = distinctive_figures(support)
+        known |= fact_forms.year_less(known)
         for figure in list(known):
             known |= fact_forms.range_years(figure)
         missing = sorted(figure for figure in asked if figure not in known)

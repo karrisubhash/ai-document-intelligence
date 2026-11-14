@@ -57,8 +57,13 @@ def enabled() -> bool:
     return bool(getattr(settings, "RAG_MODEL_JUDGES_RELEVANCE", True))
 
 
-def model_can_judge(answerer) -> bool:
+def model_will_answer(answerer) -> bool:
     """Whether a generative model is expected to write this answer.
+
+    Everything that is for a model's benefit follows from this alone: the
+    larger context, the chunks beside the best passages, the corrective retry,
+    answering a compound question whole. (Whether the model also judges
+    relevance below the floor is a separate switch: `model_can_judge`.)
 
     `generative is True` rather than truthiness: a test double's attributes
     are all truthy. And a gateway that will not attempt a model at all (no
@@ -74,7 +79,7 @@ def model_can_judge(answerer) -> bool:
     passages only a model was asked to judge. The check reads the budget and
     sends nothing.
     """
-    if not enabled() or getattr(answerer, "generative", False) is not True:
+    if getattr(answerer, "generative", False) is not True:
         return False
 
     gateway = getattr(answerer, "gateway", None)
@@ -88,6 +93,12 @@ def model_can_judge(answerer) -> bool:
         # The gateway makes its own decision when the call is made, and the
         # quoting fallback never sees model_judged passages either way.
         return True
+
+
+def model_can_judge(answerer) -> bool:
+    """Whether the model is also handed the passages the relevance floor would
+    reject (RAG_MODEL_JUDGES_RELEVANCE)."""
+    return enabled() and model_will_answer(answerer)
 
 
 def admit(reranked, kept, retrieval_ranks, *, minimum=None, retrieval_top=None) -> list:

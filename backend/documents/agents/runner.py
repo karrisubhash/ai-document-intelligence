@@ -141,7 +141,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
     # abstains chat's general reply is never tried. So while a model can
     # write the answer, the question goes to it whole.
     if len(parts) > 1 and not getattr(settings, "RAG_PLAN_WHEN_GENERATIVE", False):
-        if judging.model_can_judge(get_answerer()):
+        if judging.model_will_answer(get_answerer()):
             parts = []
 
     if len(parts) <= 1:

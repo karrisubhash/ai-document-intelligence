@@ -13,6 +13,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from documents import agents, rag
 from documents.agents import runner
 from documents.models import Document, ProcessingJob
+from documents.observability import metrics
 from documents.processing.pipeline import run_pipeline
 from documents.rag import context as ctx
 from documents.rag import engine, facts, followup, grounding, judging
@@ -22,7 +23,13 @@ from documents.rag.llm import ABSTENTION_TEXT, ExtractiveAnswerer, declines_to_a
 from documents.rag.reranking import RerankedChunk
 from documents.search import service as search_service
 from documents.tests import MEDIA_ROOT, make_user
-from documents.tests_llm_gateway import GatewayTestCase, ModelClient, build, wire
+from documents.tests_llm_gateway import (
+    GatewayTestCase,
+    ModelClient,
+    StatusError,
+    build,
+    wire,
+)
 from documents.tests_providers import (
     PASSAGE,
     FakeSearchResponse,
@@ -114,6 +121,8 @@ class ExpletiveItTests(SimpleTestCase):
             "Is it possible to defer an exam?",
             "Are they allowed to retake it?".replace("they", "students"),
             "Would it be necessary to submit a medical certificate?",
+            "Is it possible for students to defer an exam?",
+            "Is it allowed to bring guests into the library?",
         ):
             with self.subTest(question=question):
                 dependent, _ = followup.looks_dependent(question)
@@ -125,6 +134,13 @@ class ExpletiveItTests(SimpleTestCase):
             "Does it apply to part-time students?",
             "When is it due?",
             "Can they appeal?",
+            # An adjective alone does not make "it" a placeholder: what it is
+            # about must follow ("to register", "that ...").
+            "Is it allowed on weekends?",
+            "Is it required for part-time students?",
+            "Is it permitted for hostellers?",
+            "Is it fine for first year students?",
+            "Is it mandatory?",
         ):
             with self.subTest(question=question):
                 dependent, _ = followup.looks_dependent(question)
@@ -513,9 +529,35 @@ class FactFormsTests(SimpleTestCase):
         self.assertEqual(dates, {"date:2025-05-05"})
         self.assertIn("04.03.2025", remainder)
 
-    def test_a_date_that_does_not_exist_is_left_alone(self):
-        _, dates = facts.extract_dates("On 31 February 2025 and 31.02.2025.")
-        self.assertEqual(dates, set())
+    def test_a_date_that_does_not_exist_is_one_exact_token(self):
+        """Read as a day and a year it was satisfied by any 31 and any 2025."""
+        remainder, dates = facts.extract_dates("On 31 February 2025 and 31.02.2025.")
+
+        self.assertEqual(dates, {"date:?31february2025"})
+        # The numeric spelling is left in the text, where it is one token.
+        self.assertIn("31.02.2025", remainder)
+
+    def test_a_day_and_month_with_no_year_is_a_date(self):
+        for written in (
+            "due on 15 September",
+            "due on September 15",
+            "15th of September",
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(facts.extract_dates(written)[1], {"date:--09-15"})
+
+        # A day that month does not have is one exact token, not a day.
+        self.assertEqual(facts.extract_dates("by 30 February")[1], {"date:?30february"})
+
+    def test_may_is_a_verb_not_a_month_when_there_is_no_year(self):
+        self.assertEqual(facts.extract_dates("Section 15 may apply")[1], set())
+        self.assertEqual(facts.extract_dates("on 15 May 2025")[1], {"date:2025-05-15"})
+
+    def test_a_full_date_also_stands_for_its_day_and_month(self):
+        self.assertEqual(
+            facts.year_less({"date:2025-08-15", "date:?31april2025", "2025"}),
+            {"date:--08-15"},
+        )
 
     def test_a_year_range_is_one_range(self):
         self.assertEqual(facts.canonical_range("2024-25"), "2024-2025")
@@ -525,13 +567,64 @@ class FactFormsTests(SimpleTestCase):
         self.assertEqual(facts.canonical_range("2024-2025"), "2024-2025")
         self.assertEqual(facts.prepare("2024\N{EN DASH}25"), "2024-25")
         self.assertEqual(facts.range_years("2024-2025"), {"2024", "2025"})
+        # A range of amounts is not a pair of years.
+        self.assertEqual(facts.range_years("1000-2000"), set())
+        self.assertEqual(facts.range_years("2019-2021"), set())
+        self.assertEqual(facts.range_parts("2019-2021"), ("2019", "2021"))
+        self.assertIsNone(facts.range_parts("2019"))
 
-    def test_number_words_stand_for_numerals(self):
+    def test_number_words_stand_for_numerals_when_they_count_something(self):
         self.assertEqual(
-            facts.number_words("within seven days, twenty-five rupees, the third"),
-            {"7", "25", "3"},
+            facts.number_words(
+                "within seven days, twenty-five rupees, ten working days"
+            ),
+            {"7", "25", "10"},
         )
+        self.assertEqual(facts.number_words("one week and twenty members"), {"1", "20"})
         self.assertEqual(facts.number_words("a statement of the situation"), set())
+
+    def test_a_number_word_that_counts_nothing_is_not_a_figure(self):
+        """Any passage with "one" in it supported any answer that said 1."""
+        for text in (
+            "No one may attend the examination without the card.",
+            "Classes in the second semester begin in January.",
+            "The third time a student is late, a warning is issued.",
+            "One of the conditions is attendance.",
+            "Zero tolerance applies.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(facts.number_words(text), set())
+
+    def test_a_month_the_table_lacks_is_not_an_error(self):
+        """The pattern accepted "Sepember" and the table had no such key: a
+        KeyError in grounding is a failed request."""
+        for text in (
+            "The deadline is 15 Sepember 2024.",
+            "Sepember 15, 2024",
+            "15 " + chr(0x17F) + "eptember 2024",  # a long s, which re.I matched
+            "15 " + chr(0x131) + "an 2024",  # a dotless i
+        ):
+            with self.subTest(text=text):
+                remainder, dates = facts.extract_dates(text)
+                self.assertEqual(dates, set())
+                self.assertEqual(remainder, text)
+
+    def test_formal_and_ranged_dates_are_read(self):
+        both = {"date:2025-03-15", "date:2025-03-20"}
+        for written, expected in (
+            ("on the 15th day of March, 2025", {"date:2025-03-15"}),
+            ("from 15 to 20 March 2025", both),
+            ("from 15-20 March 2025", both),
+            ("from 15th until 20th March, 2025", both),
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(facts.extract_dates(written)[1], expected)
+
+    def test_a_range_of_days_that_is_not_a_real_date_is_one_exact_token(self):
+        remainder, dates = facts.extract_dates("from 25 to 35 March 2025")
+
+        self.assertEqual(dates, {"date:?25to35march2025"})
+        self.assertNotIn("35", remainder)
 
     def test_a_group_of_citations_is_split(self):
         self.assertEqual(
@@ -585,6 +678,33 @@ class GroundingSpellingTests(SimpleTestCase):
                 self.assertFalse(report.ok)
                 self.assertTrue(report.unsupported_facts)
 
+    def test_a_date_that_does_not_exist_is_not_supported_by_its_parts(self):
+        context = one_passage("The last date is 31 March 2025.")
+
+        self.assertTrue(self.check("It is 31 March 2025 [1].", context).ok)
+        self.assertFalse(self.check("It is 31 April 2025 [1].", context).ok)
+        self.assertFalse(self.check("It is 31 February 2025 [1].", context).ok)
+
+    def test_a_date_that_does_not_exist_is_not_rescued_by_the_same_numbers_elsewhere(
+        self,
+    ):
+        """Read as a day and a year, "31 April 2025" was supported by a "31" and
+        a "2025" anywhere in the passages - here, a section and a year that have
+        nothing to do with a date."""
+        context = one_passage(
+            "The last date is 31 March 2025. Section 31 of the rules was revised in 2025."
+        )
+
+        self.assertTrue(self.check("It is 31 March 2025 [1].", context).ok)
+        self.assertFalse(self.check("It is 31 April 2025 [1].", context).ok)
+
+    def test_an_answer_may_leave_the_year_out_but_not_change_the_day_or_month(self):
+        context = one_passage("Fees are due on 15 August 2025.")
+
+        self.assertTrue(self.check("Fees are due on 15 August [1].", context).ok)
+        self.assertFalse(self.check("Fees are due on 16 August [1].", context).ok)
+        self.assertFalse(self.check("Fees are due on 15 September [1].", context).ok)
+
     def test_an_ambiguous_numeric_date_must_match_as_written(self):
         context = one_passage("The form is due on 04.03.2025.")
 
@@ -629,6 +749,92 @@ class GroundingSpellingTests(SimpleTestCase):
 
         self.assertTrue(self.check("One of the rules is four books [1].", context).ok)
 
+    def test_a_number_word_that_counts_nothing_supports_no_figure(self):
+        """ "No one may attend" supported "1 day"; a hallucinated 1 passed in a
+        quarter of the corpus's passages."""
+        for passage, answer, figure in (
+            (
+                "No one may attend the examination without the card.",
+                "The card is needed for 1 day [1].",
+                "1",
+            ),
+            (
+                "Classes in the second semester begin in January.",
+                "There are 2 classes in January [1].",
+                "2",
+            ),
+            (
+                "The third time a student is late, a warning is issued.",
+                "A warning is issued after 3 late arrivals [1].",
+                "3",
+            ),
+        ):
+            with self.subTest(answer=answer):
+                report = self.check(answer, one_passage(passage))
+                self.assertIn(figure, report.unsupported_facts)
+
+    def test_a_title_supports_a_year_and_nothing_else(self):
+        text = "Residents must keep their rooms clean."
+
+        versioned = self.check(
+            "Residents have 2 weeks to move out [1].",
+            one_passage(text, title="Hostel Rules v2"),
+        )
+        coded = self.check(
+            "The late fee is Rs 117 [1].",
+            one_passage(text, title="Circular TR/2024/117"),
+        )
+        dated = self.check(
+            "The rules were revised in 2019 [1].",
+            one_passage(text, title="Fee Rules 2019"),
+        )
+
+        self.assertIn("2", versioned.unsupported_facts)
+        self.assertIn("117", coded.unsupported_facts)
+        self.assertNotIn("2019", dated.unsupported_facts)
+
+    def test_a_formal_date_is_the_same_date(self):
+        context = one_passage(
+            "Fees are due on the 15th day of March, 2025 without exception."
+        )
+
+        self.assertTrue(self.check("Fees are due on 15 March 2025 [1].", context).ok)
+        self.assertFalse(self.check("Fees are due on 16 March 2025 [1].", context).ok)
+
+    def test_a_range_of_days_supports_each_whole_date(self):
+        context = one_passage(
+            "The camp runs from 15 to 20 March 2025 for all students."
+        )
+
+        self.assertTrue(
+            self.check(
+                "The camp runs from 15 March 2025 to 20 March 2025 [1].", context
+            ).ok
+        )
+        self.assertFalse(
+            self.check(
+                "The camp runs from 16 March 2025 to 20 March 2025 [1].", context
+            ).ok
+        )
+
+    def test_a_dashed_range_is_supported_by_its_two_ends(self):
+        context = one_passage("The course ran from 2019 to 2021 in two phases.")
+
+        self.assertTrue(
+            self.check("The course ran in 2019" + chr(0x2013) + "2021 [1].", context).ok
+        )
+        self.assertTrue(self.check("The course ran in 2019-2021 [1].", context).ok)
+        self.assertFalse(self.check("The course ran in 2019-2022 [1].", context).ok)
+
+    def test_a_range_of_amounts_does_not_support_one_end_alone(self):
+        context = one_passage(
+            "Fees range from Rs 1000-2000 depending on the programme."
+        )
+
+        report = self.check("The fee is Rs 2000 [1].", context)
+
+        self.assertIn("2000", report.unsupported_facts)
+
 
 class CitationFormTests(TestCase):
     PASSAGES = ("Attendance must be 75 percent.", "Condonation needs 65 percent.")
@@ -645,18 +851,53 @@ class CitationFormTests(TestCase):
         self.assertEqual(report.cited_markers, (1, 2))
         self.assertIn("[1][2]", report.text)
 
-    def test_a_marker_one_past_the_last_passage_beside_a_real_one_is_removed(self):
+    def test_a_marker_one_past_the_last_passage_is_a_fabricated_source(self):
+        """It was forgiven when it stood beside a real one, and a whole
+        unsourced sentence went through with its marker quietly deleted."""
         report = self.validate("Attendance must be 75 percent [1] [3].")
 
+        self.assertFalse(report.ok)
+        self.assertEqual(report.invalid_markers, (3,))
+        self.assertIn("[3]", report.text)
+
+    def test_a_marker_zero_is_a_fabricated_source(self):
+        self.assertFalse(self.validate("Attendance must be 75 percent [0][1].").ok)
+
+    def test_an_unsourced_sentence_cannot_hide_behind_a_missing_marker(self):
+        report = self.validate(
+            "Attendance must be 75 percent [1]. "
+            "Refunds are always given in full within a week of the request [3]."
+        )
+
+        self.assertFalse(report.ok)
+
+    def test_a_documents_own_grouped_reference_is_not_a_citation(self):
+        """The document says "[2, 12]"; reading it as two citations rejected a
+        verbatim, correct quote."""
+        context = one_passage(
+            "The committee reviewed earlier studies [2, 12] of the programme."
+        )
+
+        report = grounding.validate(
+            "The committee reviewed earlier studies [2, 12] of the programme. [1]",
+            context,
+        )
+
         self.assertTrue(report.ok, report.failures)
-        self.assertEqual(report.text, "Attendance must be 75 percent [1].")
         self.assertEqual(report.cited_markers, (1,))
 
-    def test_a_marker_zero_beside_a_real_one_is_removed(self):
-        report = self.validate("Attendance must be 75 percent [0][1].")
+    def test_the_quoting_answerer_neutralises_a_documents_grouped_reference(self):
+        built = one_passage(
+            "The committee reviewed earlier studies [2, 12] of the programme."
+        )
 
-        self.assertTrue(report.ok, report.failures)
-        self.assertNotIn("[0]", report.text)
+        response = ExtractiveAnswerer().answer(
+            question="What did the committee review?", context=built, prompt=""
+        )
+
+        self.assertIn("(2, 12)", response.text)
+        self.assertNotIn("[2", response.text)
+        self.assertTrue(grounding.validate(response.text, built).ok)
 
     def test_a_fabricated_source_still_fails(self):
         """The cheapest hallucination signal there is."""
@@ -683,12 +924,11 @@ class EngineShowsTheCheckedAnswerTests(TestCase):
         ):
             return rag.ask(None, "What is the minimum attendance for the examination?")
 
-    def test_the_stray_marker_is_not_shown(self):
+    def test_a_stray_marker_is_a_fabricated_source_not_a_typo(self):
         answer = self.ask("You need 75 percent attendance [1] [2].")
 
-        self.assertFalse(answer.abstained, answer.grounding_failures)
-        self.assertEqual(answer.answer, "You need 75 percent attendance [1].")
-        self.assertEqual([c["marker"] for c in answer.citations], [1])
+        self.assertTrue(answer.abstained)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
 
     def test_a_grouped_citation_resolves(self):
         answer = self.ask("You need 75 percent attendance [1, 1].")
@@ -825,8 +1065,8 @@ class ModelContextTests(TestCase):
             )
         )
 
-    def ask(self, answerer, scores=None):
-        found = hits((self.chunks[3], 1.0))
+    def ask(self, answerer, scores=None, pairs=None):
+        found = hits(*(pairs or [(self.chunks[3], 1.0)]))
         with (
             mock.patch.object(
                 engine.search_service, "search", return_value=FakeSearchResponse(found)
@@ -863,6 +1103,40 @@ class ModelContextTests(TestCase):
             any("neighbouring passage(s)" in note for note in answer.notes),
             answer.notes,
         )
+
+    @override_settings(RAG_MIN_PASSAGES=1, RAG_ADMIT_RETRIEVAL_TOP=1)
+    def test_a_chunk_that_was_retrieved_but_not_admitted_can_still_continue_a_list(
+        self,
+    ):
+        """The chunk after the best one scored under the floor and was left
+        out. It is not in the context, so it is exactly the neighbour that
+        completes the list; treating "retrieved" as "already shown" dropped it."""
+        client = StubChatClient(completion("It keeps records of enrolment [1]."))
+
+        answer, _ = self.ask(
+            self.generative(client),
+            scores={self.chunks[3].id: 0.9},
+            pairs=[(self.chunks[3], 1.0), (self.chunks[4], 0.5)],
+        )
+
+        self.assertFalse(answer.abstained, answer.grounding_failures)
+        prompt = client.calls[0]["messages"][1]["content"]
+        self.assertIn("the text directly before passage [1]", prompt)
+        self.assertIn("the text directly after passage [1]", prompt)
+
+    @override_settings(RAG_MODEL_JUDGES_RELEVANCE=False)
+    def test_the_bigger_context_does_not_depend_on_the_relevance_switch(self):
+        client = StubChatClient(completion("It keeps records of enrolment [1]."))
+
+        answer, build = self.ask(
+            self.generative(client), scores={self.chunks[3].id: 0.9}
+        )
+
+        kwargs = build.call_args.kwargs
+        self.assertEqual(kwargs["budget"], 14000)
+        self.assertEqual(kwargs["max_passages"], 12)
+        prompt = client.calls[0]["messages"][1]["content"]
+        self.assertIn("the text directly after passage [1]", prompt)
 
     def test_a_quote_is_given_neither(self):
         answer, build = self.ask(ExtractiveAnswerer(), scores={self.chunks[3].id: 0.9})
@@ -955,7 +1229,7 @@ class RepairCitationsTests(SimpleTestCase):
 
     def test_a_date_can_be_attributed_too(self):
         context, report = self.report(
-            "Tuition is 85000 [1], payable by 31 March 2025.",
+            "Tuition is 85000 [1], and fees must be paid by 31 March 2025.",
             TUITION,
             "Fees must be paid by 31.03.2025.",
         )
@@ -964,6 +1238,112 @@ class RepairCitationsTests(SimpleTestCase):
 
         self.assertEqual(repairs, [("date:2025-03-31", 2)])
         self.assertTrue(grounding.validate(repaired, context).ok)
+
+    def test_a_figure_a_marker_already_follows_is_never_repaired(self):
+        """The model attributed it to [1]. If [1] does not state it, the model
+        mixed its passages up - the very failure the check exists to catch."""
+        context, report = self.report(
+            "The B.Tech hostel fee is Rs 85,000 [1].",
+            "B.Tech hostel fee per year is Rs 58,000 payable in July.",
+            "M.Tech tuition fee per year is Rs 85,000 payable in July.",
+        )
+        self.assertFalse(report.ok)
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+        self.assertFalse(grounding.validate(repaired, context).ok)
+
+    def test_a_year_that_is_only_in_another_passages_title_is_not_support(self):
+        items = [
+            RerankedChunk(
+                chunk=chunk(
+                    1, "The library opens at 9 am on weekdays.", title="Library"
+                ),
+                score=0.9,
+                signals={},
+            ),
+            RerankedChunk(
+                chunk=chunk(
+                    2,
+                    "Parking is permitted behind the main building.",
+                    title="Campus Notice 2025",
+                ),
+                score=0.8,
+                signals={},
+            ),
+        ]
+        context = ctx.build(items, semantic_scores=True)
+        report = grounding.validate(
+            "The library rules were revised in 2025 [1].", context
+        )
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+        self.assertFalse(grounding.validate(repaired, context).ok)
+
+    def test_a_marker_never_lands_inside_a_token(self):
+        """It split "B.Tech" at the dot and showed "B [2].Tech"."""
+        context, report = self.report(
+            "Courses are listed [1]. The fee is Rs 85,000 for B.Tech.",
+            "General information about the courses offered.",
+            "The fee is Rs 85,000 for B.Tech and Rs 90,000 for M.Tech.",
+        )
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [("85000", 2)])
+        self.assertEqual(
+            repaired, "Courses are listed [1]. The fee is Rs 85,000 for B.Tech [2]."
+        )
+        self.assertTrue(grounding.validate(repaired, context).ok)
+
+    def test_a_figure_before_the_marker_in_a_dotted_sentence_is_left_alone(self):
+        context, report = self.report(
+            "The fee is Rs 85,000 for B.Tech and Rs 90,000 for M.Tech [1].",
+            "General information about the courses offered.",
+            "The fee is Rs 85,000 for B.Tech and Rs 90,000 for M.Tech.",
+        )
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+        self.assertEqual(repaired, report.text)
+
+    def test_a_decimal_is_not_laundered_as_two_integers(self):
+        """ "3.5" was split at the dot, "3 [2].5" shown, and the unsupported
+        figure accepted as two supported ones."""
+        context, report = self.report(
+            "The tuition is Rs 85,000 for 3.5 years [1].",
+            "Clause 3 allows 5 attempts at the examination.",
+            "The tuition is Rs 85,000 for the programme. Fees are due in July.",
+        )
+
+        repaired, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+        self.assertFalse(grounding.validate(repaired, context).ok)
+
+    def test_a_clause_about_something_else_is_not_attributed_by_its_figure(self):
+        context, report = self.report(
+            "Tuition is 85000 [1], and parking costs 42000.", TUITION, HOSTEL
+        )
+
+        _, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
+
+    def test_a_table_row_is_never_repaired(self):
+        context, report = self.report(
+            "Courses are listed [1].\n| Programme | Fee |\n| B.Tech | 85000 |",
+            "General information about the courses offered.",
+            "Tuition fee: 85000 for B.Tech programme.",
+        )
+
+        _, repairs = grounding.repair_citations(report, context)
+
+        self.assertEqual(repairs, [])
 
     def test_the_correction_names_the_figures_it_rejected(self):
         _, report = self.report(
@@ -1000,7 +1380,7 @@ class RejectedAnswerTests(TestCase):
         capacity = (
             contextlib.nullcontext()
             if available
-            else mock.patch.object(judging, "model_can_judge", return_value=False)
+            else mock.patch.object(judging, "model_will_answer", return_value=False)
         )
         found = hits(
             *[
@@ -1081,6 +1461,117 @@ class RejectedAnswerTests(TestCase):
 
         self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
 
+    def recoveries(self):
+        return {
+            outcome: metrics.REGISTRY.get_sample_value(
+                "adi_rag_grounding_recoveries_total", {"outcome": outcome}
+            )
+            or 0
+            for outcome in ("repaired", "retried_grounded", "retried_failed")
+        }
+
+    def test_a_retried_answer_is_charged_for_both_calls(self):
+        client = SequenceClient(
+            "Tuition is 90000 per year [1].", "Tuition is 85000 per year [1]."
+        )
+
+        answer = self.ask(client, TUITION)
+
+        self.assertEqual(len(client.calls), 2)
+        # The stub reports 120 prompt and 18 completion tokens per call.
+        self.assertEqual(answer.llm["prompt_tokens"], 240)
+        self.assertEqual(answer.llm["completion_tokens"], 36)
+
+    def test_a_retry_that_fails_is_still_charged_for_both_calls(self):
+        client = SequenceClient(
+            "Tuition is 90000 per year [1].", "Tuition is 95000 per year [1]."
+        )
+
+        answer = self.ask(client, TUITION)
+
+        self.assertTrue(answer.abstained)
+        self.assertEqual(answer.llm["prompt_tokens"], 240)
+        self.assertEqual(answer.llm["completion_tokens"], 36)
+
+    def test_each_recovery_is_counted_by_how_it_ended(self):
+        before = self.recoveries()
+
+        self.ask(
+            SequenceClient("Tuition is 85000 [1] and the hostel fee is 42000."),
+            TUITION,
+            HOSTEL,
+        )
+        self.ask(
+            SequenceClient(
+                "Tuition is 90000 per year [1].", "Tuition is 85000 per year [1]."
+            ),
+            TUITION,
+        )
+        self.ask(
+            SequenceClient(
+                "Tuition is 90000 per year [1].", "Tuition is 95000 per year [1]."
+            ),
+            TUITION,
+        )
+        after = self.recoveries()
+
+        self.assertEqual(
+            {key: after[key] - before[key] for key in after},
+            {"repaired": 1, "retried_grounded": 1, "retried_failed": 1},
+        )
+
+    def test_an_answer_that_passes_first_time_counts_as_no_recovery(self):
+        before = self.recoveries()
+
+        self.ask(SequenceClient("Tuition is 85000 per year [1]."), TUITION)
+
+        self.assertEqual(self.recoveries(), before)
+
+    @override_settings(RAG_MODEL_JUDGES_RELEVANCE=False)
+    def test_the_retry_does_not_depend_on_the_relevance_switch(self):
+        client = SequenceClient(
+            "Tuition is 90000 per year [1].", "Tuition is 85000 per year [1]."
+        )
+
+        answer = self.ask(client, TUITION)
+
+        self.assertFalse(answer.abstained, answer.grounding_failures)
+        self.assertEqual(len(client.calls), 2)
+
+    def test_a_failure_inside_the_check_withholds_the_answer(self):
+        """The check parses whatever the documents and the model contain. If it
+        raises, the answer is withheld and the failure logged - never a 500 and
+        never a pass."""
+        client = SequenceClient("Tuition is 85000 per year [1].")
+
+        with (
+            mock.patch.object(grounding, "validate", side_effect=RuntimeError("boom")),
+            self.assertLogs("adi.rag", level="ERROR"),
+        ):
+            answer = self.ask(client, TUITION)
+
+        self.assertTrue(answer.abstained)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+        self.assertTrue(
+            any("check itself failed" in f for f in answer.grounding_failures),
+            answer.grounding_failures,
+        )
+        self.assertNotIn("85000", answer.answer)
+
+    def test_a_failure_inside_the_repair_leaves_the_answer_as_it_was(self):
+        client = SequenceClient("Tuition is 85000 [1] and the hostel fee is 42000.")
+
+        with (
+            mock.patch.object(
+                grounding, "repair_citations", side_effect=RuntimeError("boom")
+            ),
+            self.assertLogs("adi.rag", level="ERROR"),
+        ):
+            answer = self.ask(client, TUITION, HOSTEL)
+
+        self.assertTrue(answer.abstained)
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+
     @override_settings(RAG_GROUNDING_RETRY=False)
     def test_the_retry_can_be_switched_off(self):
         client = SequenceClient("Tuition is 90000 per year [1].")
@@ -1114,6 +1605,106 @@ class RejectedAnswerTests(TestCase):
 
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+
+
+class ModelWillAnswerTests(SimpleTestCase):
+    """The one question everything that is for a model's benefit follows from."""
+
+    def test_a_quote_is_not_a_model(self):
+        self.assertFalse(judging.model_will_answer(ExtractiveAnswerer()))
+
+    def test_a_double_whose_attributes_are_all_truthy_is_not_a_model(self):
+        """`generative is True`, not truthiness."""
+        self.assertFalse(judging.model_will_answer(mock.Mock()))
+        self.assertFalse(judging.model_will_answer(mock.Mock(generative="yes")))
+
+    def test_a_model_with_capacity_will_answer(self):
+        answerer = mock.Mock(generative=True, gateway=FakeGateway(True))
+
+        self.assertTrue(judging.model_will_answer(answerer))
+
+    def test_a_model_with_no_capacity_left_will_not(self):
+        answerer = mock.Mock(generative=True, gateway=FakeGateway(False))
+
+        self.assertFalse(judging.model_will_answer(answerer))
+
+    def test_an_answerer_with_no_budget_to_consult_will(self):
+        self.assertTrue(
+            judging.model_will_answer(mock.Mock(spec=["generative"], generative=True))
+        )
+
+    def test_a_budget_that_cannot_be_read_does_not_decide_the_answer(self):
+        class Broken(FakeGateway):
+            def plan(self, purpose, **kwargs):
+                raise RuntimeError("cache is down")
+
+        answerer = mock.Mock(generative=True, gateway=Broken(True))
+
+        self.assertTrue(judging.model_will_answer(answerer))
+
+    @override_settings(RAG_MODEL_JUDGES_RELEVANCE=False)
+    def test_the_relevance_switch_does_not_stop_a_model_answering(self):
+        answerer = mock.Mock(generative=True, gateway=FakeGateway(True))
+
+        self.assertTrue(judging.model_will_answer(answerer))
+        self.assertFalse(judging.model_can_judge(answerer))
+
+    @override_settings(RAG_MODEL_JUDGES_RELEVANCE=True)
+    def test_with_the_switch_on_both_agree(self):
+        answerer = mock.Mock(generative=True, gateway=FakeGateway(True))
+
+        self.assertTrue(judging.model_can_judge(answerer))
+
+    @override_settings(RAG_PLAN_WHEN_GENERATIVE=False, RAG_MODEL_JUDGES_RELEVANCE=False)
+    def test_a_model_still_gets_the_whole_question_with_the_switch_off(self):
+        answerer = mock.Mock(generative=True, gateway=FakeGateway(True))
+        calls = []
+
+        def ask(user, question, **kwargs):
+            calls.append(question)
+            return rag.RagAnswer(
+                question=question, answer=ABSTENTION_TEXT, abstained=True
+            )
+
+        with (
+            mock.patch.object(runner, "ask", side_effect=ask),
+            mock.patch.object(runner, "get_answerer", return_value=answerer),
+        ):
+            agents.answer(None, THREE_PART)
+
+        self.assertEqual(calls, [THREE_PART])
+
+
+class CapacityStatusTests(GatewayTestCase):
+    """A free tier's tokens-per-minute window answers 413, and 413 comes back
+    by itself like a 429."""
+
+    def test_413_is_capacity_like_429(self):
+        for status in (413, 429, 503):
+            with self.subTest(status=status):
+                self.assertTrue(gateway_module.is_capacity(StatusError(status)))
+        self.assertFalse(gateway_module.is_capacity(StatusError(401)))
+        self.assertFalse(gateway_module.is_capacity(StatusError(500)))
+
+    def test_413_behind_an_unavailable_is_capacity_too(self):
+        unavailable = gateway_module.Unavailable(gateway_module.FAILED)
+        unavailable.__cause__ = StatusError(413)
+
+        self.assertTrue(gateway_module.is_capacity(unavailable))
+
+    def test_a_413_rests_the_link_instead_of_breaking_it(self):
+        chain = build("groq")
+        wire(chain, "groq", ModelClient({"openai/gpt-oss-120b": 413}))
+
+        with self.assertRaises(gateway_module.Unavailable) as caught:
+            chain.complete(
+                [{"role": "user", "content": "q"}],
+                purpose=gateway_module.CHAT,
+                max_tokens=8,
+            )
+
+        self.assertTrue(gateway_module.is_capacity(caught.exception))
+        self.assertFalse(chain.available(gateway_module.CHAT))
 
 
 # --- Vector search stays exact ----------------------------------------------

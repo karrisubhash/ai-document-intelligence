@@ -276,6 +276,20 @@ llm_fallbacks = Counter(
     registry=REGISTRY,
 )
 
+# A first draft that failed grounding is the system's hallucination signal, and
+# a draft that was then repaired or answered again no longer reaches
+# adi_rag_abstentions_total. Counting only what is finally shown would hide how
+# often the model's first answer is wrong - the one number that says whether a
+# provider is any good - so each recovery is counted by how it ended.
+grounding_recoveries = Counter(
+    "adi_rag_grounding_recoveries_total",
+    "Answers that failed grounding the first time, by what happened next:"
+    " repaired (a missing citation added), retried_grounded (the model answered"
+    " again and passed), retried_failed (it did not).",
+    ["outcome"],
+    registry=REGISTRY,
+)
+
 rerank_degraded = Counter(
     "adi_rerank_degraded_total",
     "Rerank calls whose configured cross-encoder failed and were scored"
