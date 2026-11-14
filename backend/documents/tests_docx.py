@@ -12,7 +12,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 
-from documents.models import Document, PageContent, ProcessingJob
+from documents.models import Document, DocumentTable, PageContent, ProcessingJob
 from documents.processing.context import FileType
 from documents.processing.errors import ErrorCode, StageError
 from documents.processing.extractors import docx as docx_extractor
@@ -333,3 +333,29 @@ class DocxPipelineTests(AuthenticatedAPITestCase):
             content__document_version=document.current_version
         )
         self.assertIn("CS101", page.text)
+
+    def test_a_table_is_stored_as_a_table_with_its_blank_cell(self):
+        """The extractor read real cells, so the stored table has them - a
+        blank cell stays in its column instead of shifting the row."""
+        response = self.upload(
+            "fees.docx",
+            make_docx_bytes(
+                paragraphs=["Fee schedule"],
+                tables=[[["Course", "Fee"], ["CS101", "5000"], ["CS102", ""]]],
+            ),
+        )
+        document = Document.objects.get(id=response.data["id"])
+        table = DocumentTable.objects.get(document_version=document.current_version)
+        page = PageContent.objects.get(
+            content__document_version=document.current_version
+        )
+
+        self.assertEqual(
+            table.rows, [["Course", "Fee"], ["CS101", "5000"], ["CS102", ""]]
+        )
+        self.assertEqual(table.header, ["Course", "Fee"])
+        self.assertEqual(table.detector, "python-docx:table")
+        self.assertEqual(
+            page.text[table.character_start : table.character_end],
+            "Course | Fee\nCS101 | 5000\nCS102 |",
+        )

@@ -113,18 +113,28 @@ def _extract_pdf_text(context) -> StageResult:
 def _extract_docx_text(context) -> StageResult:
     """DOCX carries its own text, so it never reaches OCR.
 
-    A DOCX whose content is entirely embedded images yields nothing here
-    and fails the OCR stage's "some text must exist" check, which is the
-    honest outcome: rendering and OCR-ing embedded images is a different
-    capability this pipeline does not claim to have.
+    Pictures embedded in the body are OCR'd when they look like documents
+    (see docx.MIN_PICTURE_*), up to a per-document budget. A DOCX with no
+    text and nothing legible in its pictures still fails the OCR stage's
+    "some text must exist" check, which is the honest outcome.
     """
-    page_texts, metadata = docx.extract_pages(context.file_path)
+    pictures = settings.OCR_EMBEDDED_IMAGES and settings.OCR_EMBEDDED_IMAGES_MAX > 0
+    pages, metadata = docx.extract_page_results(
+        context.file_path,
+        # A scanned form pasted into a Word file is the content; reading it
+        # is what stops such a document failing as empty.
+        image_ocr=ocr_extractor.read_page if pictures else None,
+        max_images=settings.OCR_EMBEDDED_IMAGES_MAX if pictures else 0,
+    )
+    page_texts = [page.text for page in pages]
 
-    for index, text in enumerate(page_texts, start=1):
+    for index, page in enumerate(pages, start=1):
+        text = page.text
         context.pages.append(
             ExtractedPage(
                 page_number=index,
                 text=text,
+                tables=page.tables,
                 extraction_method=PageContent.ExtractionMethod.DOCX_TEXT,
                 # A fresh dict per page, holding only what is true of that
                 # page. Sharing one object across pages would alias them,

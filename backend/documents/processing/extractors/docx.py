@@ -6,36 +6,82 @@ quietly wrong.
 *A DOCX has no page count.* Pagination in Word is a rendering result - it
 depends on the fonts, page size and printer metrics of whoever opens the
 file - so there is no page number to read out of the bytes. What the file
-does record is where the author asked for a page break. This extractor
+does record is where the author asked for a page break (a break, "page break
+before" on a paragraph, a section that starts on a new page). This extractor
 splits on those and labels the result `explicit_breaks` in metadata, so a
 reader can tell an author-declared boundary from a rendered one. A document
 with no breaks is one page, labelled `none`. Claiming anything more precise
 would be inventing structure the file does not contain.
 
 *A DOCX is a ZIP archive*, and ZIP archives from untrusted users can be
-decompression bombs. The size checked at the VALIDATION stage is the
-compressed size, which says nothing about what it expands to, so the
-uncompressed total is checked here before anything is parsed.
+decompression bombs. See `ooxml`: the uncompressed total is checked before
+anything is parsed.
+
+The body is walked as XML, in document order, rather than through
+python-docx's `paragraphs` and `tables`, because those accessors silently
+skip most of what carries real content in an institutional document:
+
+* content controls (`w:sdt`) - the fill-in fields of a form or template,
+* tracked insertions (`w:ins`), which are not direct children of a paragraph,
+* text boxes (`w:txbxContent`), where letterheads and notices live,
+* nested tables, and the cells of a merged table - `row.cells` repeats a
+  merged cell's text once per grid column it spans,
+* list numbers. "2.3.1" is not in the paragraph's text; it is generated from
+  numbering.xml. A clause numbered by Word has to be numbered here too, or
+  "see clause 4.2" refers to nothing the reader can find,
+* headers, footers, footnotes and endnotes, which are text the document says.
+
+Tables are written through `PageBuilder` as structure (rows of cells, blank
+cells kept), so the Tables tab and the answerer see real columns.
 """
 
-import zipfile
+import hashlib
+import re
+from dataclasses import dataclass, field
+from io import BytesIO
 
-from documents.processing.errors import ErrorCode, StageError, TransientError
+from documents.processing.errors import ErrorCode, StageError
+from documents.processing.extractors import compose, ooxml
+from documents.processing.extractors.ooxml import local
 
 # The part every real Word document has. Its presence is what separates a
 # .docx from the other ZIP-based office formats (.xlsx, .pptx, .odt), which
 # share the same magic bytes and would otherwise be handed to this extractor.
 DOCUMENT_PART = "word/document.xml"
 
-# A DOCX that expands to more than this is refused unparsed. Generous
-# against real documents - a 50 MB upload of dense text expands nowhere near
-# it - and far below what a bomb needs to exhaust a worker.
-MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
-
-# Refuse absurd expansion even when the absolute total is acceptable.
-MAX_COMPRESSION_RATIO = 200
+MAX_UNCOMPRESSED_BYTES = ooxml.MAX_UNCOMPRESSED_BYTES
+MAX_COMPRESSION_RATIO = ooxml.MAX_COMPRESSION_RATIO
 
 VERSION = ""
+SOURCE = "python-docx:table"
+
+W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+V = "urn:schemas-microsoft-com:vml"
+M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+
+# A picture smaller than this on either side is a bullet, a rule, a logo.
+MIN_IMAGE_SIDE = 100
+# OCR text kept from a picture only when it is plausibly a document: a photo
+# of a building also "reads" as a word or two - but at low confidence, which
+# is the real filter. Two words is a legitimate short caption or a total.
+MIN_PICTURE_WORDS = 2
+MIN_PICTURE_CONFIDENCE = 50.0
+
+# Section breaks that do NOT start a new page.
+CONTINUOUS = "continuous"
+
+NOTE_TYPES_SKIPPED = {"separator", "continuationSeparator", "continuationNotice"}
+
+
+def _w(name: str) -> str:
+    return f"{{{W}}}{name}"
+
+
+def _val(element) -> str | None:
+    return None if element is None else element.get(_w("val"))
 
 
 def _lazy_docx():
@@ -56,114 +102,665 @@ def _lazy_docx():
 
 
 def is_docx(file_path: str) -> bool:
-    """Whether this ZIP is specifically a Word document.
-
-    A malformed archive answers False - "not a DOCX" is the correct answer
-    about a file that is not a readable ZIP. An OSError is deliberately NOT
-    swallowed: a storage blip is a transient condition, and reporting it as
-    "not a DOCX" would turn it into a permanent UNSUPPORTED_FILE_TYPE that
-    is never retried, which is exactly the wrong side of this project's
-    permanent-vs-transient split.
-    """
-    try:
-        with zipfile.ZipFile(file_path) as archive:
-            return DOCUMENT_PART in archive.namelist()
-    except zipfile.BadZipFile:
-        return False
-    except OSError as exc:
-        raise TransientError(
-            f"Could not read the stored file while detecting its type: {exc}"
-        ) from exc
+    """Whether this ZIP is specifically a Word document."""
+    return ooxml.has_part(file_path, DOCUMENT_PART)
 
 
 def check_expansion(file_path: str) -> dict:
     """Reject decompression bombs before handing the file to a parser."""
-    try:
-        with zipfile.ZipFile(file_path) as archive:
-            entries = archive.infolist()
-            uncompressed = sum(entry.file_size for entry in entries)
-            compressed = sum(entry.compress_size for entry in entries) or 1
-    except (zipfile.BadZipFile, OSError) as exc:
-        raise StageError(
-            f"Could not read DOCX archive: {exc}",
-            code=ErrorCode.CORRUPT_DOCUMENT,
-        ) from exc
-
-    ratio = uncompressed / compressed
-
-    if uncompressed > MAX_UNCOMPRESSED_BYTES:
-        raise StageError(
-            f"DOCX expands to {uncompressed} bytes, over the "
-            f"{MAX_UNCOMPRESSED_BYTES} byte limit.",
-            code=ErrorCode.FILE_TOO_LARGE,
-        )
-
-    if ratio > MAX_COMPRESSION_RATIO:
-        raise StageError(
-            f"DOCX expands {ratio:.0f}x, over the {MAX_COMPRESSION_RATIO}x "
-            f"limit. Refusing to parse a suspected decompression bomb.",
-            code=ErrorCode.CORRUPT_DOCUMENT,
-        )
-
-    return {
-        "entries": len(entries),
-        "compressed_bytes": compressed,
-        "uncompressed_bytes": uncompressed,
-        "compression_ratio": round(ratio, 1),
-    }
+    return ooxml.check_expansion(file_path, "DOCX")
 
 
-def _table_text(table) -> str:
-    """A table as lines of tab-separated cells.
-
-    Tables carry real content in institutional documents - fee tables,
-    course lists, signature blocks - and python-docx's `paragraphs` skips
-    them entirely, so iterating the body in document order is the only way
-    to keep the text in the order a reader would meet it.
-    """
-    lines = []
-    for row in table.rows:
-        cells = [" ".join(cell.text.split()) for cell in row.cells]
-        if any(cells):
-            lines.append("\t".join(cells))
-    return "\n".join(lines)
+# -- numbering --------------------------------------------------------------
 
 
-def _blocks(document, docx_module):
-    """Paragraph and table text in document order."""
-    from docx.table import Table
-    from docx.text.paragraph import Paragraph
-
-    body = document.element.body
-    for child in body.iterchildren():
-        tag = child.tag.split("}")[-1]
-        if tag == "p":
-            paragraph = Paragraph(child, document)
-            yield "paragraph", paragraph
-        elif tag == "tbl":
-            yield "table", Table(child, document)
+@dataclass
+class _Level:
+    start: int = 1
+    fmt: str = "decimal"
+    text: str = ""
 
 
-def _has_page_break(paragraph) -> bool:
-    """Whether the author put an explicit page break in this paragraph."""
-    for run in paragraph.runs:
-        for break_element in run._element.findall(
-            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br"
-        ):
-            if (
-                break_element.get(
-                    "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type"
+def _roman(number: int, upper: bool) -> str:
+    pairs = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ]
+    out = ""
+    for value, symbol in pairs:
+        while number >= value:
+            out += symbol
+            number -= value
+    return out.upper() if upper else out
+
+
+def _letters(number: int, upper: bool) -> str:
+    """1 -> a, 26 -> z, 27 -> aa: the way Word letters a long list."""
+    out = ""
+    while number > 0:
+        number, remainder = divmod(number - 1, 26)
+        out = chr(ord("a") + remainder) + out
+    return out.upper() if upper else out
+
+
+def _format_number(number: int, fmt: str) -> str:
+    if fmt == "lowerLetter":
+        return _letters(number, False)
+    if fmt == "upperLetter":
+        return _letters(number, True)
+    if fmt == "lowerRoman":
+        return _roman(number, False)
+    if fmt == "upperRoman":
+        return _roman(number, True)
+    if fmt == "decimalZero":
+        return f"{number:02d}"
+    if fmt == "none":
+        return ""
+    return str(number)
+
+
+class _Numbering:
+    """Generates the list numbers Word stores as a recipe, not as text."""
+
+    def __init__(self, document):
+        self.levels: dict = {}  # abstractNumId -> {ilvl: _Level}
+        self.nums: dict = {}  # numId -> abstractNumId
+        self.overrides: dict = {}  # (numId, ilvl) -> start
+        self.style_numbering: dict = {}  # styleId -> (numId, ilvl) | None
+        self.style_parent: dict = {}
+        self.counts: dict = {}  # numId -> {ilvl: count}
+
+        try:
+            numbering = document.part.numbering_part.element
+        except Exception:
+            numbering = None
+
+        if numbering is not None:
+            self._read_numbering(numbering)
+
+        try:
+            styles = document.styles.element
+        except Exception:
+            styles = None
+
+        if styles is not None:
+            self._read_styles(styles)
+
+    def _read_numbering(self, numbering) -> None:
+        for abstract in numbering.findall(_w("abstractNum")):
+            levels = {}
+            for level in abstract.findall(_w("lvl")):
+                try:
+                    index = int(level.get(_w("ilvl"), "0"))
+                    start = int(_val(level.find(_w("start"))) or 1)
+                except ValueError:
+                    continue
+                levels[index] = _Level(
+                    start=start,
+                    fmt=_val(level.find(_w("numFmt"))) or "decimal",
+                    text=_val(level.find(_w("lvlText"))) or "",
                 )
-                == "page"
-            ):
-                return True
-    return False
+            self.levels[abstract.get(_w("abstractNumId"))] = levels
+
+        for num in numbering.findall(_w("num")):
+            num_id = num.get(_w("numId"))
+            self.nums[num_id] = _val(num.find(_w("abstractNumId")))
+            for override in num.findall(_w("lvlOverride")):
+                start = override.find(_w("startOverride"))
+                if start is not None and _val(start) is not None:
+                    try:
+                        key = (num_id, int(override.get(_w("ilvl"), "0")))
+                        self.overrides[key] = int(_val(start))
+                    except ValueError:
+                        pass
+
+    def _read_styles(self, styles) -> None:
+        for style in styles.findall(_w("style")):
+            style_id = style.get(_w("styleId"))
+            self.style_parent[style_id] = _val(style.find(_w("basedOn")))
+            properties = style.find(_w("pPr"))
+            numbering = None if properties is None else properties.find(_w("numPr"))
+            if numbering is not None:
+                self.style_numbering[style_id] = self._read_numpr(numbering)
+
+    @staticmethod
+    def _read_numpr(numpr):
+        num_id = _val(numpr.find(_w("numId")))
+        try:
+            ilvl = int(_val(numpr.find(_w("ilvl"))) or 0)
+        except ValueError:
+            ilvl = 0
+        return num_id, ilvl
+
+    def _of_style(self, style_id):
+        for _ in range(8):  # a basedOn chain is short; bounded against cycles
+            if style_id is None:
+                return None
+            if style_id in self.style_numbering:
+                return self.style_numbering[style_id]
+            style_id = self.style_parent.get(style_id)
+        return None
+
+    def reference(self, paragraph):
+        """(numId, ilvl) for a numbered paragraph, else None."""
+        properties = paragraph.find(_w("pPr"))
+        if properties is None:
+            return None
+
+        numpr = properties.find(_w("numPr"))
+        if numpr is not None:
+            num_id, ilvl = self._read_numpr(numpr)
+            # numId 0 is Word's way of saying "not numbered", even when the
+            # style says it is.
+            return None if num_id in (None, "0") else (num_id, ilvl)
+
+        found = self._of_style(_val(properties.find(_w("pStyle"))))
+        if found is None or found[0] in (None, "0"):
+            return None
+        return found
+
+    def label(self, paragraph) -> tuple:
+        """(label, indent level) - ("", 0) for an unnumbered paragraph.
+
+        Called for every numbered paragraph, empty or not: Word counts an
+        empty numbered paragraph, so skipping it would shift every number
+        after it.
+        """
+        reference = self.reference(paragraph)
+        if reference is None:
+            return "", 0
+
+        num_id, ilvl = reference
+        levels = self.levels.get(self.nums.get(num_id))
+        if not levels or ilvl not in levels:
+            return "", 0
+
+        level = levels[ilvl]
+        counts = self.counts.setdefault(num_id, {})
+        start = self.overrides.get((num_id, ilvl), level.start)
+        counts[ilvl] = counts.get(ilvl, start - 1) + 1
+        for deeper in [index for index in counts if index > ilvl]:
+            del counts[deeper]
+
+        if level.fmt == "bullet":
+            return self._bullet(level.text), ilvl
+        if level.fmt == "none":
+            return "", ilvl
+
+        def fill(match):
+            index = int(match.group(1)) - 1
+            other = levels.get(index, _Level())
+            value = counts.get(index, self.overrides.get((num_id, index), other.start))
+            return _format_number(value, other.fmt)
+
+        template = level.text or f"%{ilvl + 1}."
+        return re.sub(r"%(\d)", fill, template).strip(), ilvl
+
+    @staticmethod
+    def _bullet(text: str) -> str:
+        # Word stores a bullet as one glyph from a symbol font - a private-use
+        # code point that means nothing outside that font.
+        if text in ("-", "*", "+") or text in (chr(0x2013), chr(0x2014)):
+            return text
+        return chr(0x2022)
 
 
-def extract_pages(file_path: str) -> tuple:
-    """Returns (list of page texts, metadata).
+# -- the walk ---------------------------------------------------------------
 
-    Page boundaries are the author's explicit page breaks. See the module
+
+class _PageBreak:
+    pass
+
+
+@dataclass
+class _TextBox:
+    element: object
+
+
+@dataclass
+class _Picture:
+    rid: str
+
+
+@dataclass
+class DocxPage:
+    text: str = ""
+    tables: list = field(default_factory=list)
+
+
+class _Extractor:
+    def __init__(self, document, file_path, image_ocr, max_images):
+        self.document = document
+        self.file_path = file_path
+        self.numbering = _Numbering(document)
+        self.image_ocr = image_ocr
+        self.images_left = max_images if image_ocr else 0
+        self.seen_images: set = set()
+
+        self.pages: list = []
+        self.builder = None
+        # Whether the BODY has put anything on the current page. A header or
+        # footer is on every page by definition and must not make a document
+        # that opens with a page break grow a page of nothing but a header.
+        self.has_body = False
+        self.depth = 0
+        self.paragraphs = 0
+        self.tables = 0
+        self.text_boxes = 0
+        self.pictures_read = 0
+        self.footnote_numbers: dict = {}
+        self.endnote_numbers: dict = {}
+
+    # -- pages ---------------------------------------------------------
+
+    def _new_page(self) -> None:
+        self.builder = compose.PageBuilder(source=SOURCE, source_version=VERSION)
+        self.pages.append(self.builder)
+        self.has_body = False
+
+    def _break_page(self) -> None:
+        # Consecutive breaks, or a break on an empty page, make no new page:
+        # an author's stray extra break is not a blank page in the record.
+        if self.has_body:
+            self._new_page()
+
+    def _emit_text(self, text: str) -> None:
+        self.builder.add_text(text)
+        if text.strip():
+            self.has_body = True
+
+    def _emit_table(self, rows) -> None:
+        self.builder.add_table(rows)
+        self.has_body = True
+
+    # -- blocks --------------------------------------------------------
+
+    def _blocks(self, parent):
+        for child in parent:
+            name = local(child)
+            if name in ("p", "tbl"):
+                yield name, child
+            elif name == "sdt":
+                content = child.find(_w("sdtContent"))
+                if content is not None:
+                    yield from self._blocks(content)
+            elif name in ("ins", "moveTo", "customXml", "smartTag"):
+                yield from self._blocks(child)
+            elif name == "AlternateContent":
+                yield from self._blocks(self._choice(child))
+
+    @staticmethod
+    def _choice(alternate):
+        """The branch Word itself would show: Choice, else Fallback.
+
+        An AlternateContent holds the SAME content twice - once for newer
+        Word, once for older - so reading both duplicates every text box.
+        """
+        choice = alternate.find(f"{{{MC}}}Choice")
+        if choice is None:
+            choice = alternate.find(f"{{{MC}}}Fallback")
+        return choice if choice is not None else alternate
+
+    def run_body(self, parent, allow_breaks=True) -> None:
+        for kind, element in self._blocks(parent):
+            if kind == "p":
+                self._body_paragraph(element, allow_breaks)
+            else:
+                self._body_table(element)
+
+    # -- paragraphs ----------------------------------------------------
+
+    def _inline(self, element, out) -> None:
+        for child in element:
+            name = local(child)
+            if name == "r":
+                self._run(child, out)
+            elif name in ("hyperlink", "ins", "moveTo", "smartTag", "fldSimple"):
+                self._inline(child, out)
+            elif name in ("sdt",):
+                content = child.find(_w("sdtContent"))
+                if content is not None:
+                    self._inline(content, out)
+            elif name == "AlternateContent":
+                self._inline(self._choice(child), out)
+            elif name in ("oMath", "oMathPara"):
+                formula = "".join(t.text or "" for t in child.iter(f"{{{M}}}t"))
+                if formula.strip():
+                    out.append(f" {formula.strip()} ")
+            # w:del and w:moveFrom are deliberately absent: deleted text is
+            # not part of the document as it now reads.
+
+    def _run(self, run, out) -> None:
+        for child in run:
+            name = local(child)
+            if name == "t":
+                out.append(child.text or "")
+            elif name == "tab":
+                out.append("\t")
+            elif name in ("br", "cr"):
+                if name == "br" and child.get(_w("type")) == "page":
+                    out.append(_PageBreak())
+                else:
+                    out.append("\n")
+            elif name == "noBreakHyphen":
+                out.append("-")
+            elif name == "footnoteReference":
+                out.append(self._note_marker(child, "fn", self.footnote_numbers))
+            elif name == "endnoteReference":
+                out.append(self._note_marker(child, "en", self.endnote_numbers))
+            elif name in ("drawing", "pict", "object"):
+                self._graphic(child, out)
+            elif name == "AlternateContent":
+                for inner in self._choice(child):
+                    if local(inner) in ("drawing", "pict", "object"):
+                        self._graphic(inner, out)
+
+    @staticmethod
+    def _note_marker(reference, prefix, numbers) -> str:
+        note_id = reference.get(_w("id"))
+        number = numbers.get(note_id)
+        return f"[{prefix}{number}]" if number else ""
+
+    def _graphic(self, element, out) -> None:
+        for box in element.iter(_w("txbxContent")):
+            out.append(_TextBox(box))
+        for blip in element.iter(f"{{{A}}}blip"):
+            rid = blip.get(f"{{{R}}}embed")
+            if rid:
+                out.append(_Picture(rid))
+        for image in element.iter(f"{{{V}}}imagedata"):
+            rid = image.get(f"{{{R}}}id")
+            if rid:
+                out.append(_Picture(rid))
+
+    def _items(self, paragraph) -> list:
+        out: list = []
+        self._inline(paragraph, out)
+        return out
+
+    @staticmethod
+    def _starts_new_page_before(paragraph) -> bool:
+        properties = paragraph.find(_w("pPr"))
+        if properties is None:
+            return False
+        before = properties.find(_w("pageBreakBefore"))
+        # Present with no val (or val true) means yes; val 0/false means no.
+        return before is not None and _val(before) not in ("0", "false", "off")
+
+    @staticmethod
+    def _ends_with_section_break(paragraph) -> bool:
+        properties = paragraph.find(_w("pPr"))
+        section = None if properties is None else properties.find(_w("sectPr"))
+        if section is None:
+            return False
+        kind = _val(section.find(_w("type"))) or "nextPage"
+        return kind != CONTINUOUS
+
+    def _line(self, pieces, label, indent) -> str:
+        text = "".join(pieces).strip()
+        if label and text:
+            return f"{'  ' * indent}{label} {text}"
+        return text
+
+    def _body_paragraph(self, paragraph, allow_breaks) -> None:
+        if self.depth == 0:
+            self.paragraphs += 1
+
+        if allow_breaks and self._starts_new_page_before(paragraph):
+            self._break_page()
+
+        label, indent = self.numbering.label(paragraph)
+
+        pieces: list = []
+        trailing: list = []
+        labelled = False
+
+        def flush():
+            nonlocal labelled
+            line = self._line(pieces, "" if labelled else label, indent)
+            if line:
+                self._emit_text(line)
+                labelled = True
+            pieces.clear()
+
+        for item in self._items(paragraph):
+            if isinstance(item, str):
+                pieces.append(item)
+            elif isinstance(item, _PageBreak):
+                flush()
+                if allow_breaks:
+                    self._break_page()
+            else:
+                trailing.append(item)
+
+        flush()
+
+        for item in trailing:
+            if isinstance(item, _TextBox):
+                self._text_box(item.element)
+            else:
+                self._picture(item.rid)
+
+        if allow_breaks and self._ends_with_section_break(paragraph):
+            self._break_page()
+
+    def _text_box(self, element) -> None:
+        self.text_boxes += 1
+        self.depth += 1
+        try:
+            self.run_body(element, allow_breaks=False)
+        finally:
+            self.depth -= 1
+
+    # -- pictures ------------------------------------------------------
+
+    def _picture(self, rid) -> None:
+        if self.images_left <= 0:
+            return
+
+        try:
+            blob = self.document.part.related_parts[rid].blob
+        except Exception:
+            return
+
+        digest = hashlib.sha1(blob).hexdigest()
+        if digest in self.seen_images:
+            return
+        self.seen_images.add(digest)
+
+        try:
+            from PIL import Image
+
+            with Image.open(BytesIO(blob)) as image:
+                if min(image.size) < MIN_IMAGE_SIDE:
+                    return
+                picture = image.copy()
+        except Exception:
+            return  # EMF/WMF and the like: not something Pillow reads here
+
+        self.images_left -= 1
+        page = self.image_ocr(picture)
+        if page.words < MIN_PICTURE_WORDS:
+            return
+        if (page.confidence or 0.0) < MIN_PICTURE_CONFIDENCE:
+            return
+
+        self.pictures_read += 1
+        self._emit_text(page.text)
+
+    # -- tables --------------------------------------------------------
+
+    def _cell_text(self, cell) -> str:
+        parts = []
+        for kind, element in self._blocks(cell):
+            if kind == "p":
+                label, indent = self.numbering.label(element)
+                pieces: list = []
+                self._inline(element, pieces)
+                text = "".join(p for p in pieces if isinstance(p, str))
+                text = self._line([text], label, indent)
+                boxes = [p for p in pieces if isinstance(p, _TextBox)]
+                for box in boxes:
+                    inner = self._plain(box.element)
+                    if inner:
+                        text = f"{text} {inner}".strip()
+                if text:
+                    parts.append(text)
+            else:
+                nested = self._table_rows(element)
+                flat = "; ".join(" / ".join(c for c in row if c) for row in nested)
+                if flat.strip():
+                    parts.append(flat)
+        return "\n".join(parts)
+
+    def _table_rows(self, table) -> list:
+        rows = []
+        for row in table:
+            if local(row) != "tr":
+                continue
+
+            cells = []
+            properties = row.find(_w("trPr"))
+            before = None if properties is None else properties.find(_w("gridBefore"))
+            if before is not None:
+                try:
+                    cells.extend([""] * int(_val(before) or 0))
+                except ValueError:
+                    pass
+
+            for cell in row:
+                if local(cell) != "tc":
+                    continue
+                cell_properties = cell.find(_w("tcPr"))
+                span = 1
+                continuation = False
+                if cell_properties is not None:
+                    span_element = cell_properties.find(_w("gridSpan"))
+                    if span_element is not None and _val(span_element):
+                        try:
+                            span = max(1, int(_val(span_element)))
+                        except ValueError:
+                            span = 1
+                    merge = cell_properties.find(_w("vMerge"))
+                    # A vMerge without val="restart" continues the cell above.
+                    continuation = merge is not None and _val(merge) != "restart"
+
+                text = "" if continuation else self._cell_text(cell)
+                cells.append(text)
+                cells.extend([""] * (span - 1))
+
+            rows.append(cells)
+        return rows
+
+    def _body_table(self, table) -> None:
+        if self.depth == 0:
+            self.tables += 1
+        self.depth += 1
+        try:
+            rows = self._table_rows(table)
+        finally:
+            self.depth -= 1
+        self._emit_table(rows)
+
+    # -- everything that is not the body -------------------------------
+
+    def _plain(self, element) -> str:
+        """The text of a block container, as a flat string, with no pages."""
+        saved = (self.builder, self.pages, self.depth)
+        self.builder = compose.PageBuilder()
+        self.pages = [self.builder]
+        self.depth = 1
+        try:
+            self.run_body(element, allow_breaks=False)
+            return self.builder.text.strip()
+        finally:
+            self.builder, self.pages, self.depth = saved
+
+    def headers_and_footers(self) -> tuple:
+        headers: list = []
+        footers: list = []
+        seen: set = set()
+
+        try:
+            odd_even = bool(self.document.settings.odd_and_even_pages_header_footer)
+        except Exception:
+            odd_even = False
+
+        for section in self.document.sections:
+            wanted = [
+                (section.header, headers),
+                (section.footer, footers),
+            ]
+            if section.different_first_page_header_footer:
+                wanted += [
+                    (section.first_page_header, headers),
+                    (section.first_page_footer, footers),
+                ]
+            if odd_even:
+                wanted += [
+                    (section.even_page_header, headers),
+                    (section.even_page_footer, footers),
+                ]
+
+            for part, store in wanted:
+                if part.is_linked_to_previous:
+                    continue
+                text = self._plain(part._element)
+                key = " ".join(text.split())
+                if key and key not in seen:
+                    seen.add(key)
+                    store.append(text)
+
+        return headers, footers
+
+    def _notes(self, part: str, tag: str, prefix: str, numbers: dict) -> list:
+        root = ooxml.read_part(self.file_path, part)
+        if root is None:
+            return []
+
+        notes = []
+        for note in root.findall(_w(tag)):
+            note_id = note.get(_w("id"))
+            if note_id not in numbers:
+                continue
+            text = self._plain(note)
+            if text:
+                notes.append(f"[{prefix}{numbers[note_id]}] {text}")
+        return notes
+
+    def number_notes(self) -> None:
+        """Assign footnote and endnote numbers before the body is read, so a
+        reference in the text can print the marker its note will carry."""
+        for part, tag, numbers in (
+            ("word/footnotes.xml", "footnote", self.footnote_numbers),
+            ("word/endnotes.xml", "endnote", self.endnote_numbers),
+        ):
+            root = ooxml.read_part(self.file_path, part)
+            if root is None:
+                continue
+            for note in root.findall(_w(tag)):
+                if note.get(_w("type")) not in NOTE_TYPES_SKIPPED:
+                    numbers[note.get(_w("id"))] = len(numbers) + 1
+
+
+def extract_page_results(file_path: str, *, image_ocr=None, max_images: int = 0):
+    """(pages, metadata): `DocxPage`s with their tables as structure.
+
+    `image_ocr(PIL.Image) -> OcrPage` reads a picture embedded in the body;
+    `max_images` caps how many one document may spend on it.
+
+    Page boundaries are the author's explicit breaks. See the module
     docstring for why that is the most this format honestly supports.
     """
     docx_module = _lazy_docx()
@@ -177,44 +774,59 @@ def extract_pages(file_path: str) -> tuple:
             code=ErrorCode.CORRUPT_DOCUMENT,
         ) from exc
 
-    pages = []
-    current = []
-    tables = 0
-    paragraphs = 0
+    walker = _Extractor(document, file_path, image_ocr, max_images)
 
     try:
-        for kind, block in _blocks(document, docx_module):
-            if kind == "table":
-                tables += 1
-                text = _table_text(block)
-                if text:
-                    current.append(text)
-                continue
+        walker.number_notes()
+        headers, footers = walker.headers_and_footers()
 
-            paragraphs += 1
-            if _has_page_break(block) and current:
-                pages.append("\n".join(current))
-                current = []
+        walker._new_page()
+        for text in headers:
+            walker.builder.add_text(text)
 
-            text = block.text.strip()
-            if text:
-                current.append(text)
+        walker.run_body(document.element.body)
+
+        notes = walker._notes(
+            "word/footnotes.xml", "footnote", "fn", walker.footnote_numbers
+        ) + walker._notes("word/endnotes.xml", "endnote", "en", walker.endnote_numbers)
+
+        # Footers and notes close the document, on its last page.
+        for text in footers + notes:
+            walker.builder.add_text(text)
+    except StageError:
+        raise
     except Exception as exc:
         raise StageError(
             f"DOCX text extraction failed: {exc}",
             code=ErrorCode.EXTRACTION_FAILED,
         ) from exc
 
-    pages.append("\n".join(current))
+    built = [builder.build() for builder in walker.pages]
+    # A page break at the very end leaves an empty last page nobody wrote.
+    while len(built) > 1 and not built[-1][0].strip():
+        built.pop()
 
-    return pages, {
+    pages = [DocxPage(text=text, tables=tables) for text, tables in built]
+
+    metadata = {
         "extractor": "python-docx",
         "extractor_version": VERSION,
-        "paragraphs": paragraphs,
-        "tables": tables,
+        "paragraphs": walker.paragraphs,
+        "tables": walker.tables,
         "pagination": "explicit_breaks" if len(pages) > 1 else "none",
+        "text_boxes": walker.text_boxes,
+        "headers_footers": len(headers) + len(footers),
+        "notes": len(notes),
+        "pictures_ocred": walker.pictures_read,
         **expansion,
     }
+    return pages, metadata
+
+
+def extract_pages(file_path: str) -> tuple:
+    """Returns (list of page texts, metadata)."""
+    pages, metadata = extract_page_results(file_path)
+    return [page.text for page in pages], metadata
 
 
 def page_count(file_path: str) -> int:
@@ -225,3 +837,14 @@ def page_count(file_path: str) -> int:
     """
     pages, _ = extract_pages(file_path)
     return len(pages)
+
+
+__all__ = [
+    "DOCUMENT_PART",
+    "DocxPage",
+    "check_expansion",
+    "extract_page_results",
+    "extract_pages",
+    "is_docx",
+    "page_count",
+]
