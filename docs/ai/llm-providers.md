@@ -187,7 +187,10 @@ not turn the rest off with it.
   floor, at least 3 of its content words are in none of the passages, and fewer than 30% of
   them are (`OWN_KNOWLEDGE_MAX_SUPPORT`). A short, correct paraphrase that merely forgot its
   citation shares more than that with its passage, and stays an ungrounded draft, which the
-  reader is told could not be verified - not "your documents do not cover this". Anything
+  reader is told could not be verified - not "your documents do not cover this". The price
+  is the other way round: a general-knowledge reply that happens to reuse the weak passages'
+  vocabulary ("What is plagiarism?" with an examination policy in the corpus) can reach 30%
+  and is then an ungrounded draft too, which chat's general reply does not replace. Anything
   that cites a passage or states a figure still goes through the grounding check.
 - **A correct answer is not discarded for how it spells a fact.** Accepted as the same
   fact: a date written another way ("31 March 2025" for "31.03.2025"), a day and month
@@ -196,11 +199,21 @@ not turn the rest off with it.
   and "no one" are not quantities), a clock time written another way ("7:30 PM" for "7.30
   pm"), "3 lakh" for 300000 (exact equality, both ways), "15-day" or "Rs 500/week" for the
   number the passage states with its unit, a citation written "[1, 2]", "[1-2]", "[ 1 ]" or
-  "[Source 1]", a list numbered "**1.**" or "(1)" - and a figure the **user** gave about
-  their own situation ("I have 70 percent attendance" answered with "At 70 percent ..."),
-  which is never a source and never cited. A figure the user only ASKED about ("Is the
-  minimum 70 percent?") is not theirs to repeat: it must be in a cited passage, or the answer
-  is rejected. Still rejected: a date that could be read two ways unless written the same
+  "[Source 1]", a list numbered "**1.**" or "(1)", the space and hyphen a model or a Word
+  document actually types (a no-break or narrow no-break space in "15 August", a non-breaking
+  hyphen in "2024-25", a digit of another script; the reader's text is never altered) - and
+  a figure the **user** gave about their own situation ("I have 70 percent attendance",
+  "I'm at 70%", "with 70 percent attendance" answered with "At 70 percent ..."), which is
+  never a source and never cited. That is judged figure by figure, by what stands right before
+  it: an ownership cue ("I have", "my X is", "a student with", "with"/"at"), nothing that only
+  reports or checks it ("heard", "says", "whether", "checking", "regarding"), not right after
+  what an institution charges or requires ("fee", "minimum", "limit") unless the sentence is in
+  the past ("my hostel fee WAS 55000"), and no request to agree after it ("isn't it"). A figure
+  the user only ASKED about or reported ("Is the minimum 70 percent?", "I heard the hostel
+  closes on 15 August") is not theirs to repeat: it must be in a cited passage, or the answer
+  is rejected. No rule can tell the user's own past payment ("I paid 50000 as hostel fee last
+  year", which an answer needs to mention) from the same words as a claim, so a model that
+  then agrees with it as policy is its own mistake that this check cannot catch. Still rejected: a date that could be read two ways unless written the same
   way, a date that does not exist ("31 April 2025" is one exact token and is never rescued
   by a 31 and a 2025 elsewhere), a different day or month, a hyphenated range (A-B, also
   written with an en dash) whose two ends are not found together in one passage (within about
@@ -314,17 +327,31 @@ call, so two background calls racing for the last slot may overshoot it by one.
 
 Only when every link has failed is the answer quoted from the passages instead. If a link
 breaks off **mid-stream**, the words it showed are withdrawn (a `reset` event) before the
-next link starts. The SDK's own retries are kept only for the last link tried.
+next link starts. Without a deadline the SDK's own retries are kept only for the last link
+tried; with one (the default) they are not used.
 
-**One walk has a time budget** (`RAG_ANSWERER_DEADLINE`, 50 s by default, 0 for none). Without
+**One walk has a time budget** (`RAG_ANSWERER_DEADLINE`, 40 s by default, 0 for none). Without
 one, a hung provider is waited for the full `RAG_ANSWERER_TIMEOUT`, then the next, then the
 SDK's retries on the last: a question can outlast nginx's 120 s and the reader gets a 504
 instead of an answer or the quoted fallback (a real-model run saw a 61 s stall). With it, each
 attempt is given what is left of the budget - half of it while another provider could still be
 tried, so one hung provider cannot starve a healthy one - and never less than 8 s; no new
-provider is started in the last 8 s; and the last link keeps only the SDK retries that still
-fit. It decides whether another link STARTS and never interrupts one that is answering. A
-corrective retry is a second walk.
+provider is started in the last 8 s; and the SDK's own retries are not used (between them it
+sleeps for the provider's Retry-After, up to two minutes, which no budget can count; the chain
+is the retry). The half is a read timeout: a request that is still silent after it is treated
+as hung when another provider could answer, and that includes a slow non-streamed answer
+(a 40 s one is cut at 20 s and the next provider answers); a streamed answer that has begun is
+not cut off, its timer restarting with every chunk. A provider that times out has all its
+links rested for 30 s, so the next question tries a healthy provider first instead of paying
+the same wait again (chat still tries a rested link last, never skips it). A question can take
+TWO walks, because the corrective retry and the general reply after a "not found" are each a
+second one, so 40 keeps both inside nginx's 120 s with room for retrieval and reranking; with
+`RAG_PLAN_WHEN_GENERATIVE` on, parts after a failed one are quoted rather than each waiting on the
+same outage. Known limits: a provider that keeps the connection alive with comments or blank
+lines but never answers defeats the budget (the timeout is per read, not a total), and the
+proxy's 120 s applies; the Claude answerer does not go through the gateway and has no budget; a
+value below 16 s cannot try a second provider (logged as `llm.deadline_short`); one that is not a
+number of seconds stops the app at start-up.
 
 ## What people see
 

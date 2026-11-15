@@ -61,6 +61,11 @@ class Provider(ModelClient):
             self.calls.append(kwargs)
             self.clock.advance(timeout or 60.0)
             raise TimeoutError("timed out")
+        if timeout is not None and self.seconds > timeout:
+            # Silent for longer than the timeout it was handed: the SDK gives up.
+            self.calls.append(kwargs)
+            self.clock.advance(timeout)
+            raise TimeoutError("timed out")
         self.clock.advance(self.seconds)
         return super()._create(**kwargs)
 
@@ -134,9 +139,25 @@ class DeadlineTests(GatewayTestCase):
         self.assertEqual(len(clients["gemini"].calls), 1)
         self.assertEqual(clients["gemini"].options[0]["timeout"], MIN_ATTEMPT_SECONDS)
 
-    def test_a_slow_answer_is_not_cut_off_by_the_budget(self):
-        """The budget decides whether another link STARTS; it never interrupts
-        one that is answering."""
+    def test_a_slow_answer_is_not_cut_off_when_no_other_provider_could_answer(self):
+        gateway = self.chain("gemini")
+        clients = {
+            "gemini": wire(gateway, "gemini", Provider(self.clock, seconds=40.0))
+        }
+
+        completion = ask(gateway)
+
+        self.assertIn("Answer", completion.text)
+        self.assertEqual(len(clients["gemini"].calls), 1)
+
+    def test_a_request_silent_past_its_half_is_treated_as_hung_if_another_remains(
+        self,
+    ):
+        """What the half-share costs, stated rather than hoped away: a non-streamed
+        request cannot be told from a hung one before it answers, so with another
+        provider to try it gets half the budget (25 s) and a 40 s answer is cut
+        off. The alternative, the whole budget for the first link, lets one hung
+        provider starve every healthy one behind it."""
         gateway = self.chain()
         clients = {
             "gemini": wire(gateway, "gemini", Provider(self.clock, seconds=40.0)),
@@ -148,7 +169,8 @@ class DeadlineTests(GatewayTestCase):
 
         self.assertIn("Answer", completion.text)
         self.assertEqual(len(clients["gemini"].calls), 1)
-        self.assertEqual(len(clients["groq"].calls), 0)
+        self.assertEqual(len(clients["groq"].calls), 1)
+        self.assertEqual(completion.provider, "groq")
 
     def test_a_provider_with_no_rival_is_given_the_whole_budget(self):
         """A hang marks its endpoint dead, so its other models would be skipped
@@ -165,12 +187,17 @@ class DeadlineTests(GatewayTestCase):
         )
         self.assertEqual(len(clients["gemini"].calls), 1)
 
-    def test_the_last_link_keeps_only_the_sdk_retries_that_still_fit(self):
-        for deadline, timeout, retries, expected in (
-            (100, 20, 2, 2),
-            (50, 20, 2, 1),
-            (30, 20, 2, 0),
-            (50, 20, 0, 0),
+    def test_the_sdk_does_not_retry_under_a_deadline(self):
+        """Between its retries the SDK sleeps for the provider's Retry-After (up
+        to two minutes), which no arithmetic on the request time can count: a 429
+        on the last link ran 60 s past a 50 s budget when the timeout was lowered.
+        The chain is the retry."""
+        for deadline, timeout, retries in (
+            (100, 20, 2),
+            (50, 20, 2),
+            (30, 20, 2),
+            (50, 10, 1),
+            (50, 20, 0),
         ):
             with self.subTest(deadline=deadline, timeout=timeout, retries=retries):
                 gateway = self.chain(
@@ -184,7 +211,7 @@ class DeadlineTests(GatewayTestCase):
                 ask(gateway)
 
                 options = clients["groq"].options[0]
-                self.assertEqual(options["max_retries"], expected)
+                self.assertEqual(options["max_retries"], 0)
                 self.assertEqual(options["timeout"], float(min(timeout, deadline)))
 
     def test_without_a_deadline_nothing_changes(self):
@@ -207,8 +234,81 @@ class DeadlineTests(GatewayTestCase):
         from django.conf import settings
 
         self.assertGreater(settings.RAG_ANSWERER_DEADLINE, 0)
-        # A corrective retry is a second walk.
-        self.assertLess(2 * settings.RAG_ANSWERER_DEADLINE, 120)
+        # A question can take two walks (a corrective retry, or the general reply
+        # after a "not found"), and retrieval, reranking and embedding come before
+        # the first: two walks leave at least 30 s of nginx's 120.
+        self.assertLessEqual(2 * settings.RAG_ANSWERER_DEADLINE, 90)
+
+    def test_a_hung_provider_is_rested_so_the_next_question_goes_elsewhere_first(
+        self,
+    ):
+        """A timeout left no trace beyond its walk, so while a provider was hung
+        EVERY question paid its wait before moving on."""
+        gateway = self.chain("gemini,groq")
+        clients = self.providers(gateway, gemini=True)
+
+        first = ask(gateway)
+        before = self.clock.now
+        second = ask(gateway)
+
+        self.assertEqual(first.provider, "groq")
+        self.assertEqual(second.provider, "groq")
+        self.assertEqual(len(clients["gemini"].calls), 1, "tried again, still hung")
+        self.assertEqual(
+            self.clock.now, before, "the second question waited for nobody"
+        )
+        order = [link.provider for link in gateway.plan(gateway_module.CHAT).links]
+        self.assertEqual(order[0], "groq")
+        self.assertEqual(order[-1], "gemini")
+
+    def test_every_model_of_a_hung_endpoint_is_rested(self):
+        gateway = self.chain("gemini,groq")
+        self.providers(gateway, gemini=True)
+
+        ask(gateway)
+
+        order = [link.provider for link in gateway.plan(gateway_module.CHAT).links]
+        self.assertEqual(order, ["groq"] + ["gemini"] * (len(order) - 1))
+
+    def test_a_timeout_is_a_timeout(self):
+        from documents.rag import budget
+
+        class ReadTimeout(Exception):
+            pass
+
+        for exc in (TimeoutError("x"), ReadTimeout("x")):
+            self.assertTrue(budget.is_timeout(exc), exc)
+            self.assertEqual(
+                budget._cooldown_seconds(exc), budget.OVERLOAD_COOLDOWN_SECONDS
+            )
+        for exc in (ValueError("x"), ConnectionError("x"), KeyError("x")):
+            self.assertFalse(budget.is_timeout(exc), exc)
+
+    def test_a_deadline_that_is_not_a_number_of_seconds_is_not_one(self):
+        """inf crashed every walk (int of NaN) after reserving a request; a negative
+        number or NaN quietly meant "8 seconds"."""
+        for value in (float("inf"), float("-inf"), float("nan"), -5, "abc", [1]):
+            with self.subTest(value=value):
+                with self.assertLogs("adi.llm", level="ERROR"):
+                    self.assertEqual(gateway_module._walk_budget(value), 0.0)
+        self.assertEqual(gateway_module._walk_budget(0), 0.0)
+        self.assertEqual(gateway_module._walk_budget(None), 0.0)
+        self.assertEqual(gateway_module._walk_budget(40), 40.0)
+
+    def test_a_deadline_too_short_for_a_second_provider_says_so(self):
+        with self.assertLogs("adi.llm", level="WARNING") as logged:
+            self.assertEqual(gateway_module._walk_budget(10), 10.0)
+        self.assertTrue(any("llm.deadline_short" in line for line in logged.output))
+
+    def test_an_infinite_deadline_does_not_break_a_walk(self):
+        with self.assertLogs("adi.llm", level="ERROR"):
+            gateway = self.chain(RAG_ANSWERER_DEADLINE=float("inf"))
+        clients = self.providers(gateway)
+
+        completion = ask(gateway)
+
+        self.assertIn("Answer", completion.text)
+        self.assertEqual(len(clients["gemini"].calls), 1)
 
     @override_settings(RAG_ANSWERER_DEADLINE=50)
     def test_a_stub_without_with_options_passes_through(self):

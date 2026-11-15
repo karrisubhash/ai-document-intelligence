@@ -347,6 +347,25 @@ def is_capacity(exc) -> bool:
 MIN_ATTEMPT_SECONDS = 8.0
 
 
+def _walk_budget(value) -> float:
+    """RAG_ANSWERER_DEADLINE as seconds, 0 for none. settings refuses a bad one at
+    start-up; this is for what reaches a Gateway by another road. An infinite or
+    negative budget would crash a walk (int of NaN) or quietly mean 8 seconds."""
+    try:
+        seconds = float(value or 0.0)
+    except (TypeError, ValueError):
+        seconds = float("nan")
+    if not 0 <= seconds < float("inf"):
+        logger.error("llm.deadline_invalid", extra={"value": str(value)[:40]})
+        return 0.0
+    if 0 < seconds < 2 * MIN_ATTEMPT_SECONDS:
+        logger.warning(
+            "llm.deadline_short",
+            extra={"seconds": seconds, "needed": 2 * MIN_ATTEMPT_SECONDS},
+        )
+    return seconds
+
+
 def _for_attempt(client, *, retries=None, timeout=None):
     """The same client for ONE attempt, with the SDK's retries and request
     timeout set for it. A stub without with_options passes through unchanged."""
@@ -671,7 +690,7 @@ class Gateway:
         self._retries = int(getattr(settings, "RAG_ANSWERER_RETRIES", 2) or 0)
         # Seconds ONE walk of the chain may take, 0 for no limit. See
         # _attempt_options.
-        self._deadline = float(getattr(settings, "RAG_ANSWERER_DEADLINE", 0.0) or 0.0)
+        self._deadline = _walk_budget(getattr(settings, "RAG_ANSWERER_DEADLINE", 0.0))
 
     def _time_left(self, started: float) -> float | None:
         """What is left of this walk's budget, None when there is no budget."""
@@ -691,8 +710,11 @@ class Gateway:
         dead, so its other models would be skipped anyway), half of it when
         another provider could, so one hung provider cannot starve a healthy one.
         Never more than the configured timeout, never less than
-        MIN_ATTEMPT_SECONDS, and the last link keeps only as many SDK retries as
-        still fit. Without a deadline nothing changes: no retries before the last
+        MIN_ATTEMPT_SECONDS, and with no SDK retries of its own. That half is a
+        read timeout: a request still silent after it, a slow non-streamed one
+        included, is treated as hung when another provider could answer; a
+        streamed answer that has begun is not cut off, its timer restarting with
+        every chunk. Without a deadline nothing changes: no retries before the last
         link, the client's own settings on it.
         """
         last = not remaining
@@ -702,10 +724,11 @@ class Gateway:
         elsewhere = any(later.endpoint != link.endpoint for later in remaining)
         share = left / 2 if elsewhere else left
         timeout = min(self._timeout, max(share, MIN_ATTEMPT_SECONDS))
-        retries = 0
-        if last:
-            retries = max(0, min(self._retries, int(left // timeout) - 1))
-        return {"retries": retries, "timeout": timeout}
+        # The SDK's own retries are off under a deadline, on the last link too:
+        # between them it sleeps for the provider's Retry-After (up to two
+        # minutes), which no arithmetic on the request time can count, so a 429 on
+        # the last link ran 60 s past a 50 s budget. The chain is the retry.
+        return {"retries": 0, "timeout": timeout}
 
     @classmethod
     def from_settings(cls) -> "Gateway":
@@ -1055,6 +1078,14 @@ class Gateway:
                     # reached or broke mid-reply: every link on this endpoint
                     # would fail the same way. Other providers may not.
                     dead.add(link.endpoint)
+                    if budget.is_timeout(exc):
+                        # A hang left no trace beyond this walk, so while a
+                        # provider was hung EVERY question paid its wait again
+                        # before moving on. Rested for a short while, it is
+                        # tried after the healthy providers instead of first.
+                        for sibling in self.links:
+                            if sibling.endpoint == link.endpoint:
+                                self.broker.cool(sibling, exc)
                 remaining = [
                     later
                     for later in plan.links[index + 1 :]

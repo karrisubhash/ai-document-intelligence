@@ -809,10 +809,19 @@ RAG_ANSWERER_RETRIES = int(os.getenv("RAG_ANSWERER_RETRIES", "2"))
 # above is per attempt, so on its own a hung provider is waited for in full, then
 # the next, then the SDK's retries on the last: far past nginx's 120 s, and the
 # reader gets a 504 instead of an answer or the quoted fallback. With a deadline
-# each attempt gets what is left of it and no new provider is started in the last
-# 8 seconds; see documents.rag.gateway.Gateway._attempt_options. A corrective retry
-# is a second walk, so keep twice this well under the proxy's limit.
-RAG_ANSWERER_DEADLINE = float(os.getenv("RAG_ANSWERER_DEADLINE", "50"))
+# each attempt gets what is left of it (half of it while another provider could
+# still be tried), the SDK's own retries are off, and no new provider is started in
+# the last 8 seconds; see documents.rag.gateway.Gateway._attempt_options. A
+# question can take TWO walks (a corrective retry, or the general reply after a
+# "not found"), so the default of 40 keeps both under nginx's 120 s with room for
+# retrieval; the proxy's own limit applies to a provider that keeps a connection
+# alive without answering. A value below 16 cannot try a second provider.
+RAG_ANSWERER_DEADLINE = float(os.getenv("RAG_ANSWERER_DEADLINE", "40"))
+if not 0 <= RAG_ANSWERER_DEADLINE < float("inf"):
+    raise ValueError(
+        "RAG_ANSWERER_DEADLINE must be a number of seconds (0 for no limit), "
+        f"not {RAG_ANSWERER_DEADLINE!r}"
+    )
 
 RAG_RETRIEVAL_DEPTH = int(os.getenv("RAG_RETRIEVAL_DEPTH", "20"))
 

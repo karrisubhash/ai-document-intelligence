@@ -209,6 +209,14 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             result = ask(user, query, **{**kwargs, "focus": part})
         else:
             result = ask(user, part, **kwargs)
+        if _model_failed(result) and not isinstance(
+            kwargs.get("answerer"), ExtractiveAnswerer
+        ):
+            # The model has had its turn: each further part would be another
+            # wait on the same outage (three of them took 150 s against a 50 s
+            # budget each), so the rest are quoted, as when the question went
+            # whole and the model failed.
+            kwargs = {**kwargs, "answerer": ExtractiveAnswerer()}
         results.append(result)
         asked.append(result)
         if answerer is None and result.model_name:

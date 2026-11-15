@@ -900,3 +900,148 @@ class WhatTheAnswerAlreadyHasIsNotAddedAgainTests(SimpleTestCase):
         self.assertEqual(
             quoting.own_figure_terms("Is the minimum 70 percent?"), frozenset()
         )
+
+
+class WhatIsAskedIsNotSetAsideTests(SimpleTestCase):
+    """The third review: setting the user's own-situation clause aside removed what
+    was ASKED when the question had no comma or question mark (the whole of it was
+    one clause) and when it asked about the asker's OWN fee, price or tuition (the
+    programme or year they named is then what is asked about). Seven of ten
+    questions that must be refused were answered; the table was dumped whole."""
+
+    def test_a_question_that_is_one_clause_is_still_a_question(self):
+        circular = prose(1, BUS_CIRCULAR)
+        for question, chunks in (
+            ("As a B.Arch student what is the B.Arch fee", (table(1),)),
+            ("I am a PhD student what is the PhD tuition fee", (table(1),)),
+            ("I am an MBA student what is the MBA hostel fee", (table(1),)),
+            ("I joined in 2022 what did the bus pass cost in 2022", (circular,)),
+            ("I was in the 2021-22 batch what was the 2021-22 fee", (table(1),)),
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(ask(question, *chunks).abstained, question)
+
+    def test_what_is_my_fee_is_about_the_programme_or_year_they_named(self):
+        circular = prose(1, BUS_CIRCULAR)
+        for question, chunks in (
+            ("I am a B.Arch student. What is my tuition fee?", (table(1),)),
+            ("I am a PhD scholar, what is my hostel fee?", (table(1),)),
+            ("As an MBA student, what is my tuition?", (table(1),)),
+            ("I am a B.Tech EEE student. What is my tuition?", (table(1),)),
+            ("I am a B.Tech EEE student. What is my exam fee?", (table(1),)),
+            ("I joined in 2019. What was my bus pass price?", (circular,)),
+            ("I am in the 2018-22 batch. What was my fee?", (table(1),)),
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(ask(question, *chunks).abstained, question)
+
+    def test_the_programme_they_named_is_answered_when_the_table_has_it(self):
+        response = ask("I am a B.Tech CSE student. What is my tuition fee?", table(1))
+
+        self.assertFalse(response.abstained)
+        self.assertIn("85000", response.text)
+        self.assertNotIn("95000", response.text)
+
+    def test_a_question_about_something_general_still_sets_the_clause_aside(self):
+        for question, named in (
+            ("I am a B.Tech student. What is the library fine per day?", "B.Tech"),
+            ("As a PhD scholar, what is the minimum attendance?", "PhD"),
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(quoting._own_situation_clauses(question))
+                self.assertNotIn(named, quoting._without_own_situation(question))
+
+
+class AnAcronymBesideAColumnWordIsACodeTests(SimpleTestCase):
+    """ "What is the MBA hostel fee?" put the acronym after "is the", where no
+    preposition marks it as a row key, so the table with no MBA row was dumped."""
+
+    def test_an_acronym_before_a_column_word_is_a_programme_asked_for(self):
+        for question in (
+            "What is the MBA hostel fee?",
+            "What is the MCA hostel fee?",
+            "What is the EEE hostel fee?",
+            "What is the MBA exam fee?",
+            "What is the MBA programme hostel fee?",
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(ask(question, table(1)).abstained, question)
+
+    def test_an_emphasis_word_before_a_column_word_is_not(self):
+        for question in (
+            "PLEASE tell me the hostel fee",
+            "CHECK the hostel fee",
+            "What is the hostel fee for B.Tech CSE URGENT",
+        ):
+            with self.subTest(question=question):
+                self.assertFalse(ask(question, table(1)).abstained, question)
+
+
+class ANameOrAPlaceIsNotATitleTests(SimpleTestCase):
+    """ "Hostel Warden: Dr Ramesh Kumar Rao" was three or more capitalised words, so
+    it was a heading, quoted only when nothing else qualified: the sentence about
+    the same warden answered "who is the warden" and named nobody."""
+
+    CASES = (
+        (
+            "Who is the hostel warden?",
+            "Hostel Warden: Dr Ramesh Kumar Rao",
+            "The hostel warden may grant permission to return after curfew.",
+            "Ramesh Kumar Rao",
+        ),
+        (
+            "Who is the hostel warden?",
+            "Hostel Warden: Ramesh Kumar Rao",
+            "The hostel warden may grant permission to return after curfew.",
+            "Ramesh Kumar Rao",
+        ),
+        (
+            "Who is the placement officer?",
+            "Placement Officer: Mr Suresh Babu Naidu",
+            "The placement officer meets students on Fridays.",
+            "Suresh Babu Naidu",
+        ),
+        (
+            "Where is the library?",
+            "Location: Central Library Building Ground Floor",
+            "The library is open from 9 am to 8 pm.",
+            "Central Library Building Ground Floor",
+        ),
+        (
+            "Where is the placement cell?",
+            "Placement Cell Location: Administrative Block First Floor",
+            "The placement cell is open on weekdays.",
+            "Administrative Block First Floor",
+        ),
+    )
+
+    def test_a_line_that_names_a_person_or_a_place_is_a_fact(self):
+        for question, line, other, expected in self.CASES:
+            with self.subTest(line=line):
+                response = ask(question, prose(1, line + "\n" + other))
+
+                self.assertFalse(response.abstained)
+                self.assertIn(expected, response.text)
+
+    def test_a_document_header_is_still_a_title(self):
+        for label, value in (
+            ("Policy", "Staff Leave Policy 2024-25"),
+            ("Notice", "Bus Pass Renewal for the Academic Year"),
+            ("Circular", "Revised Fee Structure 2024-25"),
+            ("Guidelines", "Use of the Computer Laboratory"),
+            ("Hostel Rules", "Revised Rules For Residents 2024-25"),
+        ):
+            with self.subTest(label=label):
+                self.assertTrue(quoting._looks_like_a_title(label, value))
+
+    def test_a_person_a_place_or_a_short_value_is_not(self):
+        for label, value in (
+            ("Hostel Warden", "Dr Ramesh Kumar Rao"),
+            ("Hostel Warden", "Ramesh Kumar Rao"),
+            ("Location", "Central Library Building Ground Floor"),
+            ("Policy", "Dr Ramesh Kumar Rao"),
+            ("Fee", "Rs 500"),
+            ("Warden", "Dr Rao"),
+        ):
+            with self.subTest(label=label, value=value):
+                self.assertFalse(quoting._looks_like_a_title(label, value))

@@ -218,17 +218,33 @@ _NUMBERED_ITEM = re.compile(r"^\s*\d{1,2}[.)]\s+(\S.*)$")
 
 _TITLE_STOPWORDS = frozenset("for of and the to in on at a an".split())
 _YEAR_OR_RANGE = re.compile(r"(?:19|20)\d{2}(?:[-/]\d{2,4})?")
+# A person ("Dr Ramesh Kumar Rao") is never the title of a document.
+_HONORIFICS = frozenset("dr mr mrs ms prof shri smt sri er".split())
+# What a document's own header is labelled ("Policy: Staff Leave Policy"); any other
+# label ("Hostel Warden", "Location") introduces a fact, however it is capitalised.
+_DOCUMENT_LABELS = frozenset(
+    "policy policies notice circular guideline guidelines memo memorandum order "
+    "resolution minutes agenda regulation regulations rules procedure procedures "
+    "announcement bulletin notification".split()
+)
 
 
-def _looks_like_a_title(value: str) -> bool:
+def _looks_like_a_title(label: str, value: str) -> bool:
     """Whether what follows a label is a TITLE ("Staff Leave Policy 2024-25",
-    "Bus Pass Renewal"): three or more words, every one capitalised, a short
-    little word or a year. "Casual leave: 12 days", "Fee: Rs 500" and "Warden:
-    Dr Rao" are facts; "Policy: Staff Leave Policy 2024-25" is a heading whose
-    label ("Policy", "Notice", "Circular", "Guidelines") nobody can list."""
+    "Bus Pass Renewal"): under a document-like label ("Policy", "Notice",
+    "Circular", "Guidelines") or holding a year, three or more words, every one
+    capitalised, a short little word or a year. "Casual leave: 12 days", "Fee: Rs
+    500" and "Warden: Dr Rao" are facts, and so are "Hostel Warden: Dr Ramesh Kumar
+    Rao" and "Location: Central Library Building Ground Floor": a name or a place is
+    capitalised too, and the sentence about the same warden must not beat the line
+    that names them."""
     words = [word.strip(".,;:()") for word in value.split()]
     words = [word for word in words if word]
-    if len(words) < 3:
+    if len(words) < 3 or words[0].lower() in _HONORIFICS:
+        return False
+    if label.strip().lower() not in _DOCUMENT_LABELS and not _YEAR_OR_RANGE.search(
+        value
+    ):
         return False
     for word in words:
         if word.lower() in _TITLE_STOPWORDS or _YEAR_OR_RANGE.fullmatch(word):
@@ -260,7 +276,7 @@ def _is_data_line(text: str) -> bool:
             not _CLAUSE_LABEL.match(label)
             and label.strip().lower() not in _TITLE_LABELS
             and len(label.split()) <= MAX_LABEL_WORDS
-            and not _looks_like_a_title(text[labelled.end(1) + 1 :])
+            and not _looks_like_a_title(label, text[labelled.end(1) + 1 :])
         )
     return False
 
@@ -441,19 +457,42 @@ def year_facts(text: str) -> tuple:
     return ranges, years
 
 
-def _own_situation_clauses(question: str) -> list:
-    """The clauses in which the user describes THEMSELVES, as statements.
+_ASKS = re.compile(
+    r"\?|\b(?:what|which|how|when|where|who|whom|whose|why|can|could|may|will|would"
+    r"|should|do|does|did|is|are|am|tell|give|list|show)\b",
+    re.I,
+)
+_ABOUT_THE_ASKER = re.compile(r"\b(?:my|our|ours|mine|me|myself)\b", re.I)
 
-    A clause with a question mark in it is never one: "Can a student with 60
-    percent attendance get the 2023-24 bus pass?" is a question whose subject is
-    a student with 60 percent (that is own-situation text for the GROUNDING rule,
-    which only decides what an answer may repeat), but it is ALL question, and
-    taking it out would leave nothing to ask about."""
-    return [
+
+def _own_situation_clauses(question: str) -> list:
+    """The clauses in which the user describes THEMSELVES, as statements, that can
+    be set aside because they are not what is asked.
+
+    - A clause with a question mark in it is never one: "Can a student with 60
+      percent attendance get the 2023-24 bus pass?" is a question whose subject is
+      a student with 60 percent (own-situation text for the GROUNDING rule, which
+      only decides what an answer may repeat), but it is ALL question.
+    - Nothing is set aside unless something that ASKS is left. With no comma or
+      question mark the whole of "As a B.Arch student what is the B.Arch fee" is
+      one clause, and taking it out left nothing to check the programme against.
+    - Nothing is set aside when what is left asks about the asker's OWN thing ("what
+      is my tuition fee?", "what was my bus pass price?"): the programme or the
+      year they named is then what is asked about, and a table without their row
+      must not be dumped as if it answered them."""
+    clauses = [
         clause
         for clause in fact_forms.user_stated_clauses(question)
         if "?" not in clause
     ]
+    if not clauses:
+        return []
+    rest = question
+    for clause in clauses:
+        rest = rest.replace(clause, " ")
+    if not _ASKS.search(rest) or _ABOUT_THE_ASKER.search(rest):
+        return []
+    return clauses
 
 
 def _without_own_situation(question: str) -> str:
@@ -528,11 +567,12 @@ _ARTICLES = frozenset("the a an our your their".split())
 _QUESTION_WORD = re.compile(r"[\w.]+")
 
 
-def _positioned_like_a_key(question: str, token: str) -> bool:
+def _positioned_like_a_key(question: str, token: str, columns=frozenset()) -> bool:
     """Whether an ACRONYM sits where a table's row key would: right after "for",
-    "of", "in" ("the tuition for MBA"), or next to a dotted code ("B.Tech CSE").
-    An emphasis word typed in capitals ("CHECK what is the fee", "per YEAR")
-    sits nowhere in particular."""
+    "of", "in" ("the tuition for MBA"), next to a dotted code ("B.Tech CSE"), or
+    right before one of the table's own column words ("the MBA hostel fee"). An
+    emphasis word typed in capitals ("CHECK what is the fee", "per YEAR") sits
+    nowhere in particular."""
     words = _QUESTION_WORD.findall(question)
     for index, word in enumerate(words):
         if re.sub(r"[^a-z]", "", word.lower()) != token:
@@ -546,7 +586,20 @@ def _positioned_like_a_key(question: str, token: str) -> bool:
             return True
         if DOTTED_CODE.fullmatch(before) or DOTTED_CODE.fullmatch(after):
             return True
+        if columns and after and quote_terms(after) & columns:
+            return True
     return False
+
+
+def _column_terms(passages) -> frozenset:
+    """The words of the column labels of the retrieved tables ("Programme",
+    "Tuition", "Exam Fee", "Hostel"): what a programme's row is named by and holds."""
+    terms = set()
+    for passage in passages:
+        header = tuple(getattr(passage, "table_header", ()) or ())
+        if header:
+            terms |= quote_terms(" ".join(header))
+    return frozenset(terms)
 
 
 def _code_gap_is_visible(question: str, passages) -> bool:
@@ -611,13 +664,14 @@ def names_what_the_passages_lack(question: str, passages) -> str:
 
     question = _without_own_situation(question)
     present = _letters_only(support)
+    columns = _column_terms(passages)
     visible = None
     for token, kind in sorted(_identifier_tokens(question).items()):
         if token in present:
             continue
         if kind != "dotted" and _is_ordinary_word(token, support):
             continue
-        if kind == "caps" and not _positioned_like_a_key(question, token):
+        if kind == "caps" and not _positioned_like_a_key(question, token, columns):
             continue
         if visible is None:
             visible = _code_gap_is_visible(question, passages)

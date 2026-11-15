@@ -128,7 +128,8 @@ answers when it was measured with every model call failing:
   that no retrieved passage mentions, where the passages enumerate codes (prose that names
   programmes, or a code-keyed table whose columns the question asks about; an attendance
   rule that names none applies to every programme); an acronym ("MBA") only where it stands
-  where a row key would, right after "for", "of" or "in" or beside a dotted code; a year
+  where a row key would, right after "for", "of" or "in", beside a dotted code, or right
+  before one of the table's column words ("the MBA hostel fee"); a year
   when the passages state some other year ("2023-24" against the 2024-25 circular).
   A year-less rule is not refused because the question happens to mention a year, and
   emphasis words and common abbreviations ("PLEASE", "HOD", "CGPA") are not codes.
@@ -136,7 +137,15 @@ answers when it was measured with every model call failing:
   in 2022", "I am in the 2021-25 batch") is not what is asked. It is not refused for the
   programme or year it names, and the words of it that no passage contains are not held
   against the sentence that answers the rest (a programme a table lists still picks its
-  row).
+  row). Two cases are not set aside: a question with nothing left that asks ("As a B.Arch
+  student what is the B.Arch fee", with no comma, is ONE clause and all question), and one
+  that asks about the asker's own thing ("I am a B.Arch student. What is my tuition fee?":
+  the programme or year they named is then what is asked about, and a table without their row
+  is not dumped as if it answered them).
+- A "label: value" line is a heading only under a document-like label ("Policy", "Notice",
+  "Circular", "Guidelines") or when it holds a year; "Hostel Warden: Dr Ramesh Kumar Rao" and
+  "Location: Central Library Building Ground Floor" are facts, quoted before a sentence that
+  merely mentions the same warden.
 - A sentence cut by a chunk boundary is marked with an ellipsis.
 
 Measured offline on benchmarks v2 and v3 these changes removed wrong answers to questions
@@ -163,9 +172,12 @@ An answer is returned only if:
    `31 March 2025` = `31.03.2025`, `2024-25` = `2024-2025`, `7` = a passage's "seven days"
    (a bare "one" only before a unit of time), `7:30 PM` = `7.30 pm`, `3 lakh` = `300000`,
    `15-day` = `15 days`, list numbering and markers ignored; a year the cited document's
-   title states counts; a figure the user gave about their own situation ("I have 70
-   percent attendance") may be repeated, though never cited, while a figure they only asked
-   about must be in a cited passage; a hyphenated range `A-B` (or with an en dash) needs
+   title states counts, as do a no-break space, a non-breaking hyphen or a digit of another
+   script where the ordinary one would be; a figure the user gave about their own situation
+   ("I have 70 percent attendance", "I'm at 70%"), judged figure by figure by what stands
+   before it, may be repeated, though never cited, while a figure they only asked about,
+   reported hearing or checking, or put right after a fee, fine or minimum must be in a cited
+   passage ([llm-providers.md](llm-providers.md#what-a-model-is-shown-and-what-happens-when-it-is-wrong)); a hyphenated range `A-B` (or with an en dash) needs
    both ends together in one passage; structured identifiers such as `REG/2024/117`, a
    date that can be read two ways, and a date that does not exist must match exactly), and
 4. at least 25 % of its content words appear in the cited passages (a backstop against

@@ -99,6 +99,14 @@ def is_daily_quota(exc) -> bool:
         return False
 
 
+def is_timeout(exc) -> bool:
+    """Whether a failure is a request that was waited for and never answered (the
+    SDK's APITimeoutError, httpx's ReadTimeout, the builtin TimeoutError)."""
+    return isinstance(exc, TimeoutError) or any(
+        "timeout" in cls.__name__.lower() for cls in type(exc).__mro__
+    )
+
+
 def _cooldown_seconds(exc) -> float:
     """How long a 429 should bench its model. Never raises.
 
@@ -106,8 +114,9 @@ def _cooldown_seconds(exc) -> float:
     a quota id in the body. A per-DAY quota will not lift in a minute.
     """
     try:
-        if _status(exc) == 503:
-            # Overloaded, not rate-limited: usually seconds, so a short bench.
+        if _status(exc) == 503 or is_timeout(exc):
+            # Overloaded, or hung: not rate-limited, and usually over in
+            # seconds, so a short bench.
             return OVERLOAD_COOLDOWN_SECONDS
         text = str(exc)
         if "PerDay" in text or (_status(exc) == 429 and _DAILY_QUOTA.search(text)):

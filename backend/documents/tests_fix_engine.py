@@ -605,6 +605,28 @@ class PlannedFallbackTests(SimpleTestCase):
 
         self.assertEqual(len(calls), 1)
 
+    @override_settings(RAG_PLAN_WHEN_GENERATIVE=True)
+    def test_after_an_outage_the_remaining_parts_are_quoted_without_the_model(self):
+        """With planning on, every part went to the model: three sequential waits
+        on a hung provider took 150 s against a 50 s budget each."""
+        calls = []
+
+        def ask(user, question, **kwargs):
+            calls.append((question, kwargs))
+            return failed_whole(question) if len(calls) == 1 else quoted_part(question)
+
+        model = mock.Mock(generative=True, gateway=FakeGateway(True))
+        with (
+            mock.patch.object(runner, "ask", side_effect=ask),
+            mock.patch.object(runner, "get_answerer", return_value=model),
+        ):
+            agents.answer(None, THREE_PART)
+
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("answerer", calls[0][1])
+        for _, kwargs in calls[1:]:
+            self.assertIsInstance(kwargs["answerer"], ExtractiveAnswerer)
+
     def test_a_rejected_draft_whose_retry_never_reached_a_model_is_planned_for(self):
         """The first failure stands, but it is an outage that kept the model from
         trying again, and a quote of the WHOLE compound question covers one part
