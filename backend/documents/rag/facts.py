@@ -811,7 +811,9 @@ _OWN_STATE = re.compile(
     r"(?:is|was|are|were|has|have|had|earn(?:s|ed)?|stands?|comes?|came|totals?"
     r"|scored?|secured?)\b"
     r"|\b" + _PEOPLE + r"s?\s+(?:with|who\s+(?:has|have|had|scored?|secured?|got"
-    r"|earn(?:s|ed)?))\b",
+    r"|earn(?:s|ed)?))\b"
+    r"|\bas\s+an?\s+(?:\S+\s+){0,2}?(?:student|scholar|candidate|employee|member"
+    r"|applicant|resident)\b",
     re.IGNORECASE,
 )
 _THIRD_PERSON_WITH = re.compile(r"\b" + _PEOPLE + r"s?\s+with\b", re.IGNORECASE)

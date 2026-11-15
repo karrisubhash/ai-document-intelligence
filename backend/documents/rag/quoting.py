@@ -216,6 +216,28 @@ _LIST_ITEM = re.compile(
 _NUMBERED_ITEM = re.compile(r"^\s*\d{1,2}[.)]\s+(\S.*)$")
 
 
+_TITLE_STOPWORDS = frozenset("for of and the to in on at a an".split())
+_YEAR_OR_RANGE = re.compile(r"(?:19|20)\d{2}(?:[-/]\d{2,4})?")
+
+
+def _looks_like_a_title(value: str) -> bool:
+    """Whether what follows a label is a TITLE ("Staff Leave Policy 2024-25",
+    "Bus Pass Renewal"): three or more words, every one capitalised, a short
+    little word or a year. "Casual leave: 12 days", "Fee: Rs 500" and "Warden:
+    Dr Rao" are facts; "Policy: Staff Leave Policy 2024-25" is a heading whose
+    label ("Policy", "Notice", "Circular", "Guidelines") nobody can list."""
+    words = [word.strip(".,;:()") for word in value.split()]
+    words = [word for word in words if word]
+    if len(words) < 3:
+        return False
+    for word in words:
+        if word.lower() in _TITLE_STOPWORDS or _YEAR_OR_RANGE.fullmatch(word):
+            continue
+        if not word[:1].isupper():
+            return False
+    return True
+
+
 def _is_data_line(text: str) -> bool:
     """A "label: value" line or a list item. Documents hold facts this way
     ("Casual leave: 12 days", "Monday to Saturday: 9 am to 8 pm", "- Admission
@@ -238,6 +260,7 @@ def _is_data_line(text: str) -> bool:
             not _CLAUSE_LABEL.match(label)
             and label.strip().lower() not in _TITLE_LABELS
             and len(label.split()) <= MAX_LABEL_WORDS
+            and not _looks_like_a_title(text[labelled.end(1) + 1 :])
         )
     return False
 
@@ -344,17 +367,6 @@ def _is_ordinary_word(token: str, support: str) -> bool:
     return any(stem(word) == root for word in _LOWER_WORD.findall(support))
 
 
-def _lists_codes(passages) -> bool:
-    """Whether a retrieved passage is a table whose rows carry codes (B.Tech
-    CSE, MECH): the one place a missing acronym is a visible gap and not a
-    different way of saying something."""
-    return any(
-        getattr(p, "is_table", False)
-        and _identifier_tokens(p.text, allow_shouting=True)
-        for p in passages
-    )
-
-
 def _letters_only(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
@@ -429,6 +441,95 @@ def year_facts(text: str) -> tuple:
     return ranges, years
 
 
+def _without_own_situation(question: str) -> str:
+    """The question with the clauses in which the user describes THEMSELVES taken
+    out ("I am a B.Tech student", "I joined in 2022", "as a PhD scholar"): who is
+    asking is not what is asked. A question that names its asker's programme or
+    year is about the rule, not about that programme or year."""
+    for clause in fact_forms.user_stated_clauses(question):
+        question = question.replace(clause, " ")
+    return question
+
+
+def own_situation_terms(question: str, passages) -> frozenset:
+    """The terms that ONLY the user's description of themselves contributes and
+    that no retrieved passage contains: "am", "batch", "2021" and "25" in "I am in
+    the 2021-25 batch. How much is the bus pass?".
+
+    A sentence is measured by the share of the question's terms it covers, and no
+    sentence of a circular covers the asker's batch: left in, those terms sank the
+    one that answers all of what was asked ("A bus pass costs 4500 rupees per
+    semester" covered 2 of 6, under the floor). A term some passage DOES contain
+    stays, because it can pick a row: "I am a B.Tech CSE student, what is my
+    tuition?" is answered from the CSE row."""
+    clauses = fact_forms.user_stated_clauses(question)
+    if not clauses:
+        return frozenset()
+    mine = set()
+    for clause in clauses:
+        mine |= quote_terms(clause)
+    mine -= quote_terms(_without_own_situation(question))
+    if not mine:
+        return frozenset()
+    present = set()
+    for passage in passages:
+        present |= quote_terms(passage.text)
+        present |= quote_terms(getattr(passage, "title_text", "") or "")
+        present |= quote_terms(" ".join(getattr(passage, "table_header", ()) or ()))
+    return frozenset(mine - present)
+
+
+# A word that can stand just before a code that is the thing asked about.
+_KEY_BEFORE = frozenset("for of in to about on at".split())
+_ARTICLES = frozenset("the a an our your their".split())
+_QUESTION_WORD = re.compile(r"[\w.]+")
+
+
+def _positioned_like_a_key(question: str, token: str) -> bool:
+    """Whether an ACRONYM sits where a table's row key would: right after "for",
+    "of", "in" ("the tuition for MBA"), or next to a dotted code ("B.Tech CSE").
+    An emphasis word typed in capitals ("CHECK what is the fee", "per YEAR")
+    sits nowhere in particular."""
+    words = _QUESTION_WORD.findall(question)
+    for index, word in enumerate(words):
+        if re.sub(r"[^a-z]", "", word.lower()) != token:
+            continue
+        back = index - 1
+        while back >= 0 and words[back].lower() in _ARTICLES:
+            back -= 1
+        before = words[back] if back >= 0 else ""
+        after = words[index + 1] if index + 1 < len(words) else ""
+        if before.lower() in _KEY_BEFORE:
+            return True
+        if DOTTED_CODE.fullmatch(before) or DOTTED_CODE.fullmatch(after):
+            return True
+    return False
+
+
+def _code_gap_is_visible(question: str, passages) -> bool:
+    """Whether the retrieved passages ENUMERATE codes, so that one they lack is a
+    gap and not just a different way of saying something.
+
+    Prose that names codes ("B.Tech tuition is 85000 and M.Tech 95000") does. A
+    table keyed by codes does, but only for a question that asks for what its
+    columns hold ("tuition", "hostel"): asked the library fine, a fee table that
+    happens to be retrieved says nothing about your programme. Passages that name
+    no code at all (an attendance rule, a curfew) leave nothing to be missing: the
+    rule applies to a B.Tech student, an EEE student and a PhD scholar alike.
+    """
+    asked = quote_terms(question)
+    for passage in passages:
+        if not _identifier_tokens(passage.text, allow_shouting=True):
+            continue
+        if not getattr(passage, "is_table", False):
+            return True
+        header = tuple(getattr(passage, "table_header", ()) or ())
+        values = quote_terms(" ".join(header[1:] if len(header) > 1 else header))
+        if not header or asked & values:
+            return True
+    return False
+
+
 def names_what_the_passages_lack(question: str, passages) -> str:
     """Why the passages cannot answer THIS question, or "" if they might.
 
@@ -440,15 +541,19 @@ def names_what_the_passages_lack(question: str, passages) -> str:
     the 2024-25 circular. Each rule is as narrow as it can be, because a
     refusal is the "not found" a reader sees:
 
-    - A dotted code (B.Arch, Ph.D) must appear. A mixed-case code (PhD) must
-      too. An acronym (CSE) must only when a retrieved table is keyed by codes
-      like it, and it is not an ordinary word or a common abbreviation: "PLEASE",
-      "ASAP", "SUNDAYS", "PDF", "HOD" name nothing the passages should have.
+    - What the user says about THEMSELVES is not what is asked ("I am a B.Tech
+      student", "I joined in 2022"): those clauses are set aside first.
+    - A code (B.Arch, PhD, MBA) that no passage contains is a gap only where the
+      passages enumerate codes (prose naming programmes, or a table keyed by them
+      and asked about), see _code_gap_is_visible. An acronym must also sit where
+      a row key would, and not be an ordinary word or a common abbreviation:
+      "PLEASE", "ASAP", "SUNDAYS", "PDF", "HOD" name nothing the passages should
+      have.
     - A year (2025, 2023-24, "15 August 2025") must be one the passages state,
       but only when they state some year at all. A rule with no year in it
-      (leave, curfew, attendance) is year-less: "in 2025" or "I joined in 2022"
-      does not make it unanswerable. Other numbers (a room, a roll number, a
-      premise like "250 pages") are never grounds.
+      (leave, curfew, attendance) is year-less: "in 2025" does not make it
+      unanswerable. Other numbers (a room, a roll number, a premise like "250
+      pages") are never grounds.
 
     Nothing is said about a word that is merely worded differently ("IT" for
     "computer", "complaint" for "grievance"): those stay with the overlap
@@ -461,19 +566,20 @@ def names_what_the_passages_lack(question: str, passages) -> str:
         for p in passages
     )
 
+    question = _without_own_situation(question)
     present = _letters_only(support)
-    keyed = None
+    visible = None
     for token, kind in sorted(_identifier_tokens(question).items()):
         if token in present:
             continue
-        if kind != "dotted":
-            if _is_ordinary_word(token, support):
-                continue
-            if kind == "caps":
-                if keyed is None:
-                    keyed = _lists_codes(passages)
-                if not keyed:
-                    continue
+        if kind != "dotted" and _is_ordinary_word(token, support):
+            continue
+        if kind == "caps" and not _positioned_like_a_key(question, token):
+            continue
+        if visible is None:
+            visible = _code_gap_is_visible(question, passages)
+        if not visible:
+            continue
         return (
             f"the question names {token.upper()!r}, which no retrieved "
             f"passage, title or column mentions"

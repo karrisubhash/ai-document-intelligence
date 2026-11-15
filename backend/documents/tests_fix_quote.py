@@ -96,7 +96,6 @@ class YearlessRuleTests(SimpleTestCase):
         for question in (
             "What does a bus pass cost for 2023-24?",
             "What does a bus pass cost in 2022?",
-            "I joined in 2022. What does a bus pass cost?",
         ):
             with self.subTest(question=question):
                 self.assertTrue(ask(question, bus).abstained)
@@ -343,7 +342,12 @@ class LabelAndValueLineTests(SimpleTestCase):
 class StrayTermTests(SimpleTestCase):
     """quote/F4: one shared word is not a second part of the answer."""
 
-    def test_a_sentence_sharing_only_a_stray_word_is_not_appended(self):
+    def test_a_sentence_sharing_nothing_with_the_answer_is_not_appended(self):
+        """It adds one term ("applied") and shares none with the answer. (One
+        that also shares a word with the answer may be appended: that is the
+        price of never dropping the sentence that holds the decisive term, which
+        a 75-percent "already answered" rule did - see
+        ASentenceThatHoldsTheAnswerIsNotDroppedTests.)"""
         response = ask(
             "How many days in advance must earned leave be applied?",
             staff(
@@ -355,7 +359,7 @@ class StrayTermTests(SimpleTestCase):
             staff(
                 2,
                 "Deductions are shown separately on the monthly pay slip and are "
-                "not refunded if leave is later applied for.",
+                "not refunded if a payment is later applied for.",
             ),
         )
 
@@ -427,21 +431,6 @@ class StrayTermTests(SimpleTestCase):
 
         self.assertIn("75 percent", response.text)
         self.assertIn("four books", response.text)
-
-    def test_a_leftover_term_is_not_a_second_part_when_the_first_answers_most(self):
-        """The best sentence covers four of the five terms; "applied" is what is
-        left, and is not another part of the question."""
-        question = "How many days in advance must earned leave be applied?"
-        passages = (
-            staff(
-                1,
-                "An application for earned leave must reach the head of "
-                "department at least 7 days in advance.",
-            ),
-            staff(2, "Leave is not refunded if it is later applied for."),
-        )
-
-        self.assertEqual(ask(question, *passages).cited_markers, (1,))
 
     def test_a_two_part_question_is_answered_in_a_document_about_its_topic(self):
         """ "scholarship" is in the document's title, and the second part still
@@ -593,3 +582,223 @@ class RefusalThatRepeatsTheQuestionTests(SimpleTestCase):
     def test_without_a_question_nothing_changes(self):
         self.assertTrue(declines_to_answer("I couldn't find that in the documents."))
         self.assertFalse(declines_to_answer("The fine is 50 rupees, not found in [1]."))
+
+
+BUS_CIRCULAR = (
+    "Campus bus services for the academic year 2024-25.\n"
+    "A bus pass costs 4500 rupees per semester.\n"
+    "A lost pass is replaced on payment of 200 rupees."
+)
+LIBRARY_TEXT = "The late return fine is 5 rupees per day per book at the library."
+
+
+class OwnSituationIsNotWhatIsAskedTests(SimpleTestCase):
+    """Round two: a student who names their own programme or year while asking
+    about a rule that applies to everyone was refused ('I am a B.Tech student,
+    what is the library fine?' answered 5 of 32 against 26 before the rewrite).
+    Who is asking is not what is asked."""
+
+    def test_naming_ones_own_programme_does_not_refuse_a_general_rule(self):
+        for question, passage, expected in (
+            (
+                "I am a B.Tech student. What is the library fine per day?",
+                LIBRARY_TEXT,
+                "5 rupees per day",
+            ),
+            (
+                "As a PhD scholar, what is the minimum attendance?",
+                ATTENDANCE,
+                "75 percent",
+            ),
+            (
+                "What is the minimum attendance for B.Tech students?",
+                ATTENDANCE,
+                "75 percent",
+            ),
+            (
+                "Ph.D scholars: what is the minimum attendance?",
+                ATTENDANCE,
+                "75 percent",
+            ),
+        ):
+            with self.subTest(question=question):
+                response = ask(question, prose(1, passage))
+
+                self.assertFalse(response.abstained, question)
+                self.assertIn(expected, response.text)
+
+    def test_a_fee_table_that_happens_to_be_retrieved_is_not_a_reason_to_refuse(self):
+        """The table is keyed by programme, but nothing in the question asks for
+        what its columns hold."""
+        response = ask(
+            "I am an EEE student. What is the library fine per day?",
+            prose(1, LIBRARY_TEXT),
+            table(2),
+        )
+
+        self.assertFalse(response.abstained)
+        self.assertIn("5 rupees per day", response.text)
+
+    def test_a_programme_asked_about_is_no_gap_for_a_table_not_asked_about(self):
+        """The library fine is nobody's programme: the fee table beside it is keyed
+        by programme but the question asks for nothing in its columns."""
+        response = ask(
+            "What is the library fine per day for B.Arch students?",
+            prose(1, LIBRARY_TEXT),
+            table(2),
+        )
+
+        self.assertFalse(response.abstained)
+        self.assertIn("5 rupees per day", response.text)
+
+    def test_as_a_programme_student_is_not_a_programme_asked_about(self):
+        """Where the passages name programmes, one the question names is a gap -
+        unless it is the asker's own ("As a B.Arch student, ...")."""
+        passage = (
+            "B.Tech tuition is 85000 per year and M.Tech tuition is 95000 per year.\n"
+            "The hostel curfew is 10 pm on weekdays."
+        )
+        response = ask(
+            "As a B.Arch student, what is the hostel curfew?", prose(1, passage)
+        )
+
+        self.assertFalse(response.abstained)
+        self.assertIn("10 pm", response.text)
+
+    def test_a_programme_asked_about_is_still_a_gap_where_programmes_are_listed(self):
+        prose_fees = prose(
+            3, "B.Tech tuition is 85000 per year and M.Tech tuition is 95000 per year."
+        )
+        for question, chunks in (
+            ("What is the tuition fee for the PhD programme?", (table(1),)),
+            ("What is the hostel fee for B.Arch students?", (table(1),)),
+            ("What is the tuition fee for EEE?", (table(1),)),
+            ("What is the tuition for B.Arch?", (prose_fees,)),
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(ask(question, *chunks).abstained, question)
+
+    def test_emphasis_words_beside_a_code_table_are_not_codes(self):
+        for question in (
+            "CHECK what is the tuition fee for B.Tech CSE",
+            "Is B.Tech CSE tuition 85000 per YEAR?",
+            "PLEASE tell me the tuition fee for B.Tech CSE",
+        ):
+            with self.subTest(question=question):
+                response = ask(question, table(1))
+
+                self.assertFalse(response.abstained, question)
+                self.assertIn("85000", response.text)
+
+    def test_a_year_the_user_gives_about_themselves_is_not_a_year_asked_about(self):
+        circular = prose(1, BUS_CIRCULAR)
+        for question, expected in (
+            (
+                "I graduated in 2023. What is the lost bus pass replacement fee?",
+                "200 rupees",
+            ),
+            ("I joined in 2022. How much does a bus pass cost?", "4500 rupees"),
+            (
+                "I paid 4500 for my bus pass in 2023, is that the right price?",
+                "4500 rupees",
+            ),
+            ("I am in the 2021-25 batch. How much is the bus pass?", "4500 rupees"),
+        ):
+            with self.subTest(question=question):
+                response = ask(question, circular)
+
+                self.assertFalse(response.abstained, question)
+                self.assertIn(expected, response.text)
+
+    def test_a_programme_the_user_names_for_themselves_still_picks_its_row(self):
+        """Only the terms of the own-situation clause that NO passage has are set
+        aside ("am", "student", a batch): "ECE" is in the table, so it still
+        selects the ECE row, and the other programmes' rows are not quoted."""
+        for question in (
+            "I am a B.Tech ECE student. What is my tuition fee?",
+            "I am in the 2021-25 batch of B.Tech ECE. What is the tuition fee?",
+        ):
+            with self.subTest(question=question):
+                response = ask(question, table(1))
+
+                self.assertFalse(response.abstained, question)
+                self.assertIn("82000", response.text)
+                self.assertNotIn("85000", response.text)
+                self.assertNotIn("95000", response.text)
+
+    def test_the_asker_s_batch_does_not_sink_the_sentence_that_answers(self):
+        """The words "am", "batch", "2021" and "25" are in no passage and in no
+        question part: the sentence covering "bus pass" covers all that was asked."""
+        for question in (
+            "I am in the 2021-25 batch. How much is the bus pass?",
+            "Hello, I am a 2021 batch student. How much is a bus pass?",
+        ):
+            with self.subTest(question=question):
+                response = ask(question, prose(1, BUS_CIRCULAR))
+
+                self.assertFalse(response.abstained, question)
+                self.assertIn("4500 rupees per semester", response.text)
+
+    def test_a_year_asked_about_is_still_refused(self):
+        circular = prose(1, BUS_CIRCULAR)
+        for question in (
+            "What does a bus pass cost for 2023-24?",
+            "How much was the bus pass in 2022?",
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(ask(question, circular).abstained, question)
+
+
+class TitleLinesAreNotFactsTests(SimpleTestCase):
+    """Round two: 'Policy: Staff Leave Policy 2024-25' was classed as a fact
+    ('label: value'), so the title was quoted and the sentence under it dropped."""
+
+    POLICY = (
+        "Policy: Staff Leave Policy 2024-25\n"
+        "Staff may take 12 days of casual leave in a year."
+    )
+
+    def test_a_label_followed_by_a_title_is_a_heading(self):
+        for line in (
+            "Policy: Staff Leave Policy 2024-25",
+            "Notice: Bus Pass Renewal for the Academic Year",
+            "Circular: Revised Fee Structure 2024-25",
+            "Guidelines: Use of the Computer Laboratory",
+        ):
+            with self.subTest(line=line):
+                self.assertTrue(quoting.is_heading(line, is_row=False), line)
+
+    def test_a_label_followed_by_a_value_is_a_fact(self):
+        for line in (
+            "Casual leave: 12 days per calendar year",
+            "Monday to Saturday: 9 am to 8 pm",
+            "Fee: Rs 500",
+            "Warden: Dr Rao",
+        ):
+            with self.subTest(line=line):
+                self.assertFalse(quoting.is_heading(line, is_row=False), line)
+
+    def test_the_sentence_under_a_titled_line_is_quoted(self):
+        response = ask("What is the staff leave policy?", prose(1, self.POLICY))
+
+        self.assertFalse(response.abstained)
+        self.assertIn("12 days of casual leave", response.text)
+
+
+class ASentenceThatHoldsTheAnswerIsNotDroppedTests(SimpleTestCase):
+    """Round two: a first sentence that shared most of the question's topic words
+    made the second sentence, which adds the one decisive term, look like a
+    leftover and dropped it, so the reader got an answer without the thing asked."""
+
+    def test_the_sentence_with_the_decisive_term_is_added(self):
+        response = ask(
+            "What is the printing fee per page?",
+            prose(
+                1,
+                "The printing allowance is 200 pages per semester.\n"
+                "Additional pages cost a fee of 2 rupees per page.",
+            ),
+        )
+
+        self.assertIn("200 pages per semester", response.text)
+        self.assertIn("fee of 2 rupees per page", response.text)

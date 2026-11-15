@@ -275,10 +275,6 @@ class ExtractiveAnswerer:
     # answer and becomes a search result page.
     MAX_SENTENCES = 3
 
-    # A sentence that covers this share of the question's terms answers it: a
-    # second sentence that adds a single term is then padding.
-    MOSTLY_ANSWERED = 0.75
-
     # A "how much" or "when" question is answered by a sentence with a figure
     # or a date in it. Added to the coverage of a sentence that has one, so it
     # settles a tie and a near tie and never outweighs a clearly better match.
@@ -323,6 +319,15 @@ class ExtractiveAnswerer:
         lacking = quoting.names_what_the_passages_lack(focus_text or question, usable)
         if lacking:
             return self._abstain(prompt, hostile=skipped_hostile, reason=lacking)
+
+        # What the user says about THEMSELVES ("I am in the 2021-25 batch") is not
+        # asked, and no sentence covers it: those of its terms that no passage has
+        # are set aside, or they sink the sentence that answers everything asked.
+        aside = quoting.own_situation_terms(focus_text or question, usable)
+        if aside:
+            query_terms = (query_terms - aside) or query_terms
+            focus_terms = (focus_terms - aside) or focus_terms
+            asked = focus_terms or query_terms
 
         wants_figure = quoting.wants_figure(focus_text or question)
         date_question = quoting.wants_date(focus_text or question)
@@ -558,12 +563,6 @@ class ExtractiveAnswerer:
             # a second part of it.
             form_terms = quoting.FORM_TERMS if date_question else frozenset()
             first_matched = first.matched
-            # The best sentence already addresses most of what was asked: one
-            # more term is a leftover, not another part of the question.
-            wanted = asked - form_terms
-            mostly_answered = bool(wanted) and (
-                len(first_matched & wanted) / len(wanted) >= self.MOSTLY_ANSWERED
-            )
 
             def topic_terms(candidate):
                 return quoting.quote_terms(
@@ -590,7 +589,7 @@ class ExtractiveAnswerer:
                     if (
                         len(gained) < self.MIN_MATCHED_TERMS
                         and not two_rows
-                        and (not shared or mostly_answered)
+                        and not shared
                     ):
                         continue
                     if candidate.row and not first.row and not shared:
