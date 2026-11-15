@@ -76,9 +76,9 @@ marked as data. What a model is shown, and why, is in
 
 | Answerer | Setting | Generative | Behaviour |
 |---|---|---|---|
-| Extractive (default) | *(empty)* | no | Quotes up to three sentences verbatim; cannot hallucinate; will not quote a table header alone or a flagged passage, and declines a question that names a code or a year no retrieved passage mentions |
+| Extractive (default) | *(empty)* | no | Quotes up to three sentences verbatim; cannot hallucinate; will not quote a table header alone or a flagged passage, and declines a question that names a dotted or mixed-case code, an acronym a code-keyed table does not list, or a year when the passages state some other year |
 | Claude | `…rag.claude.ClaudeAnswerer` | yes | Anthropic API or Bedrock (`RAG_ANSWERER_BACKEND`) |
-| OpenAI-compatible | `…rag.openai_compat.OpenAICompatibleAnswerer` | yes | Presets for Gemini, Groq, Cerebras, OpenRouter, Mistral, GitHub Models, Ollama, OpenAI; any `/chat/completions` server. Calls go through the LLM gateway (`rag/gateway.py`): a chain of provider:model links (`RAG_ANSWERER_CHAIN`), a daily budget shared by every process, and a reserve kept for chat - see [llm-providers.md](llm-providers.md) |
+| OpenAI-compatible | `…rag.openai_compat.OpenAICompatibleAnswerer` | yes | Presets for Gemini, Groq, Cerebras (needs a payment method), OpenRouter, Mistral, Ollama, OpenAI (and a GitHub Models preset, retired on 30 July 2026, that no longer works); any `/chat/completions` server. Calls go through the LLM gateway (`rag/gateway.py`): a chain of provider:model links (`RAG_ANSWERER_CHAIN`), a daily budget shared by every process, and a reserve kept for chat - see [llm-providers.md](llm-providers.md) |
 
 Generative answerers share one system prompt with the grounding checker (so the two cannot
 drift) and **fall back to extractive** on any failure (the OpenAI-compatible answerer sends a
@@ -102,17 +102,26 @@ answers when it was measured with every model call failing:
 
 - A title or clause heading comes after the sentences that qualify, and one that states no
   figure cannot answer "how much" or "when"; such a question prefers a sentence with a
-  figure or a date.
+  figure or a date. A "label: value" line ("Casual leave: 12 days per calendar year") and a
+  list item are facts, not headings, and are quoted like any sentence.
 - A table row is matched together with its column labels, and dotted codes ("B.Tech",
   "M.Tech") are single terms, so the wrong programme's row is not quoted first.
-- Each part of a two-part question can be answered by its own sentence.
-- A code or a year in the question that no retrieved passage, title or column mentions
-  ("PhD" against a fee table that has no PhD row; "2023-24" against the 2024-25 circular)
-  makes it decline instead of quoting the nearest thing.
+- Each part of a two-part question can be answered by its own sentence. A second sentence
+  is added only when it brings terms of its own - not the document title's words, and not
+  one stray word the first sentence already covered.
+- A code or a year in the question that the documents show a gap for makes it decline
+  instead of quoting the nearest thing: a dotted or mixed-case code ("B.Arch", "PhD")
+  that no retrieved passage mentions; an acronym a table keyed by codes does not list; a
+  year when the passages state some other year ("2023-24" against the 2024-25 circular).
+  A year-less rule is not refused because the question happens to mention a year, and
+  emphasis words and common abbreviations ("PLEASE", "HOD", "CGPA") are not codes.
 - A sentence cut by a chunk boundary is marked with an ellipsis.
 
-Measured offline on benchmark v3: wrong answers to questions that should be refused 4 → 1,
-correct answers 14 → 15; v2 kept its 27 correct.
+Measured offline on benchmarks v2 and v3 these changes removed wrong answers to questions
+that should be refused and the unrelated sentences that used to be appended to correct
+answers. The `correctness` metric is recall-only and has known false positives (see the
+docstring of `evaluation/correctness.py`), so read the per-case results, not only the
+number.
 
 Every answer records which model actually wrote it and what the provider reported
 (`Message.metadata.llm`), and the chat payload names it for people (`model_display`) and
@@ -129,10 +138,13 @@ An answer is returned only if:
 3. **every figure it states** (numbers, percentages, amounts, dates, identifiers) appears
    in a passage it cites — formatting-insensitive (`75%` = `75 percent`,
    `85,000` = `85000`, `Rs 1200` = `Rs1200`, `10 PM` = `10:00 p.m.`,
-   `31 March 2025` = `31.03.2025`, `2024-25` = `2024-2025`, `7` = a passage's "seven days",
-   list ordinals and markers ignored; a year the cited document's title states counts;
-   structured identifiers such as `REG/2024/117`, a date that can be read two ways, and a
-   date that does not exist must match exactly), and
+   `31 March 2025` = `31.03.2025`, `2024-25` = `2024-2025`, `7` = a passage's "seven days"
+   (a bare "one" only before a unit of time), `7:30 PM` = `7.30 pm`, `3 lakh` = `300000`,
+   `15-day` = `15 days`, list numbering and markers ignored; a year the cited document's
+   title states counts; a figure the user typed in the question may be repeated, though
+   never cited; a range `A-B` needs both ends together in one passage; structured
+   identifiers such as `REG/2024/117`, a date that can be read two ways, and a date that
+   does not exist must match exactly), and
 4. at least 25 % of its content words appear in the cited passages (a backstop against
    answering a different subject).
 

@@ -367,6 +367,32 @@ NEUTRAL = (
 )
 
 
+# Keys of the `system` block that are wall-clock timings: different on every
+# run and on every machine, so they cannot be a pass/fail signal.
+TIMING_MARKERS = ("latency", "duration")
+
+
+def without_timings(run_metrics: dict) -> dict:
+    """The metrics of a run, minus the environment-dependent timings.
+
+    ONLY the timings go. The rest of the `system` block is not noise: how many
+    cases ran on a degraded reranker (`degraded_reranks`), fell back from the
+    configured answerer to quoting (`answerer_fallbacks`) or were answered from
+    general knowledge (`general_replies`) are exactly what a run that silently
+    changed behaviour shows, and dropping the whole block hid them from the
+    gate.
+    """
+    kept = {key: value for key, value in (run_metrics or {}).items() if key != "system"}
+    system = (run_metrics or {}).get("system")
+    if isinstance(system, dict):
+        kept["system"] = {
+            key: value
+            for key, value in system.items()
+            if not any(marker in key for marker in TIMING_MARKERS)
+        }
+    return kept
+
+
 def metric_direction(key: str) -> str:
     """ "higher", "lower" or "neutral" for a flattened metric key."""
     leaf = key.rsplit(".", 1)[-1]

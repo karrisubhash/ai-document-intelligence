@@ -9,8 +9,13 @@ from documents.models import EvaluationDataset, EvaluationRun
 
 
 def _without_system(metrics: dict) -> dict:
-    """Everything except the environment-dependent timings."""
-    return {key: value for key, value in metrics.items() if key != "system"}
+    """Everything except the environment-dependent timings.
+
+    The name is kept for callers; it no longer drops the whole `system` block,
+    only its timings (degraded reranks, answerer fallbacks and general replies
+    are not timings and must be able to fail the gate).
+    """
+    return evaluation.without_timings(metrics)
 
 
 class Command(BaseCommand):

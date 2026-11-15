@@ -16,7 +16,16 @@
     "answerer": {
       "name": "extractive-answerer",
       "version": "0.1.0",
-      "generative": false
+      "generative": false,
+      "chain": "",
+      "provider": "",
+      "model": "",
+      "fallback_models": "",
+      "links": [],
+      "temperature": 0.0,
+      "effort": "medium",
+      "reasoning_effort": "",
+      "daily_limits": ""
     },
     "chunking": {
       "strategy": "page-bounded-overlap",
@@ -34,8 +43,12 @@
       "max_passages_generative": 12,
       "model_judges_relevance": true,
       "min_passages": 6,
+      "admit_retrieval_top": 2,
       "neighbour_anchors": 3,
-      "grounding_retry": true
+      "grounding_retry": true,
+      "min_support_ratio": 0.25,
+      "plan_when_generative": false,
+      "followup_history_turns": 2
     }
   },
   "metrics": {
@@ -63,10 +76,10 @@
       "cases": 49
     },
     "generation": {
-      "groundedness": 0.9778,
-      "citation_accuracy": 0.8788,
+      "groundedness": 0.9747,
+      "citation_accuracy": 0.9091,
       "source_coverage": 0.8788,
-      "token_overlap": 0.8717,
+      "token_overlap": 0.8592,
       "correctness": 0.551,
       "correct_answers": 27,
       "answers_scored": 49,
@@ -81,10 +94,10 @@
     },
     "system": {
       "cases": 57,
-      "latency_ms_mean": 36.4,
-      "latency_ms_p50": 34,
-      "latency_ms_p95": 55,
-      "latency_ms_max": 65,
+      "latency_ms_mean": 30.8,
+      "latency_ms_p50": 28,
+      "latency_ms_p95": 46,
+      "latency_ms_max": 56,
       "degraded_reranks": 0,
       "answerer_fallbacks": 0
     }

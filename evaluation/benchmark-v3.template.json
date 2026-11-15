@@ -1,7 +1,7 @@
 {
   "name": "institutional-v3",
   "version": "v3",
-  "description": "Built to measure ANSWERS, not retrieval, once a generative model is writing them. v2 asks questions in the documents' own words and scores whether the right document came back; what a person complained about was different: correct answers discarded as 'not found'. So v3 asks the same corpus questions the way people ask them - paraphrased with no shared words, a date or year written another way than the document writes it, a number spoken as a word, two questions in one, 'is it mandatory' - and, as important, questions that look answerable and are not (an entity or a year the documents do not cover) which a more willing system must still refuse. Score it with `evaluate --chat-path` so a general-knowledge reply to a question the documents answer is counted, and read `correctness` (the expected answer's key facts are in the answer) beside `false_abstentions` and `missed_abstentions`. Offline (extractive answerer) it is a regression baseline for the quoting path; it only becomes interesting with a model.",
+  "description": "Built to measure ANSWERS, not retrieval, once a generative model is writing them. v2 asks questions in the documents' own words and scores whether the right document came back; what a person complained about was different: correct answers discarded as 'not found'. So v3 asks about the same corpus the way people ask - a paraphrase that changes most of the words of the clause, a date or year written another way than the document writes it, a number spoken as a word, two questions in one, 'is it mandatory' - and, as important, questions that look answerable and are not (an entity or a year the documents do not cover) which a more willing system must still refuse. Score it with `evaluate --chat-path` so a general-knowledge reply to a question the documents answer is counted, and read `correctness` (the expected answer's key facts are in the answer) beside `false_abstentions` and `missed_abstentions`. Be clear about the coverage: v3 adds two documents to v2's corpus (staff attendance and leave, the bus circular), but many of its cases ask about facts v2 also asks about, in another wording, so it overlaps v2 and differs from it mainly in how it is scored and in its compound, wording-variant and refusal cases, not in new ground. Offline (extractive answerer) it is a regression baseline for the quoting path; it only becomes interesting with a model.",
   "cases": [
     {
       "question": "How often do I need to show up to class to be allowed to sit exams?",
@@ -88,11 +88,11 @@
       "notes": "PARAPHRASE. No figure: correctness falls back to content words."
     },
     {
-      "question": "How long must my account password be?",
-      "expected_answer": "at least 12 characters",
+      "question": "How often do I have to change my account password?",
+      "expected_answer": "every 180 days",
       "relevant_documents": ["@it-acceptable-use"],
       "relevant_pages": [1],
-      "notes": "PARAPHRASE."
+      "notes": "NEW FACT (v2 asks how long a password must be, not how often it changes). One figure in the middle of a clause."
     },
     {
       "question": "How many days of casual leave do employees get each year?",
@@ -131,7 +131,7 @@
     },
     {
       "question": "When must fees be paid by, and what is the late surcharge?",
-      "expected_answer": "the last working day of July; 500 rupees per week",
+      "expected_answer": "before the last working day of July; 500 rupees per week after that date",
       "relevant_documents": ["@fee-structure"],
       "relevant_pages": [1],
       "notes": "COMPOUND, one passage."
@@ -152,7 +152,7 @@
     },
     {
       "question": "Is it mandatory to register with the placement cell, and what is the deadline?",
-      "expected_answer": "registration is not automatic; before 15 August",
+      "expected_answer": "Yes: a student must register before 15 August of the final year, and registration is not automatic",
       "relevant_documents": ["@placement-policy"],
       "relevant_pages": [1],
       "notes": "'Is it mandatory' must not be read as a follow-up; COMPOUND."
@@ -186,11 +186,11 @@
       "notes": "TABLE comparison: no cell states the answer."
     },
     {
-      "question": "What is the exam fee for M.Tech CSE?",
-      "expected_answer": "3000",
+      "question": "How much does an M.Tech CSE student pay for tuition?",
+      "expected_answer": "95000",
       "relevant_documents": ["@fee-structure"],
       "relevant_pages": [1],
-      "notes": "TABLE lookup."
+      "notes": "TABLE lookup of a cell v2 does not ask (v2 asks M.Tech CSE's exam fee, not its tuition)."
     },
     {
       "question": "What is the tuition fee for the PhD programme?",

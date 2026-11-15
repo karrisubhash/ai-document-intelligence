@@ -29,7 +29,7 @@ stores per-case results (`EvaluationCaseResult`) beside the run's configuration.
 | Source coverage | share of relevant documents the answer cited |
 | Groundedness | mean grounding support ratio of answered cases |
 | Token overlap | bag-of-words overlap with the reference answer — a weak signal, never reported as correctness |
-| Correctness | of the cases with an expected answer, the share whose answer contains its key facts (`documents/evaluation/correctness.py`): every figure it states, in any spelling the grounding check treats as the same fact, or with no figure 60 % of its content words. A declined case counts as not correct; citation markers are not figures. A heuristic: it cannot read a negation or penalise an extra wrong statement |
+| Correctness | of the cases with an expected answer, the share whose answer contains its key facts (`documents/evaluation/correctness.py`): every figure it states, in any spelling that is the same figure (`75 percent` = `75%`, `9.15 am` = `09:15`, `Rs 5/day per book` = `5 rupees per day per book`, `12-character` = `12 characters`, `82,000.00` = `82000`, `2024/25` = `2024-25`, a bare `four` = `4`), or with no figure 60 % of its content words. A declined case counts as not correct; citation markers are not figures; the question's own words are taken out of the answer first, an answer that only restates the question is not correct, and so is a pasted wall of text (more than 40 content words beyond the expected answer's own, plus 4 per word of it). A figure whose unit is written beside it is not met by the same number with another unit (`30 months` for `30 days`, `11 am` for `11 pm`). **A heuristic, and a ceiling rather than a measurement:** it does not tie a figure to its entity (a short answer with the right number for the wrong programme counts), cannot read a negation, does not penalise an extra wrong statement, and rejects spellings it does not know (`15/08`), so a model run can read lower than it is |
 | General replies to answerable (`--chat-path`) | answerable questions that chat answered from the model's general knowledge instead of from the documents |
 | p50 / p95 / max latency | wall time per question inside the engine |
 
@@ -44,7 +44,13 @@ evaluation/baseline.json --fail-on-regression`; then it seeds v2 on top (its cor
 superset) and gates on `evaluation/baseline-v2.json` the same way. v1 alone cannot catch a
 retrieval that got *worse* - every configuration scores recall@1 1.0 on it - and v2 can. Any quality metric below the committed
 baseline (beyond `--tolerance`) fails the build; latency is reported but only gated with
-`--gate-latency`.
+`--gate-latency`. Only the *timings* are left out of the default gate: the counters beside them
+(`degraded_reranks`, `answerer_fallbacks`, and with `--chat-path` `general_replies`) still
+fail it when they rise, so a live run that silently fell back to quoting does not pass.
+A run's recorded configuration includes every setting that moves a score (the support floor,
+the admit depth, the temperature, reasoning effort, the provider chain link by link, the
+daily limits); when it differs from the baseline's the comparison says so, and the deltas then
+include that change.
 
 **Measured 2026-10-05**, run exactly as the CI job runs it (a fresh database, the corpus
 seeded through the real pipeline, offline baselines): no regression. Recall@1 1.000,
@@ -55,12 +61,17 @@ later change cannot quietly give the gain back. The offline pipeline is determin
 the higher bar costs no flakiness.
 
 CI then seeds **v3** (`institutional-v3`, `evaluation/benchmark-v3.template.json`) and
-gates on `evaluation/baseline-v3.json`. v3 asks v2's corpus questions the way people ask
-them - paraphrased with no shared words, dates and year ranges written another way, compound
-questions, "Is it mandatory to..." - plus questions that must be refused because they name a
-programme or a year the documents do not have. Offline it gates the quoting path, which is
-what a reader gets whenever no model can answer; its `correctness` only moves much with a
-model.
+gates on `evaluation/baseline-v3.json`. v3's corpus is a superset of v2's (it adds the staff
+attendance and leave rules and the bus circular, so seeding it adds two documents and prunes
+nothing; the three corpora are nested, which is why one database serves the gates in the
+order v1, v2, v3). v3 asks about that corpus the way people ask - paraphrases, dates and year
+ranges written another way, compound questions, "Is it mandatory to..." - plus questions that
+must be refused because they name a programme or a year the documents do not have. Be clear
+about what that means: many of its cases ask about facts v2 also asks about, in another
+wording, so it overlaps v2 and differs from it mainly in how it is scored (`correctness`,
+`--chat-path`, false and missed abstentions) and in its compound, wording-variant and refusal
+cases, not in new ground. Offline it gates the quoting path, which is what a reader gets
+whenever no model can answer; its `correctness` only moves much with a model.
 
 To measure a model, run the same benchmark with a provider configured and
 `--chat-path --pause 12`: `--chat-path` also does what chat does when the documents had

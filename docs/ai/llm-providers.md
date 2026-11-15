@@ -16,8 +16,8 @@ cited, but not written). Before the gateway, that budget was invisible, each gun
 Celery process rediscovered every rate limit for itself, and the fallback chain could not
 leave Gemini. Now:
 
-- the chain can span providers (`gemini`, then `groq`, then `cerebras`...), each adding its
-  own daily allowance;
+- the chain can span providers (`gemini`, then `groq`, then `openrouter`...), each adding
+  its own daily allowance;
 - cooldowns, call counts and "used up today" marks live in Redis, so all processes agree;
 - background AI features (document briefs, multi-document grids) can only spend while a
   reserve for chat is left;
@@ -55,42 +55,70 @@ server runs with `RAG_ANSWERER_PROVIDER=gemini`. `RAG_ANSWERER` must still name
 no chain at all.
 
 `RAG_ANSWERER_REASONING_EFFORT` in an explicit chain only changes links whose preset already
-sends `reasoning_effort` (Gemini sends `none` so its hidden thinking does not eat the output
-budget); providers that do not implement it would answer 400.
+sends `reasoning_effort` - and three presets do: `gemini` sends `none` (so its hidden
+thinking does not eat the output budget), `groq` and `cerebras` send `low`. One global value
+therefore reaches **all three** links: it must be one they all accept (`none` and `minimal`
+are Gemini's; gpt-oss on Groq and Cerebras documents `low`, `medium` and `high`), or be left
+empty so each preset keeps its own. A backend that rejects the value answers 400 for that
+request, the request stays counted, and the chain moves on - so a value one link refuses
+costs a request on that link for every question. Presets that do not implement the parameter
+send nothing.
 
 ## Providers
 
-"Free tier" figures are what each provider documented when this was written (November
-2026); only Gemini's were **measured** from this project. Providers change these without
-notice - check your provider's console, and set `LLM_DAILY_LIMITS` to match.
+"Free tier" figures are what each provider documented when this was written; the facts
+about who needs a payment card, and which free tiers exist at all, were read from each
+provider's own documentation on **2026-11-15**. Only Gemini's limits were **measured** from
+this project. Providers change these without notice - check your provider's console, and
+set `LLM_DAILY_LIMITS` to match. Anything marked *unverified* is a figure this project could
+not read from the provider's documentation.
 
 | Preset | Key variable | Default model | Where to get a key | Free tier (as documented) | Default daily limit here | May train on inputs |
 |---|---|---|---|---|---|---|
 | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash` (+3 fallbacks) | aistudio.google.com/apikey | **Measured 2026-10-11:** 5 requests/min and 20/day per model; day ends at midnight Pacific | 20 per model | **Yes** on unpaid tiers (Google's terms) |
-| `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` | console.groq.com/keys | ~30 requests/min, 1,000/day, but 8K tokens/min and 200K tokens/day for this model - the token cap binds first: a grounded prompt is now 5-6K tokens, so about one question a minute and ~30 a day. **Put it last in a chain** | 30 | No (unverified) |
-| `cerebras` | `CEREBRAS_API_KEY` | `gpt-oss-120b` | cloud.cerebras.ai | Reported as about a million tokens/day; few requests per minute - set `RAG_ANSWERER_RETRIES` low | 100 (unverified) | No (unverified) |
-| `openrouter` | `OPENROUTER_API_KEY` | `openrouter/free` (a router over free models) | openrouter.ai/keys | 50 free-model requests/day per **account** below $10 of credits, 1,000 above | 50 | **Yes** - free models may be trained on by whoever serves them |
-| `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` | console.mistral.ai | "Experiment" plan: metered by tokens per month, not requests per day | 100 (unverified) | **Yes** on the free plan (unverified) |
-| `github` | `GITHUB_MODELS_TOKEN` | `openai/gpt-4.1-mini` | github.com/settings/personal-access-tokens - a fine-grained token with **Models: read** | 50/day for "high" models, 150 for "low"; 8,000 input / 4,000 output tokens per request (requests are clamped to 4,000) | 50 | No (GitHub's statement; unverified) |
+| `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` | console.groq.com/keys | No card. **Unverified:** Groq's free-plan limits are not on its documentation pages (checked 2026-11-15); the figures here (~30 requests/min, 1,000/day, 8K tokens/min and 200K tokens/day for this model) are as reported when this was written, so read your console's limits page. If they hold, the token cap binds first: a grounded request is 5-6K tokens, so about one question a minute and ~30 a day, with no room for a corrective retry in the same minute | 30 | No (unverified) |
+| `cerebras` | `CEREBRAS_API_KEY` | `gpt-oss-120b` | cloud.cerebras.ai | **Not a no-card free tier.** Its documentation requires a verified payment method before the API turns on; it then gives a one-time $5 credit that expires after 30 days and says it is not intended for production use. The request limits that follow the credit are unverified | 100 (unverified) | No (unverified) |
+| `openrouter` | `OPENROUTER_API_KEY` | `openrouter/free` (a router over free models) | openrouter.ai/keys | Free models: 20 requests/min and **50 requests a day per account until 10 credits are bought** (1,000 a day after). Whether a card is needed to sign up is not stated in its documentation | 50 | **Yes** - free models may be trained on by whoever serves them |
+| `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` | console.mistral.ai | **Unverified:** Mistral's documentation pages did not load on 2026-11-15. Earlier notes say an "Experiment" plan metered by tokens per month, not requests per day | 100 (unverified) | **Yes** on the free plan (unverified) |
+| `github` | `GITHUB_MODELS_TOKEN` | `openai/gpt-4.1-mini` | - | **RETIRED.** GitHub Models was shut down on 30 July 2026; this preset no longer works - its link will fail and the chain will move on. Leave it out | 50 | - |
 | `ollama` | `OLLAMA_API_KEY` (ignored) | `gpt-oss:20b` | runs on your own machine | No quota; nothing leaves the machine | unlimited | No |
 | `openai` | `OPENAI_API_KEY` | `gpt-4.1-mini` | platform.openai.com | Paid only | unlimited - set one to cap spend | No (API data is not used for training by default) |
 
-`github` uses its own variable rather than `GITHUB_TOKEN` on purpose: that name is often
-exported for the `gh` CLI with far wider scopes, and a token issued for something else must
-not quietly switch a provider on. The OpenAI reasoning models (o-series, gpt-5) reject
-`temperature` and `max_tokens` as this client sends them; use `gpt-4.1-mini` or similar.
+The retired `github` preset used its own variable rather than `GITHUB_TOKEN` on purpose:
+that name is often exported for the `gh` CLI with far wider scopes, and a token issued for
+something else must not quietly switch a provider on. The OpenAI reasoning models (o-series,
+gpt-5) reject `temperature` and `max_tokens` as this client sends them; use `gpt-4.1-mini` or
+similar.
+
+**Providers without a preset, and why none of them is a free option** (read from their own
+documentation on 2026-11-15):
+
+| Provider | Free API access? |
+|---|---|
+| xAI Grok | **No.** Its documentation describes no free API tier |
+| Hugging Face | **No.** Free accounts get no inference credits |
+| Cloudflare Workers AI | A free allowance of 10,000 "Neurons" a day; whether a card is needed is not stated. The app has no preset for it, so using it takes a small code change |
 
 **Data use is a configuration fact.** The "may train on inputs" column is shown per link on
 System status and stored on every answer (`metadata.llm.may_train_on_input`). For
 confidential documents, attach billing to the Gemini key, or use `ollama`.
 
-A sensible free setup for the public site: `RAG_ANSWERER_CHAIN=gemini,cerebras,groq` - about
-80 + 100 + 30 written answers a day before anything is quoted. Groq is last because its
-8K-tokens-a-minute window fits roughly one grounded question a minute. On that chain every
-answer Gemini writes sends Google up to about 14,000 characters of the asker's documents
-(see below), on a tier whose terms allow training on them.
+A sensible free setup for the public site, needing no payment card at any of its three
+links: `RAG_ANSWERER_CHAIN=gemini,groq,openrouter` - about 80 + 30 + 50 = 160 written answers
+a day before anything is quoted. (Cerebras is not in it: it needs a verified payment method.)
+Mind the order on a busy site: Groq's 8K-tokens-a-minute window fits roughly one
+grounded question a minute, so `gemini,openrouter,groq` serves a burst better. On either
+chain every answer a free tier writes sends that provider up to about 14,000 characters of
+the asker's documents (see below), on a tier whose terms allow training on them - so this
+suits demonstration documents, not confidential ones.
 
-**Two presets ask for less reasoning.** `groq` and `cerebras` send `reasoning_effort: "low"`
+**Keys and quotas.** Rotating several accounts' keys to multiply one site's free quota is
+against Google's API terms (section 2(d) of the Google APIs Terms of Service). Gemini's rate
+limits are applied per **project**, not per key, so a second key created in the same project
+shares the first one's quota and adds nothing.
+
+**Three presets set a reasoning effort, two of them to `low`.** `gemini` sends `none`;
+`groq` and `cerebras` send `reasoning_effort: "low"`
 (gpt-oss is a reasoning model and bills its hidden reasoning against `max_tokens`, so a short
 answer could be cut off and recorded as a failure), and `groq` also caps the reply it asks
 for at 1,500 tokens - its window counts the reply a request *asks* for, not the one it gets.
@@ -126,6 +154,18 @@ not turn the rest off with it.
   model even below the floor (`RAG_MODEL_JUDGES_RELEVANCE`), and a question scoped to one
   document also reads its opening chunks. A quote - including the fallback when every
   provider is out of quota - never sees those passages.
+- **A question the documents cannot answer now costs up to two provider calls.** With
+  `CHAT_GENERAL_KNOWLEDGE` on, "What is the capital of France?" used to stop at "nothing
+  relevant" and make one call, the general reply, with no document text. No score tells a
+  correct paraphrase from an unrelated question (both land at 0.00-0.08), so the model is
+  shown the best passages first and answers "not found"; only then is the general reply asked
+  for. The first call carries up to about 10,000-14,000 characters of the asker's documents
+  to the provider, for a question that has nothing to do with them, and spends one of the
+  day's requests (two of Gemini's 20 per model instead of one), and the reader waits for both.
+  A question the documents answer is not affected. This is the price of not telling readers
+  "not found" about their own documents; a site on a tight daily budget can set
+  `RAG_MODEL_JUDGES_RELEVANCE=False` to return to one call for such a question, with the old
+  score floor and the misses that come with it.
 - **More context, with the chunks around the best ones.** 14,000 characters and 12 passages
   instead of 8,000 and 8, and the chunk before and after each of the top 3 passages, so a list
   or procedure that runs over a chunk boundary arrives whole.
@@ -133,32 +173,63 @@ not turn the rest off with it.
   due?" into parts that lost what they referred to, spending one call per part.
 - **A refusal in the model's own words is a refusal.** "I couldn't find X; these documents
   only list Y" was stored as an ungrounded answer - the hallucination signal - and kept
-  chat's general reply away. Only a reply with no citation and no figure counts.
-- **A correct answer is not discarded for how it spells a fact:** a date written another
-  way ("31 March 2025" for "31.03.2025"), a day and month without the year ("15 August" for
-  "15 August 2025"), a year range ("2024-25"), a numeral for a number the passage spells
-  out ("7 days" for "seven days" - only when the number counts something, so "no one" never
-  supports a 1), a citation written "[1, 2]". These are still rejected: a date that could
-  be read two ways ("04.03.2025") unless written the same way, a date that does not exist
-  ("31 April 2025", which is one exact token and is never rescued by a 31 and a 2025
-  elsewhere), a different day or month, and any marker that does not name a passage.
-  Numbers the *answer* spells out ("seven days") are not checked.
+  chat's general reply away. A reply counts as a refusal when it cites nothing and states no
+  figure the question did not itself type ("I couldn't find the 2023-24 fee" repeats the
+  year that was asked, so it still counts). A reply that answers from the model's own
+  knowledge - no citation, no figure - when none of the passages it was shown passed the
+  relevance floor is treated the same way, so chat's general reply can answer instead of the
+  reader being told a draft "could not be verified". Anything that cites a passage or
+  states a figure still goes through the grounding check.
+- **A correct answer is not discarded for how it spells a fact.** Accepted as the same
+  fact: a date written another way ("31 March 2025" for "31.03.2025"), a day and month
+  without the year, a year range ("2024-25"), a numeral for a number the passage spells out
+  ("7 days" for "seven days"; a bare "one" only before a unit of time, because "at one time"
+  and "no one" are not quantities), a clock time written another way ("7:30 PM" for "7.30
+  pm"), "3 lakh" for 300000 (exact equality, both ways), "15-day" or "Rs 500/week" for the
+  number the passage states with its unit, a citation written "[1, 2]", "[1-2]", "[ 1 ]" or
+  "[Source 1]", a list numbered "**1.**" or "(1)" - and a figure the **user** typed ("I have
+  70 percent attendance" answered with "At 70 percent ..."), which is never a source and
+  never cited. Still rejected: a date that could be read two ways unless written the same
+  way, a date that does not exist ("31 April 2025" is one exact token and is never rescued
+  by a 31 and a 2025 elsewhere), a different day or month, a range whose two ends are not
+  found together in one passage (within about 40 characters), a marker that names no
+  passage, and any figure that is neither in a cited passage nor typed by the user. An
+  interval such as "[0, 1]" in an answer is left alone unless every number in it is a
+  passage. Numbers the *answer* spells out ("seven days") are not checked.
 - **A rejected answer gets two chances before it is discarded.** A figure the answer states
   after its last citation in a sentence, that is written in exactly one passage it did not
-  cite, and where the sentence shares at least two words with that passage, gets that
-  passage's citation (at most two per answer, never a table row, and the result is checked
-  again from scratch). Otherwise the model is told which figures were not in its passages
-  and asked once more (`RAG_GROUNDING_RETRY`). The second answer is checked exactly like the
-  first, and if it fails too the first failure stands. The retry is a second provider call
-  on a free tier's small daily count, which is why it is only for figures the passages lack.
+  cite, where the sentence shares at least two words with that passage and the word beside
+  the figure (its unit or noun: "200 rupees", "200 days") stands beside it in that passage
+  too, gets that passage's citation (at most two per answer, never a table row, and the
+  result is checked again from scratch). Otherwise the model is told which figures were not
+  in its passages and asked once more (`RAG_GROUNDING_RETRY`). The second answer is checked
+  exactly like the first, and if it fails too the first failure stands. If the retry never
+  reaches a model (a timeout, every link rate limited) the answer is quoted from the
+  passages instead - checked like any answer - and the outage is not counted against the
+  model. The retry is a second provider call on a free tier's small daily count, which is
+  why it is only for figures the passages lack. The stored record of an answer that took two
+  calls sums their tokens and cost and remembers if EITHER provider may train on what it was
+  sent (`first_provider` names the first).
 - **The check cannot turn into an error page or a pass.** If the grounding check itself
   raises on something in a document, the answer is withheld as ungrounded and the failure
-  is logged (`grounding.check_failed`).
+  is logged by type and place only (`grounding.check_failed`), never with the message,
+  which can echo document text.
 - **How often the first draft is wrong is counted.** An answer that was repaired or retried
   no longer reaches the abstention counter, so
-  `adi_rag_grounding_recoveries_total{outcome}` counts them: `repaired`, `retried_grounded`
-  and `retried_failed`. That, not the abstention rate, is the number that says whether a
-  provider is any good.
+  `adi_rag_grounding_recoveries_total{outcome}` counts them: `repaired`, `retried_grounded`,
+  `retried_failed` (the model answered again and failed) and `retry_unavailable` (the retry
+  never reached a model: an outage, not a grounding failure). That, not the abstention rate,
+  is the number that says whether a provider is any good.
+- **A failed model call does not lose a compound question.** Planning is skipped while a
+  model will answer; if that whole-question call fails and the question splits into two or
+  more parts, the parts are answered by quoting, as before, with no further model calls.
+- **An empty or cut-off reply moves on to the next link** (an empty reply, or a
+  `finish_reason` of length or content_filter), like a 500 does; only when the last link
+  fails this way too is the answer reported as failed. Answers are written in the language
+  of the passages (English) whatever language the question is in, because the grounding
+  check compares words with the passages.
+- **A quote after a model failure uses the older context** - 8 passages, 8,000 characters,
+  vetted passages only - as the settings say.
 
 To measure all of it, `manage.py evaluate --chat-path --pause 12` against
 `evaluation/benchmark-v3.template.json` reports `correctness` (the expected answer's key facts
@@ -167,8 +238,9 @@ are in the answer) and how many questions the documents answer got a general-kno
 ## Daily limits
 
 The budget counts **requests sent**, per link, per the provider's own day. A request the
-provider refuses with 429 is handed back (the provider does not count it either); anything
-else - a timeout, a 500, an answer that later failed grounding - was served and stays
+provider refuses with 429 (rate limited) or 413 (too large for its window) is handed back
+(the provider does not count it either); anything else - a timeout, a 500, a 400 for a
+parameter it rejects, an answer that later failed grounding - was served and stays
 counted. A link that reaches its limit shows **Used up today** and is skipped until its day
 rolls over; so is a link the provider itself answered with a per-day 429, whatever our
 count said.

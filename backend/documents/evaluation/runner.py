@@ -25,7 +25,7 @@ from documents.processing.chunking.exceptions import (
     EmbeddingProviderUnavailable,
 )
 from documents.processing.chunking.service import CHUNKING_STRATEGY, CHUNKING_VERSION
-from documents.rag import general
+from documents.rag import general, grounding
 
 from . import correctness, metrics
 
@@ -34,12 +34,61 @@ from . import correctness, metrics
 DEFAULT_KS = (1, 3, 5, 10)
 
 
+def _answerer_settings(answerer) -> dict:
+    """What decides which model writes an answer, and how.
+
+    The answerer's `version` names only the FIRST link of a chain, so a run
+    through gemini,groq,openrouter and one through gemini alone carried the
+    same version string; and the temperature, the reasoning effort and the
+    provider chain each change a score without changing that string. They are
+    recorded here so a score that moved carries the setting that moved it.
+    """
+    links = []
+    try:
+        for link in getattr(getattr(answerer, "gateway", None), "links", ()) or ():
+            links.append(
+                {
+                    "link": link.id,
+                    "extras": dict(link.request_extras),
+                    "max_output_tokens": link.max_output_tokens,
+                }
+            )
+    except Exception:  # noqa: BLE001 - describing a run must never fail it
+        links = []
+    return {
+        "chain": getattr(settings, "RAG_ANSWERER_CHAIN", ""),
+        "provider": getattr(settings, "RAG_ANSWERER_PROVIDER", ""),
+        "model": getattr(settings, "RAG_ANSWERER_MODEL", ""),
+        "fallback_models": getattr(settings, "RAG_ANSWERER_FALLBACK_MODELS", ""),
+        "links": links,
+        "temperature": getattr(settings, "RAG_ANSWERER_TEMPERATURE", None),
+        "effort": getattr(settings, "RAG_ANSWERER_EFFORT", None),
+        "reasoning_effort": getattr(settings, "RAG_ANSWERER_REASONING_EFFORT", None),
+        # A cap that is hit moves a run from the model to quoting.
+        "daily_limits": getattr(settings, "LLM_DAILY_LIMITS", ""),
+    }
+
+
+def _min_support_ratio():
+    """The EFFECTIVE floor of the grounding backstop, as grounding applies it.
+
+    The setting is unset by default and grounding then uses its own constant,
+    so recording the setting would store None beside a score that ran at 0.25.
+    """
+    floor = getattr(settings, "RAG_MIN_SUPPORT_RATIO", None)
+    return grounding.MIN_SUPPORT_RATIO if floor is None else floor
+
+
 def capture_configuration() -> dict:
     """Everything that could move a score, recorded with the score.
 
     Section 19.2 requires results to be stored with model, prompt and
     pipeline version. A metric without this is a number, not a measurement -
-    there is nothing it can honestly be compared to.
+    there is nothing it can honestly be compared to. Every setting that
+    changes what an answer is (or whether it is kept) belongs here: a score
+    that moved without a visible configuration change is a score nobody can
+    explain, and the "configuration differs" note on a baseline comparison
+    is only as honest as this list.
     """
     try:
         provider = chunking_service.get_provider()
@@ -68,6 +117,7 @@ def capture_configuration() -> dict:
             "name": answerer.name,
             "version": answerer.version,
             "generative": getattr(answerer, "generative", False),
+            **_answerer_settings(answerer),
         },
         "chunking": {
             "strategy": CHUNKING_STRATEGY,
@@ -98,8 +148,14 @@ def capture_configuration() -> dict:
                 settings, "RAG_MODEL_JUDGES_RELEVANCE", None
             ),
             "min_passages": getattr(settings, "RAG_MIN_PASSAGES", None),
+            "admit_retrieval_top": getattr(settings, "RAG_ADMIT_RETRIEVAL_TOP", None),
             "neighbour_anchors": getattr(settings, "RAG_NEIGHBOUR_ANCHORS", None),
             "grounding_retry": getattr(settings, "RAG_GROUNDING_RETRY", None),
+            "min_support_ratio": _min_support_ratio(),
+            "plan_when_generative": getattr(settings, "RAG_PLAN_WHEN_GENERATIVE", None),
+            "followup_history_turns": getattr(
+                settings, "RAG_FOLLOWUP_HISTORY_TURNS", None
+            ),
         },
     }
 
@@ -132,7 +188,7 @@ def score_case(answer, case, ks=DEFAULT_KS) -> dict:
         )
         # An abstention did not give the answer, whatever it says.
         scores["correct"] = (not answer.abstained) and correctness.is_correct(
-            answer.answer, case.expected_answer
+            answer.answer, case.expected_answer, question=case.question
         )
 
     return scores
@@ -192,6 +248,7 @@ def run_dataset(
     if chat_path:
         configuration["chat_path"] = {
             "general_knowledge": general.enabled(),
+            "general_temperature": getattr(settings, "CHAT_GENERAL_TEMPERATURE", None),
             "pause_seconds": pause,
         }
     run = EvaluationRun.objects.create(
@@ -346,11 +403,13 @@ def compare_runs(
 
     `include_system=False` leaves out the environment-dependent timings,
     which differ on every run - see the evaluate command's --gate-latency.
+    ONLY the timings: the counters beside them in the `system` block
+    (degraded_reranks, answerer_fallbacks, general_replies) still compare.
     """
     before, after = baseline.metrics, candidate.metrics
     if not include_system:
-        before = {key: value for key, value in before.items() if key != "system"}
-        after = {key: value for key, value in after.items() if key != "system"}
+        before = metrics.without_timings(before)
+        after = metrics.without_timings(after)
     result = metrics.compare(before, after, **kwargs)
     result["baseline"] = {
         "id": baseline.id,

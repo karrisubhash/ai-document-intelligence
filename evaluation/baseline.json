@@ -16,7 +16,16 @@
     "answerer": {
       "name": "extractive-answerer",
       "version": "0.1.0",
-      "generative": false
+      "generative": false,
+      "chain": "",
+      "provider": "",
+      "model": "",
+      "fallback_models": "",
+      "links": [],
+      "temperature": 0.0,
+      "effort": "medium",
+      "reasoning_effort": "",
+      "daily_limits": ""
     },
     "chunking": {
       "strategy": "page-bounded-overlap",
@@ -34,8 +43,12 @@
       "max_passages_generative": 12,
       "model_judges_relevance": true,
       "min_passages": 6,
+      "admit_retrieval_top": 2,
       "neighbour_anchors": 3,
-      "grounding_retry": true
+      "grounding_retry": true,
+      "min_support_ratio": 0.25,
+      "plan_when_generative": false,
+      "followup_history_turns": 2
     }
   },
   "metrics": {
@@ -81,10 +94,10 @@
     },
     "system": {
       "cases": 13,
-      "latency_ms_mean": 28.0,
-      "latency_ms_p50": 27,
-      "latency_ms_p95": 36,
-      "latency_ms_max": 36,
+      "latency_ms_mean": 32.1,
+      "latency_ms_p50": 28,
+      "latency_ms_p95": 58,
+      "latency_ms_max": 58,
       "degraded_reranks": 0,
       "answerer_fallbacks": 0
     }

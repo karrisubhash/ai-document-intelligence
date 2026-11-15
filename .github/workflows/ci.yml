@@ -410,13 +410,19 @@ jobs:
         env:
           DOCUMENT_EMBEDDING_PROVIDER: documents.processing.embedding.hashing.HashingEmbeddingProvider
 
-      # v3 asks the same corpus questions the way people ask them: paraphrased,
+      # v3 asks about the same corpus the way people ask: paraphrased,
       # dates and year ranges written another way, compound, and entity-swap
       # questions that must be refused. It scores ANSWERS (`correctness`), which
       # only moves with a model - so here, offline, it gates the quoting path
       # that a model's failures fall back to. Deterministic like v2: two local
-      # runs agreed exactly (2026-11-14). Its corpus is a subset of v2's, so
-      # seeding prunes the documents it does not use.
+      # runs agreed exactly (2026-11-14). Its corpus is a SUPERSET of v2's (it
+      # adds staff-attendance-leave and transport-circular), so seeding it adds
+      # two documents and prunes nothing. The three corpora are nested
+      # (v1 < v2 < v3), and that is why one database serves all three gates IN
+      # THIS ORDER: seeded the other way round, the v1 seed (which has no
+      # --prune) refuses because the evaluator already owns documents outside
+      # its corpus, and re-running an earlier gate after a later seed scores a
+      # larger exam than its baseline.
       - name: Seed the v3 corpus
         run: >
           python backend/manage.py seed_evaluation

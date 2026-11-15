@@ -706,7 +706,10 @@ RAG_MAX_PLAN_STEPS = int(os.getenv("RAG_MAX_PLAN_STEPS", "4"))
 
 # Planning is for an answerer that can only quote. While a generative model
 # can write the answer, a compound question goes to it whole (one retrieval,
-# one call, nothing cut off from what it referred to); True plans it anyway.
+# one call, nothing cut off from what it referred to); True plans it anyway,
+# at up to RAG_MAX_PLAN_STEPS calls - and up to TWICE that when each part's
+# first draft is rejected and its corrective retry fires (4 parts: up to 8).
+# Write exactly True or False (see RAG_MODEL_JUDGES_RELEVANCE below).
 RAG_PLAN_WHEN_GENERATIVE = (
     os.getenv("RAG_PLAN_WHEN_GENERATIVE", "False").lower() == "true"
 )
@@ -859,8 +862,11 @@ RAG_RERANKER_LOCAL_CACHE_SIZE = int(os.getenv("RAG_RERANKER_LOCAL_CACHE_SIZE", "
 #   export RAG_ANSWERER_PROVIDER=groq        # or gemini, openrouter, ollama
 #   export GROQ_API_KEY=...                  # the key never enters settings
 #
-# Answering is ONE call per question, which is why a free tier is viable
-# here and is not for embedding. The guardrails are unchanged: the
+# Answering is ONE call per question in the ordinary case, which is why a
+# free tier is viable here and is not for embedding. (A second call is made
+# when a rejected answer is retried, and when general knowledge is on and the
+# documents cannot answer the question - see CHAT_GENERAL_KNOWLEDGE.) The
+# guardrails are unchanged: the
 # permission filter still runs first, every claim still needs a resolvable
 # citation, every figure is still checked against the cited passages, and a
 # failure is still downgraded to an abstention rather than returned.
@@ -893,8 +899,13 @@ RAG_ANSWERER_TEMPERATURE = float(os.getenv("RAG_ANSWERER_TEMPERATURE", "0.0"))
 RAG_ANSWERER_FALLBACK_MODELS = os.getenv("RAG_ANSWERER_FALLBACK_MODELS", "")
 
 # Sent as `reasoning_effort` where the preset says the backend accepts it.
-# Empty uses the preset's value (gemini: "none"); "default" sends nothing.
-# In a RAG_ANSWERER_CHAIN it only changes links whose preset already sends it.
+# Empty uses the preset's value: gemini sends "none", groq and cerebras send
+# "low", the others send nothing; "default" sends nothing at all. In a
+# RAG_ANSWERER_CHAIN it only changes links whose preset already sends it, and
+# that is THREE presets, so one global value reaches gemini, groq and cerebras
+# alike: it must be a value all of them accept ("none" and "minimal" are
+# Gemini's; gpt-oss on Groq and Cerebras documents low, medium and high), or
+# be left empty. A backend that rejects it answers 400 and the chain moves on.
 RAG_ANSWERER_REASONING_EFFORT = os.getenv("RAG_ANSWERER_REASONING_EFFORT", "")
 
 # --- The LLM gateway: a chain across providers, and a shared budget ------
@@ -904,14 +915,23 @@ RAG_ANSWERER_REASONING_EFFORT = os.getenv("RAG_ANSWERER_REASONING_EFFORT", "")
 # `provider` for its preset's model list, or `custom:model` for
 # RAG_ANSWERER_BASE_URL. Empty keeps the single provider above
 # (RAG_ANSWERER_PROVIDER and its fallback models), exactly as before. A link
-# whose key variable is unset is skipped. Example:
-#   RAG_ANSWERER_CHAIN=gemini,groq,cerebras,openrouter
+# whose key variable is unset is skipped. Example, the chain that needs no
+# payment card at any of the three (docs/ai/llm-providers.md has the facts and
+# what is unverified): Gemini first, Groq next, OpenRouter last.
+#   RAG_ANSWERER_CHAIN=gemini,groq,openrouter
+# Cerebras is deliberately not in it: its API needs a verified payment method
+# first. The `github` preset is dead (GitHub Models was retired on 30 July
+# 2026). Order matters for bursts: Groq's window (8K tokens a minute) fits
+# about one full grounded question a minute and no corrective retry in the
+# same minute, so on a busy site put openrouter (20 requests a minute) before
+# groq, or groq last.
 RAG_ANSWERER_CHAIN = os.getenv("RAG_ANSWERER_CHAIN", "")
 
 # Requests per model per day each link may make, as "key=n" pairs over the
-# presets' defaults (gemini 20, groq 60, cerebras 100, mistral 100, github
-# 50, openrouter 50; ollama, openai and custom endpoints unlimited). A key is
-# `provider:model`, `provider`, or `*` for all; 0 means no limit is enforced.
+# presets' defaults (gemini 20, groq 30, cerebras 100, mistral 100, github 50
+# [retired], openrouter 50; ollama, openai and custom endpoints unlimited). A
+# key is `provider:model`, `provider`, or `*` for all; 0 means no limit is
+# enforced.
 #   LLM_DAILY_LIMITS=groq=200,gemini:gemini-3.5-flash=40
 LLM_DAILY_LIMITS = os.getenv("LLM_DAILY_LIMITS", "")
 
@@ -927,6 +947,16 @@ LLM_CHAT_RESERVE = int(os.getenv("LLM_CHAT_RESERVE", "20"))
 # Needs a generative RAG_ANSWERER (OpenAI-compatible). A deliberate,
 # institution-chosen departure from spec 12.4 / FR-16, so off by default.
 # See documents/rag/general.py.
+#
+# COST: with this on, a question the documents cannot answer costs up to TWO
+# provider calls. While a model judges relevance (RAG_MODEL_JUDGES_RELEVANCE)
+# it is first shown the best passages even though none cleared the relevance
+# floor - no score tells a correct paraphrase from an unrelated question - and
+# says "not found"; only then is the general reply asked for. That first call
+# carries up to RAG_CONTEXT_BUDGET_GENERATIVE characters of the asker's own
+# documents to the provider and spends one of its daily requests. A site on a
+# tight daily budget can set RAG_MODEL_JUDGES_RELEVANCE=False, which returns
+# to one call for such a question and to the old relevance floor.
 CHAT_GENERAL_KNOWLEDGE = os.getenv("CHAT_GENERAL_KNOWLEDGE", "False").lower() == "true"
 CHAT_GENERAL_TEMPERATURE = float(os.getenv("CHAT_GENERAL_TEMPERATURE", "0.3"))
 CHAT_GENERAL_MAX_TOKENS = int(os.getenv("CHAT_GENERAL_MAX_TOKENS", "4096"))
@@ -945,6 +975,10 @@ RAG_MAX_PASSAGES = int(os.getenv("RAG_MAX_PASSAGES", "8"))
 # along with the ones above the floor. Anything that merely quotes (the
 # extractive answerer, or the fallback when no model is available) keeps the
 # floor exactly. See documents/rag/judging.py. False restores the floor.
+# The switches below (this one, RAG_GROUNDING_RETRY, RAG_PLAN_WHEN_GENERATIVE)
+# are read as `value.lower() == "true"`: write exactly True or False. An empty
+# value, 1, yes, on, or a trailing space all read as False - which turns a
+# default-ON feature OFF without an error.
 RAG_MODEL_JUDGES_RELEVANCE = (
     os.getenv("RAG_MODEL_JUDGES_RELEVANCE", "True").lower() == "true"
 )
@@ -955,9 +989,15 @@ RAG_ADMIT_RETRIEVAL_TOP = int(os.getenv("RAG_ADMIT_RETRIEVAL_TOP", "2"))
 # a dozen passages as easily as eight, and an answer that spans a list or a
 # section needs the chunks around the one that scored best: the passages
 # either side of the top RAG_NEIGHBOUR_ANCHORS are added to whatever room
-# these leave. Roughly 3.5K tokens at 14,000 characters - inside Groq's 8K a
-# minute with the rules and a reply. The quoting path keeps RAG_CONTEXT_BUDGET
-# and RAG_MAX_PASSAGES above, so its measured behaviour does not move.
+# these leave. 14,000 characters of passages is not the size of the request:
+# the system prompt and the rules add about 5,500 characters, so a full
+# request is roughly 5-6K tokens at 4 characters a token (about 4.4K to 4.9K in,
+# plus the reply: Groq is asked for at most 1,500). On Groq's 8K-tokens-a-minute
+# window that is ONE grounded question a minute, so a corrective retry in the
+# same minute will not fit there; at 3 characters a token (numeric or table
+# text) a completely full request can exceed 8,000 tokens and be refused with a
+# 413. The quoting path keeps RAG_CONTEXT_BUDGET and RAG_MAX_PASSAGES above, so
+# its measured behaviour does not move.
 RAG_CONTEXT_BUDGET_GENERATIVE = int(os.getenv("RAG_CONTEXT_BUDGET_GENERATIVE", "14000"))
 RAG_MAX_PASSAGES_GENERATIVE = int(os.getenv("RAG_MAX_PASSAGES_GENERATIVE", "12"))
 RAG_NEIGHBOUR_ANCHORS = int(os.getenv("RAG_NEIGHBOUR_ANCHORS", "3"))

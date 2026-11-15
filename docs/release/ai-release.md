@@ -120,7 +120,10 @@ turning it on, on staging first.
    only bound is the chat throttle (`THROTTLE_CHAT`, 60 questions per user per hour). A
    question makes one provider call, and a second when the first answer states a figure
    its passages lack (`RAG_GROUNDING_RETRY`); with `RAG_PLAN_WHEN_GENERATIVE` on, a
-   compound question makes one per part, up to 4 (`RAG_MAX_PLAN_STEPS`). A preset with a
+   compound question makes one per part, up to 4 (`RAG_MAX_PLAN_STEPS`), and up to 8 when
+   every part's first draft is rejected and its corrective retry fires. With
+   `CHAT_GENERAL_KNOWLEDGE` on, a question the documents cannot answer is a grounded call
+   and then a general one (see `docs/ai/llm-providers.md`). A preset with a
    fallback chain - Gemini's has three fallback models - sends a throttled or failing
    call to the next model, so one call can become several requests. A general-knowledge
    reply ([D8](institutional-decisions.md)) is one more call.
@@ -136,7 +139,7 @@ turning it on, on staging first.
 | Claude via the API | `ANTHROPIC_API_KEY`; `RAG_ANSWERER_BACKEND=api`; `RAG_ANSWERER_MODEL` |
 | Claude via Bedrock | `RAG_ANSWERER_BACKEND=bedrock`, `AWS_BEDROCK_REGION`, AWS credentials (environment or instance role), and model access granted in that region |
 | OpenAI-compatible | `RAG_ANSWERER_PROVIDER` set **explicitly**, the provider's key variable, `RAG_ANSWERER_MODEL` |
-| `RAG_ANSWERER_TIMEOUT`, `RAG_ANSWERER_RETRIES` | **Must be lowered.** Defaults are 60 s and 2 retries, so one call can take 180 s, but nginx stops waiting at 120 s and the user gets a 504 instead of the extractive fallback. A planned question makes up to 4 calls in sequence. Choose `timeout × (retries + 1) × RAG_MAX_PLAN_STEPS` below 120 s, for example 20 s × 1 retry with 2 plan steps. Otherwise raise nginx's `proxy_read_timeout` and gunicorn's timeout for chat |
+| `RAG_ANSWERER_TIMEOUT`, `RAG_ANSWERER_RETRIES` | **Must be lowered.** Defaults are 60 s and 2 retries, so one call can take 180 s, but nginx stops waiting at 120 s and the user gets a 504 instead of the extractive fallback. A planned question makes up to 4 calls in sequence, up to 8 with the corrective retry. Choose `timeout × (retries + 1) × RAG_MAX_PLAN_STEPS × 2` below 120 s, for example 10 s × 1 retry with 2 plan steps. Otherwise raise nginx's `proxy_read_timeout` and gunicorn's timeout for chat |
 | Image | the LLM layer is already built into the production overlay (`INSTALL_LLM=true`), pinned by `constraints.txt` |
 
 **Failure modes to know**

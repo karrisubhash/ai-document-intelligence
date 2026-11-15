@@ -1,5 +1,6 @@
 from .loader import DatasetError, load_dataset, load_file
 from .metrics import compare as compare_metrics
+from .metrics import without_timings
 from .runner import (
     EvaluationScopeError,
     capture_configuration,
@@ -9,6 +10,7 @@ from .runner import (
 
 __all__ = [
     "compare_metrics",
+    "without_timings",
     "DatasetError",
     "load_dataset",
     "load_file",
