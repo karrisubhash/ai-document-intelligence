@@ -29,7 +29,13 @@
       "relevance_floor": 0.15,
       "candidates": 50,
       "context_budget": 8000,
-      "max_passages": 8
+      "max_passages": 8,
+      "context_budget_generative": 14000,
+      "max_passages_generative": 12,
+      "model_judges_relevance": true,
+      "min_passages": 6,
+      "neighbour_anchors": 3,
+      "grounding_retry": true
     }
   },
   "metrics": {
@@ -57,10 +63,13 @@
       "cases": 10
     },
     "generation": {
-      "groundedness": 0.9709,
-      "citation_accuracy": 0.9444,
+      "groundedness": 0.963,
+      "citation_accuracy": 1.0,
       "source_coverage": 1.0,
       "token_overlap": 0.9306,
+      "correctness": 0.9,
+      "correct_answers": 9,
+      "answers_scored": 10,
       "abstention_accuracy": 0.9231,
       "coverage": 0.6923,
       "answered": 9,
@@ -72,10 +81,12 @@
     },
     "system": {
       "cases": 13,
-      "latency_ms_mean": 14.4,
-      "latency_ms_p50": 14,
-      "latency_ms_p95": 24,
-      "latency_ms_max": 24
+      "latency_ms_mean": 28.0,
+      "latency_ms_p50": 27,
+      "latency_ms_p95": 36,
+      "latency_ms_max": 36,
+      "degraded_reranks": 0,
+      "answerer_fallbacks": 0
     }
   }
 }
