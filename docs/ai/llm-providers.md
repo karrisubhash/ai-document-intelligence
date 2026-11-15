@@ -174,6 +174,12 @@ not turn the rest off with it.
   cleared the relevance floor, so a list or procedure that runs over a chunk boundary arrives
   whole. (A question whose every passage is below the floor, the paraphrase case, gets no
   neighbours: nothing vouches for which chunk to extend.)
+- **The last two exchanges of the conversation.** A follow-up ("what does that cost?", "explain
+  the second point") means nothing without them. They are shown after the passages, as context
+  for what the question refers to and never as a source: every fact still has to be in this
+  turn's passages, cited, and a figure only an earlier answer gave is rejected. About 600 tokens
+  more on a follow-up (`RAG_ANSWER_HISTORY_MESSAGES`, `RAG_ANSWER_HISTORY_CHARS`; 0 turns it
+  off). See [pipeline.md](pipeline.md#what-the-model-is-shown-of-the-conversation).
 - **A compound question goes whole.** Planning cut "the fee for X and Y, and when is it
   due?" into parts that lost what they referred to, spending one call per part.
 - **A refusal in the model's own words is a refusal.** "I couldn't find X; these documents

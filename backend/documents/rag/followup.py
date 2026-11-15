@@ -13,11 +13,16 @@ twelve thousand documents will find whatever happens to mention "MECH",
 rerank a handful of coincidences, and either abstain or answer from the
 wrong document - and abstaining is the better of those two outcomes.
 
-This module puts the missing information back before retrieval runs. It is
-NOT conversation memory in the sense of feeding history to the model: the
-answer is still built only from passages retrieved for this turn, still
-permission-filtered, still grounded and still cited. What changes is only
-the string retrieval searches on.
+This module puts the missing information back before retrieval runs. It
+changes only the string retrieval searches on: the answer is still built only
+from passages retrieved for this turn, still permission-filtered, still
+grounded and still cited.
+
+Showing the conversation to the model that writes the answer, so it can tell
+what "it" or "the second one" meant, is the other half and lives in
+`rag/history.py`. The two are independent - a quote is retrieved on the
+resolved question and is shown no history - and neither makes the
+conversation a source.
 
 TWO PROPERTIES THIS HAS TO HAVE, because getting either wrong is worse than
 not doing it at all:

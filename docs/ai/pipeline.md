@@ -7,7 +7,7 @@ question
   → permission-filtered hybrid retrieval   search/service.py
   → reranking                   rag/reranking.py | local_rerank.py | bedrock_rerank.py
   → relevance floor             rag/engine.py
-  → context construction        rag/context.py
+  → context construction        rag/context.py      (+ earlier turns, for a model: rag/history.py)
   → answerer                    rag/llm.py | claude.py | openai_compat.py
   → grounding and citations     rag/grounding.py
   → answer + citations, or an abstention with a reason
@@ -198,6 +198,38 @@ prompts state the user's question with the widened query as context. This was a 
 defect found end to end — the widened query had made "what about condonation?" re-answer
 the attendance question — and is pinned by a regression test that fails without the fix.
 `RAG_FOLLOWUP_HISTORY_TURNS=0` disables resolution.
+
+### What the model is shown of the conversation
+
+Resolution makes a follow-up *retrievable*; it does not tell the model what "it", "that" or
+"the second one" meant. So a model that writes the answer is also shown the last
+`RAG_ANSWER_HISTORY_MESSAGES` messages (default 4, two exchanges) within
+`RAG_ANSWER_HISTORY_CHARS` characters (default 2400, about 600 tokens), in a
+`CONVERSATION SO FAR` section after the passages and before the question
+(`rag/history.py`). The rules that keep this from becoming a way round the grounding check:
+
+- **It is never a source.** The prompt says so, and the check does not rely on it: every fact
+  must still be in a passage retrieved and cited for *this* turn. A figure only an earlier
+  answer gave is rejected like any other.
+- **Only the user's own words add to what may be repeated.** A figure the user gave about
+  *themselves* ("I have 70 percent attendance") may be said back, from any turn shown;
+  a figure they *asked about* ("is the minimum 70 percent?") never counts, nor does one only
+  the assistant said.
+- **Citation markers are removed from earlier answers.** `[1]` named a passage of the earlier
+  context; in this prompt `[1]` is a different one.
+- **An earlier refusal is shown as "(no answer was found in the documents)"**, not as the
+  sentence the model is told to say when it finds nothing, which it would otherwise be shown
+  as its own previous reply.
+- **The newest turns win** when the budget runs out; the window never opens on an answer whose
+  question was cut off; one long answer is clipped so it cannot crowd out the question.
+- **A first question's prompt is unchanged**, and a *quote* is shown none: it is chosen by
+  matching the question to passages, and the conversation changes nothing about it.
+
+Every assistant turn records `history_messages` in its metadata - how many earlier messages
+the model was shown - so an answer that read a turn wrongly can be traced to it. Either
+setting at `0` restores one-shot answers. The cost is the history's tokens on every follow-up:
+small beside a 2,000-5,000 token grounded prompt, but on a per-minute token limit (Groq's free
+tier is 8K) it counts.
 
 ## Planning
 

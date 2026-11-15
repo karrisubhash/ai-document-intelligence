@@ -1036,6 +1036,17 @@ RAG_MIN_SUPPORT_RATIO = float(_min_support) if _min_support else None
 # and restores one-shot questions.
 RAG_FOLLOWUP_HISTORY_TURNS = int(os.getenv("RAG_FOLLOWUP_HISTORY_TURNS", "2"))
 
+# How much of the conversation a MODEL writing the answer is shown, so it can
+# tell what "it", "that" or "the second one" refers to: the last
+# RAG_ANSWER_HISTORY_MESSAGES messages (4 = two exchanges), within
+# RAG_ANSWER_HISTORY_CHARS characters in all (about 600 tokens). Never a
+# source - every fact still has to be in this turn's passages, cited - and a
+# quoted answer ignores it. Free tiers count tokens per minute, which is why
+# the default is small. 0 for either restores one-shot answers; see
+# documents/rag/history.py.
+RAG_ANSWER_HISTORY_MESSAGES = int(os.getenv("RAG_ANSWER_HISTORY_MESSAGES", "4"))
+RAG_ANSWER_HISTORY_CHARS = int(os.getenv("RAG_ANSWER_HISTORY_CHARS", "2400"))
+
 
 # --- Malware scanning (spec section 13) -----------------------------------
 # Dotted path to a DocumentScanner. Empty means the SCANNING stage records

@@ -31,6 +31,7 @@ from documents.search import service as search_service
 
 from . import context as context_builder
 from . import grounding, judging, reranking, streaming, tables
+from .history import recent_turns, user_words
 from .llm import ABSTENTION_TEXT
 
 logger = logging.getLogger("adi.rag")
@@ -152,6 +153,10 @@ class RagAnswer:
     # finish reason, whether what was sent may be trained on. Empty when no
     # answerer ran, or the configured one never calls a model.
     llm: dict = field(default_factory=dict)
+    # How many earlier messages of the conversation were in the prompt
+    # (rag.history). 0 for a first question, and whenever the answer was going
+    # to be quoted: a quote is not chosen by the conversation.
+    history_messages: int = 0
 
 
 def llm_metadata(response) -> dict:
@@ -587,10 +592,15 @@ def _ask(
     retrieval_depth: int = None,
     relevance_floor: float = None,
     answerer=None,
+    history=(),
 ) -> RagAnswer:
     """`answerer` replaces the configured one for this question: how the
     planner answers the parts of a question by quoting, after the whole
-    question went to a model that failed (agents.runner)."""
+    question went to a model that failed (agents.runner).
+
+    `history` is the conversation before this question, oldest first (Message
+    objects, or anything with .role and .content). A model writing the answer
+    is shown its last few turns (rag.history); nothing else reads it."""
     started = time.monotonic()
     question = (question or "").strip()
 
@@ -809,6 +819,17 @@ def _ask(
     # turns appended with no sentence break, which could join a pronoun in the
     # follow-up to a figure from another turn.
     built.user_text = built.focus or question
+    if model_writes:
+        # The conversation so far, so the model can tell what "it" or "the
+        # second one" means. Not a source (see rag.history): the passages are
+        # still the only evidence grounding accepts. What the user said in
+        # those turns joins what they typed now, one message per line, so a
+        # figure they gave about their own situation earlier ("I have 70
+        # percent attendance") may be said back to them; facts decides which
+        # clauses count, and a figure they only asked about never does.
+        built.history = recent_turns(history)
+        if built.history:
+            built.user_text = "\n".join([*user_words(built.history), built.user_text])
     prompt = context_builder.render(built, question)
     # The passages the answer is about to be written from - authorized, above
     # the floor and inside the budget - so a reader sees where it is looking
@@ -856,6 +877,7 @@ def _ask(
         "answerer_fell_back": bool(fell_back_from),
         "timings": timings,
         "llm": llm_metadata(response),
+        "history_messages": len(built.history),
     }
 
     if response.abstained:

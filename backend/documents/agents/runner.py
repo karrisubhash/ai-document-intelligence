@@ -84,6 +84,9 @@ class PlannedAnswer:
     # The provider facts (documents.rag.engine.llm_metadata): the first
     # step's that reached a model, with tokens summed over every step.
     llm: dict = field(default_factory=dict)
+    # Earlier messages the model was shown (RagAnswer.history_messages); the
+    # most any step was given, since every step is shown the same turns.
+    history_messages: int = 0
 
 
 def _combined_llm(results) -> dict:
@@ -282,6 +285,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             reranker_degraded=any(r.reranker_degraded for r in asked),
             answerer_fell_back=any(r.answerer_fell_back for r in asked),
             llm=_combined_llm(asked),
+            history_messages=max((r.history_messages for r in asked), default=0),
         )
 
     if unanswered:
@@ -321,6 +325,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         reranker_degraded=any(r.reranker_degraded for r in asked),
         answerer_fell_back=any(r.answerer_fell_back for r in asked),
         llm=_combined_llm(asked),
+        history_messages=max((r.history_messages for r in asked), default=0),
     )
 
 
@@ -376,4 +381,5 @@ def _single(result, question: str, started: float) -> PlannedAnswer:
         reranker_degraded=result.reranker_degraded,
         answerer_fell_back=result.answerer_fell_back,
         llm=dict(result.llm),
+        history_messages=result.history_messages,
     )
