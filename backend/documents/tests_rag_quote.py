@@ -292,6 +292,31 @@ class CompoundQuestionTests(SimpleTestCase):
         self.assertIn("Attendance minimum is 75 percent", response.text)
         self.assertNotIn("bars a student", response.text)
 
+    def test_a_sentence_sharing_only_the_words_last_day_is_not_a_second_part(self):
+        """ "All fees are payable before the last working day of July" shares
+        "last" and "day" with "the last day to submit applications for aid",
+        and was quoted beside the real answer as if it were another part."""
+        response = ask(
+            "What is the last day to submit applications for financial aid?",
+            prose(1, "Applications for all financial aid close on 30 September."),
+            prose(2, "All fees are payable before the last working day of July."),
+        )
+
+        self.assertIn("close on 30 September", response.text)
+        self.assertNotIn("working day of July", response.text)
+        self.assertEqual(response.cited_markers, (1,))
+
+    def test_the_same_words_still_count_when_the_question_is_not_for_a_date(self):
+        """Only a question for a date treats "day" as the shape of the answer."""
+        response = ask(
+            "What is the library fine for a late book, and the charge per day?",
+            prose(1, "The library fine for a late book is 5 rupees."),
+            prose(2, "Each day a book is late attracts the fine under the rules."),
+        )
+
+        self.assertIn("5 rupees", response.text)
+        self.assertIn("Each day a book is late", response.text)
+
     def test_a_second_sentence_must_add_two_terms_the_first_did_not_cover(self):
         response = ask(
             "What is the minimum attendance for exams, and how many books can "

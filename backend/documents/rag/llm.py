@@ -525,8 +525,14 @@ class ExtractiveAnswerer:
                 if not candidate.demoted
                 and not self._is_header_row(candidate.passage, candidate.sentence)
             ]
+            # "Last day" and "deadline" say what KIND of answer is wanted, not
+            # what it is about: a sentence that shares only those words with a
+            # question ("All fees are payable before the last working day of
+            # July" for "the last day to submit applications for aid") is not
+            # a second part of it.
+            form_terms = quoting.FORM_TERMS if date_question else frozenset()
             while len(chosen) < self.MAX_SENTENCES:
-                uncovered = asked - covered
+                uncovered = asked - covered - form_terms
                 if not uncovered:
                     break
                 options = []

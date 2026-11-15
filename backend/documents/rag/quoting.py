@@ -31,7 +31,7 @@ question that appears in no retrieved passage.
 import re
 
 from . import facts as fact_forms
-from .reranking import _terms
+from .reranking import _terms, stem
 
 # A line that ends one of these is a sentence; one that does not and is short
 # is a title, a clause heading or a list label.
@@ -86,6 +86,11 @@ FIGURE = re.compile(r"\d{4}-\d{2,4}|\d[\d,]*")
 _SHORT_WORDS = frozenset(
     "a an as at be by do go he if in is it me my no of oh on or so to up us we".split()
 )
+
+
+# The words of a question for a date that name the KIND of answer rather than
+# its subject, as the stemmed terms the answerer compares.
+FORM_TERMS = frozenset(stem(word) for word in ("last", "day", "date", "deadline"))
 
 
 def wants_figure(question: str) -> bool:
