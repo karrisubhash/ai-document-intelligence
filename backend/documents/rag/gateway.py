@@ -54,6 +54,7 @@ for that caller a mid-stream failure ends the walk instead.
 import logging
 import os
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -341,10 +342,21 @@ def is_capacity(exc) -> bool:
     return _status(exc) in (413, 429, 503)
 
 
-def _without_retries(client):
-    """The same client with SDK retries off; stubs without with_options pass through."""
+# The least a link is given to answer once a walk has spent most of its budget,
+# and the point below which no further link is started (RAG_ANSWERER_DEADLINE).
+MIN_ATTEMPT_SECONDS = 8.0
+
+
+def _for_attempt(client, *, retries=None, timeout=None):
+    """The same client for ONE attempt, with the SDK's retries and request
+    timeout set for it. A stub without with_options passes through unchanged."""
+    options = {}
+    if retries is not None:
+        options["max_retries"] = retries
+    if timeout is not None:
+        options["timeout"] = timeout
     with_options = getattr(client, "with_options", None)
-    return with_options(max_retries=0) if with_options else client
+    return with_options(**options) if (with_options and options) else client
 
 
 def _warn_if_base_url_looks_wrong(base_url: str) -> None:
@@ -656,6 +668,43 @@ class Gateway:
         self.client_override = None
         self._timeout = float(getattr(settings, "RAG_ANSWERER_TIMEOUT", 60.0) or 60.0)
         self._retries = int(getattr(settings, "RAG_ANSWERER_RETRIES", 2) or 0)
+        # Seconds ONE walk of the chain may take, 0 for no limit. See
+        # _attempt_options.
+        self._deadline = float(getattr(settings, "RAG_ANSWERER_DEADLINE", 0.0) or 0.0)
+
+    def _time_left(self, started: float) -> float | None:
+        """What is left of this walk's budget, None when there is no budget."""
+        if not self._deadline:
+            return None
+        return max(0.0, self._deadline - (time.monotonic() - started))
+
+    def _attempt_options(self, started: float, link: Link, remaining) -> dict:
+        """The retries and timeout ONE attempt may use.
+
+        A link that hangs is otherwise waited for the full RAG_ANSWERER_TIMEOUT,
+        and a chain of such links plus the SDK's retries on the last one outlasts
+        the proxy in front of the app (nginx stops waiting at 120 seconds), so the
+        reader gets a 504 instead of an answer or even the quoted fallback. With a
+        deadline each attempt is given what is left of the walk's budget: all of it
+        when no other provider could still be tried (a hang marks the endpoint
+        dead, so its other models would be skipped anyway), half of it when
+        another provider could, so one hung provider cannot starve a healthy one.
+        Never more than the configured timeout, never less than
+        MIN_ATTEMPT_SECONDS, and the last link keeps only as many SDK retries as
+        still fit. Without a deadline nothing changes: no retries before the last
+        link, the client's own settings on it.
+        """
+        last = not remaining
+        left = self._time_left(started)
+        if left is None:
+            return {} if last else {"retries": 0}
+        elsewhere = any(later.endpoint != link.endpoint for later in remaining)
+        share = left / 2 if elsewhere else left
+        timeout = min(self._timeout, max(share, MIN_ATTEMPT_SECONDS))
+        retries = 0
+        if last:
+            retries = max(0, min(self._retries, int(left // timeout) - 1))
+        return {"retries": retries, "timeout": timeout}
 
     @classmethod
     def from_settings(cls) -> "Gateway":
@@ -907,6 +956,8 @@ class Gateway:
         last_error = None
         shown = False  # text this walk streamed and has not withdrawn
         passed_over = []  # replies `acceptable` refused, served by earlier links
+        started = time.monotonic()
+        attempted = False  # a link has been sent a request in this walk
 
         for index, link in enumerate(plan.links):
             if link.endpoint in dead:
@@ -928,6 +979,28 @@ class Gateway:
                 if last:
                     raise
                 continue
+
+            left = self._time_left(started)
+            if attempted and left is not None and left < MIN_ATTEMPT_SECONDS:
+                # Out of time. Another model would be started only to be cut
+                # off, and the reader (and the proxy in front of the app) is
+                # waiting: the last failure stands and the caller falls back
+                # to quoting, as it does when every link has failed.
+                logger.warning(
+                    "llm.deadline",
+                    extra={
+                        "seconds": self._deadline,
+                        "next_provider": link.provider,
+                        "next_model": link.model,
+                    },
+                )
+                raise (
+                    last_error
+                    if last_error is not None
+                    else Unavailable(
+                        FAILED, None, "the time allowed for an answer is spent"
+                    )
+                )
 
             reservation = self.broker.reserve(link)
             if (
@@ -957,9 +1030,11 @@ class Gateway:
                 _emitted.append(piece)
                 on_delta(piece)
 
+            options = self._attempt_options(started, link, remaining)
+            attempted = True
             try:
                 completion = self._complete_once(
-                    client if last else _without_retries(client),
+                    _for_attempt(client, **options),
                     build(link),
                     link,
                     deliver if on_delta is not None else None,

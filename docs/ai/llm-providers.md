@@ -289,6 +289,16 @@ Only when every link has failed is the answer quoted from the passages instead. 
 breaks off **mid-stream**, the words it showed are withdrawn (a `reset` event) before the
 next link starts. The SDK's own retries are kept only for the last link tried.
 
+**One walk has a time budget** (`RAG_ANSWERER_DEADLINE`, 50 s by default, 0 for none). Without
+one, a hung provider is waited for the full `RAG_ANSWERER_TIMEOUT`, then the next, then the
+SDK's retries on the last: a question can outlast nginx's 120 s and the reader gets a 504
+instead of an answer or the quoted fallback (a real-model run saw a 61 s stall). With it, each
+attempt is given what is left of the budget - half of it while another provider could still be
+tried, so one hung provider cannot starve a healthy one - and never less than 8 s; no new
+provider is started in the last 8 s; and the last link keeps only the SDK retries that still
+fit. It decides whether another link STARTS and never interrupts one that is answering. A
+corrective retry is a second walk.
+
 ## What people see
 
 - **Chat** - every answer's payload has `model_display` ("Gemini 3.5 Flash",

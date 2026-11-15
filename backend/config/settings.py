@@ -805,6 +805,14 @@ RAG_ANSWERER_EFFORT = os.getenv("RAG_ANSWERER_EFFORT", "medium")
 # request the user has already given up on.
 RAG_ANSWERER_TIMEOUT = float(os.getenv("RAG_ANSWERER_TIMEOUT", "60"))
 RAG_ANSWERER_RETRIES = int(os.getenv("RAG_ANSWERER_RETRIES", "2"))
+# Seconds ONE walk of the provider chain may take (0 = no limit). The timeout
+# above is per attempt, so on its own a hung provider is waited for in full, then
+# the next, then the SDK's retries on the last: far past nginx's 120 s, and the
+# reader gets a 504 instead of an answer or the quoted fallback. With a deadline
+# each attempt gets what is left of it and no new provider is started in the last
+# 8 seconds; see documents.rag.gateway.Gateway._attempt_options. A corrective retry
+# is a second walk, so keep twice this well under the proxy's limit.
+RAG_ANSWERER_DEADLINE = float(os.getenv("RAG_ANSWERER_DEADLINE", "50"))
 
 RAG_RETRIEVAL_DEPTH = int(os.getenv("RAG_RETRIEVAL_DEPTH", "20"))
 
