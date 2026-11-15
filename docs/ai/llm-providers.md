@@ -57,12 +57,15 @@ no chain at all.
 `RAG_ANSWERER_REASONING_EFFORT` in an explicit chain only changes links whose preset already
 sends `reasoning_effort` - and three presets do: `gemini` sends `none` (so its hidden
 thinking does not eat the output budget), `groq` and `cerebras` send `low`. One global value
-therefore reaches **all three** links: it must be one they all accept (`none` and `minimal`
-are Gemini's; gpt-oss on Groq and Cerebras documents `low`, `medium` and `high`), or be left
-empty so each preset keeps its own. A backend that rejects the value answers 400 for that
-request, the request stays counted, and the chain moves on - so a value one link refuses
-costs a request on that link for every question. Presets that do not implement the parameter
-send nothing.
+is offered to **all three** links, and a link takes it only if its preset documents it
+(`Preset.effort_values`: Gemini `none`, `minimal`, `low`, `medium` and `high`; gpt-oss on Groq
+and Cerebras `low`, `medium` and `high`). For a link whose preset does not, the value is not
+sent, the link keeps its own, and `llm.effort_not_sent` is logged at WARNING - so `none` costs
+Groq and Cerebras nothing, it just is not applied to them. `default` sends nothing to any
+link. A model outside a preset's `extras_models` (a llama model pinned on Groq, say) gets no
+`reasoning_effort` at all. A value a preset documents but one particular model still refuses
+answers 400: the request stays counted and the chain moves on. Presets that do not implement
+the parameter send nothing.
 
 ## Providers
 
@@ -76,7 +79,7 @@ not read from the provider's documentation.
 | Preset | Key variable | Default model | Where to get a key | Free tier (as documented) | Default daily limit here | May train on inputs |
 |---|---|---|---|---|---|---|
 | `gemini` | `GEMINI_API_KEY` | `gemini-3.5-flash` (+3 fallbacks) | aistudio.google.com/apikey | **Measured 2026-10-11:** 5 requests/min and 20/day per model; day ends at midnight Pacific | 20 per model | **Yes** on unpaid tiers (Google's terms) |
-| `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` | console.groq.com/keys | No card. **Unverified:** Groq's free-plan limits are not on its documentation pages (checked 2026-11-15); the figures here (~30 requests/min, 1,000/day, 8K tokens/min and 200K tokens/day for this model) are as reported when this was written, so read your console's limits page. If they hold, the token cap binds first: a grounded request is 5-6K tokens, so about one question a minute and ~30 a day, with no room for a corrective retry in the same minute | 30 | No (unverified) |
+| `groq` | `GROQ_API_KEY` | `openai/gpt-oss-120b` | console.groq.com/keys | No card. **Unverified:** Groq's free-plan limits are not on its documentation pages (checked 2026-11-15); the figures here (~30 requests/min, 1,000/day, 8K tokens/min and 200K tokens/day for this model) are as reported when this was written, so read your console's limits page. If they hold, the token cap binds first: a full grounded request counts 5-6K tokens against it (a typical question measured 2,000-2,700 prompt tokens and a full 12-passage context about 5,000, plus the up to 1,500 the request asks for in reply), so roughly one question a minute and ~30 a day, with no room for a corrective retry in the same minute | 30 | No (unverified) |
 | `cerebras` | `CEREBRAS_API_KEY` | `gpt-oss-120b` | cloud.cerebras.ai | **Not a no-card free tier.** Its documentation requires a verified payment method before the API turns on; it then gives a one-time $5 credit that expires after 30 days and says it is not intended for production use. The request limits that follow the credit are unverified | 100 (unverified) | No (unverified) |
 | `openrouter` | `OPENROUTER_API_KEY` | `openrouter/free` (a router over free models) | openrouter.ai/keys | Free models: 20 requests/min and **50 requests a day per account until 10 credits are bought** (1,000 a day after). Whether a card is needed to sign up is not stated in its documentation | 50 | **Yes** - free models may be trained on by whoever serves them |
 | `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` | console.mistral.ai | **Unverified:** Mistral's documentation pages did not load on 2026-11-15. Earlier notes say an "Experiment" plan metered by tokens per month, not requests per day | 100 (unverified) | **Yes** on the free plan (unverified) |
@@ -167,8 +170,10 @@ not turn the rest off with it.
   `RAG_MODEL_JUDGES_RELEVANCE=False` to return to one call for such a question, with the old
   score floor and the misses that come with it.
 - **More context, with the chunks around the best ones.** 14,000 characters and 12 passages
-  instead of 8,000 and 8, and the chunk before and after each of the top 3 passages, so a list
-  or procedure that runs over a chunk boundary arrives whole.
+  instead of 8,000 and 8, and the chunk before and after each of the top 3 passages that
+  cleared the relevance floor, so a list or procedure that runs over a chunk boundary arrives
+  whole. (A question whose every passage is below the floor, the paraphrase case, gets no
+  neighbours: nothing vouches for which chunk to extend.)
 - **A compound question goes whole.** Planning cut "the fee for X and Y, and when is it
   due?" into parts that lost what they referred to, spending one call per part.
 - **A refusal in the model's own words is a refusal.** "I couldn't find X; these documents
@@ -176,10 +181,14 @@ not turn the rest off with it.
   chat's general reply away. A reply counts as a refusal when it cites nothing and states no
   figure the question did not itself type ("I couldn't find the 2023-24 fee" repeats the
   year that was asked, so it still counts). A reply that answers from the model's own
-  knowledge - no citation, no figure - when none of the passages it was shown passed the
-  relevance floor is treated the same way, so chat's general reply can answer instead of the
-  reader being told a draft "could not be verified". Anything that cites a passage or
-  states a figure still goes through the grounding check.
+  knowledge is treated the same way, so chat's general reply can answer instead of the
+  reader being told a draft "could not be verified". That is judged strictly: it cites
+  nothing and states no figure, none of the passages it was shown passed the relevance
+  floor, at least 3 of its content words are in none of the passages, and fewer than 30% of
+  them are (`OWN_KNOWLEDGE_MAX_SUPPORT`). A short, correct paraphrase that merely forgot its
+  citation shares more than that with its passage, and stays an ungrounded draft, which the
+  reader is told could not be verified - not "your documents do not cover this". Anything
+  that cites a passage or states a figure still goes through the grounding check.
 - **A correct answer is not discarded for how it spells a fact.** Accepted as the same
   fact: a date written another way ("31 March 2025" for "31.03.2025"), a day and month
   without the year, a year range ("2024-25"), a numeral for a number the passage spells out
@@ -187,15 +196,20 @@ not turn the rest off with it.
   and "no one" are not quantities), a clock time written another way ("7:30 PM" for "7.30
   pm"), "3 lakh" for 300000 (exact equality, both ways), "15-day" or "Rs 500/week" for the
   number the passage states with its unit, a citation written "[1, 2]", "[1-2]", "[ 1 ]" or
-  "[Source 1]", a list numbered "**1.**" or "(1)" - and a figure the **user** typed ("I have
-  70 percent attendance" answered with "At 70 percent ..."), which is never a source and
-  never cited. Still rejected: a date that could be read two ways unless written the same
+  "[Source 1]", a list numbered "**1.**" or "(1)" - and a figure the **user** gave about
+  their own situation ("I have 70 percent attendance" answered with "At 70 percent ..."),
+  which is never a source and never cited. A figure the user only ASKED about ("Is the
+  minimum 70 percent?") is not theirs to repeat: it must be in a cited passage, or the answer
+  is rejected. Still rejected: a date that could be read two ways unless written the same
   way, a date that does not exist ("31 April 2025" is one exact token and is never rescued
-  by a 31 and a 2025 elsewhere), a different day or month, a range whose two ends are not
-  found together in one passage (within about 40 characters), a marker that names no
-  passage, and any figure that is neither in a cited passage nor typed by the user. An
-  interval such as "[0, 1]" in an answer is left alone unless every number in it is a
-  passage. Numbers the *answer* spells out ("seven days") are not checked.
+  by a 31 and a 2025 elsewhere), a different day or month, a hyphenated range (A-B, also
+  written with an en dash) whose two ends are not found together in one passage (within about
+  40 characters), a marker that names no passage, and any figure that is neither in a cited
+  passage nor given by the user about themselves. Only the hyphenated form of a range is
+  checked as a pair: "between 40 and 75" and "40 to 75" are checked figure by figure, each
+  of which must be in a cited passage. An interval such as "[0, 1]" in an answer is left
+  alone unless every number in it is a passage. Numbers the *answer* spells out ("seven
+  days") are not checked.
 - **A rejected answer gets two chances before it is discarded.** A figure the answer states
   after its last citation in a sentence, that is written in exactly one passage it did not
   cite, where the sentence shares at least two words with that passage and the word beside
@@ -207,27 +221,40 @@ not turn the rest off with it.
   reaches a model (a timeout, every link rate limited) the answer is quoted from the
   passages instead - checked like any answer - and the outage is not counted against the
   model. The retry is a second provider call on a free tier's small daily count, which is
-  why it is only for figures the passages lack. The stored record of an answer that took two
+  why it is only for figures the passages lack, and why it is not attempted when the first
+  call used the link's last request of the day (the draft is then withheld, with no quote).
+  The stored record of an answer that took two
   calls sums their tokens and cost and remembers if EITHER provider may train on what it was
   sent (`first_provider` names the first).
 - **The check cannot turn into an error page or a pass.** If the grounding check itself
   raises on something in a document, the answer is withheld as ungrounded and the failure
   is logged by type and place only (`grounding.check_failed`), never with the message,
   which can echo document text.
-- **How often the first draft is wrong is counted.** An answer that was repaired or retried
-  no longer reaches the abstention counter, so
+- **How often the first draft is wrong is counted.** An answer that was repaired, or
+  recovered by the retry, no longer reaches the abstention counter, so
   `adi_rag_grounding_recoveries_total{outcome}` counts them: `repaired`, `retried_grounded`,
   `retried_failed` (the model answered again and failed) and `retry_unavailable` (the retry
-  never reached a model: an outage, not a grounding failure). That, not the abstention rate,
-  is the number that says whether a provider is any good.
+  never reached a model: an outage, not a grounding failure). A `retried_failed` answer is
+  still withheld, so it is counted in both places. That, not the abstention rate, is the
+  number that says whether a provider is any good.
 - **A failed model call does not lose a compound question.** Planning is skipped while a
   model will answer; if that whole-question call fails and the question splits into two or
   more parts, the parts are answered by quoting, as before, with no further model calls.
+  "Fails" includes a first draft that was rejected when the corrective retry then could not
+  reach a model (an outage): the first failure stands, but it is the outage, not the model's
+  wrong draft, that the parts are quoted around.
 - **An empty or cut-off reply moves on to the next link** (an empty reply, or a
   `finish_reason` of length or content_filter), like a 500 does; only when the last link
-  fails this way too is the answer reported as failed. Answers are written in the language
-  of the passages (English) whatever language the question is in, because the grounding
-  check compares words with the passages.
+  fails this way too is the answer reported as failed. The tokens and cost of a reply that
+  was passed over are summed into the answer's stored record, and each such reply stays
+  counted against the day's allowance. So a reply that a provider's own filter refused
+  (`content_filter`), or that was cut off, can cost one request on EVERY remaining link, and
+  the same prompt and passages go to each of them: on the four-link Gemini chain that is four
+  requests, one of each model's 20 a day, for one question, and with a chain that continues
+  to other providers the passage text a safety classifier refused reaches them too. (Their
+  tokens are not recorded if every later link then fails.) Answers are written in the
+  language of the passages (English) whatever language the question is in, because the
+  grounding check compares words with the passages.
 - **A quote after a model failure uses the older context** - 8 passages, 8,000 characters,
   vetted passages only - as the settings say.
 

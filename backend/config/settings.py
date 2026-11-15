@@ -910,10 +910,14 @@ RAG_ANSWERER_FALLBACK_MODELS = os.getenv("RAG_ANSWERER_FALLBACK_MODELS", "")
 # Empty uses the preset's value: gemini sends "none", groq and cerebras send
 # "low", the others send nothing; "default" sends nothing at all. In a
 # RAG_ANSWERER_CHAIN it only changes links whose preset already sends it, and
-# that is THREE presets, so one global value reaches gemini, groq and cerebras
-# alike: it must be a value all of them accept ("none" and "minimal" are
-# Gemini's; gpt-oss on Groq and Cerebras documents low, medium and high), or
-# be left empty. A backend that rejects it answers 400 and the chain moves on.
+# that is THREE presets, so one global value is offered to gemini, groq and
+# cerebras alike. A link takes it only if its preset documents it
+# (Preset.effort_values: "none" and "minimal" are Gemini's; gpt-oss on Groq and
+# Cerebras takes low, medium and high): for any other the value is NOT sent, the
+# link keeps its own, and `llm.effort_not_sent` is logged at WARNING. A model
+# outside a preset's extras_models (llama on Groq) gets no reasoning_effort at
+# all. A value a preset documents but one model still refuses answers 400: the
+# request stays counted and the chain moves on.
 RAG_ANSWERER_REASONING_EFFORT = os.getenv("RAG_ANSWERER_REASONING_EFFORT", "")
 
 # --- The LLM gateway: a chain across providers, and a shared budget ------

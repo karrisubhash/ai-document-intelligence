@@ -469,7 +469,8 @@ def _extras(preset, model: str = "", *, explicit_chain: bool) -> tuple:
                 },
             )
         else:
-            extras["reasoning_effort"] = effort
+            # The guard compared it lower-cased: send the form it accepted.
+            extras["reasoning_effort"] = effort.lower()
     return tuple(extras.items())
 
 

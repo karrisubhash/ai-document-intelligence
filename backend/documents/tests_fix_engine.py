@@ -605,6 +605,30 @@ class PlannedFallbackTests(SimpleTestCase):
 
         self.assertEqual(len(calls), 1)
 
+    def test_a_rejected_draft_whose_retry_never_reached_a_model_is_planned_for(self):
+        """The first failure stands, but it is an outage that kept the model from
+        trying again, and a quote of the WHOLE compound question covers one part
+        at best: the parts are quoted, as when the first call itself fails."""
+        rejected = rag.RagAnswer(
+            question=THREE_PART,
+            answer=ABSTENTION_TEXT,
+            abstained=True,
+            abstention_reason=engine.Abstention.UNGROUNDED,
+            model_name="openai-compatible",
+            generative=True,
+            llm={
+                "retry_fallback_reason": "TimeoutError",
+                "retry_fallback_kind": "error",
+            },
+        )
+
+        calls, planned = self.go(rejected)
+
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(planned.planned)
+        self.assertFalse(planned.abstained)
+        self.assertEqual(len(planned.steps), 3)
+
 
 P1 = (
     "A student must maintain a minimum of 75 percent attendance in each course "
@@ -663,6 +687,35 @@ class PlannedFallbackEndToEndTests(FreshBudget, TestCase):
         # One call, for the whole question: the parts spent none.
         self.assertEqual(len(client.calls), 1)
         self.assertTrue(planned.answerer_fell_back)
+
+    def test_a_wrong_first_draft_and_a_retry_that_cannot_run_still_answers_all_four(
+        self,
+    ):
+        """The realistic free-tier case: the model states a figure the passage does
+        not (90 percent for 75), and the corrective retry is refused (a timeout,
+        or a 429 inside the same minute). It used to be refused whole."""
+        wrong = (
+            "The attendance minimum is 90 percent [1], the late fine is 5 rupees a "
+            "day [4], the hostel curfew is 10 pm [3] and the bus pass costs 12000 "
+            "rupees [5]."
+        )
+        for failure in (TimeoutError("timed out"), StatusError(429)):
+            with self.subTest(failure=type(failure).__name__):
+                cache.clear()
+                budget.reset()
+                client = Scripted(wrong, failure)
+
+                planned = self.go(client_answerer(client))
+
+                self.assertTrue(planned.planned, planned.notes)
+                self.assertFalse(planned.abstained, planned.notes)
+                self.assertEqual(len(planned.steps), 4)
+                self.assertEqual([s.abstained for s in planned.steps], [False] * 4)
+                for figure in ("75 percent", "5 rupees", "10 pm", "12000"):
+                    self.assertIn(figure, planned.answer)
+                self.assertNotIn("90 percent", planned.answer)
+                # The whole question's call and its retry: the parts spent none.
+                self.assertEqual(len(client.calls), 2)
 
 
 # --- engine/F1, optional: a Claude answerer with no way to reach a model ------
@@ -1054,6 +1107,28 @@ class OwnKnowledgeTests(EngineHarness, TestCase):
 
         self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
 
+    def test_a_short_true_paraphrase_that_forgot_its_citation_is_not_called_not_found(
+        self,
+    ):
+        """Natural wording shares under half its words with the passage (0.45
+        here), and "your documents do not cover this" about a refund the document
+        states would be false: it stays an ungrounded draft."""
+        passage = (
+            "Refund of tuition fees is permitted for withdrawals made before the "
+            "commencement of classes. A processing charge is deducted from the "
+            "amount refunded."
+        )
+
+        answer = self.weak(
+            "Yes. If you withdraw before classes begin you are entitled to a "
+            "refund, less a processing charge.",
+            passage,
+            question="Can I get my fees back if I leave before the term starts?",
+        )
+
+        self.assertEqual(answer.abstention_reason, engine.Abstention.UNGROUNDED)
+        self.assertNotIn(answer.abstention_reason, general.FALLBACK_REASONS)
+
     def test_a_failing_probe_leaves_the_answer_ungrounded(self):
         real = grounding.validate
         calls = {"n": 0}
@@ -1182,6 +1257,26 @@ class ReasoningEffortGuardTests(SimpleTestCase):
         )
 
         self.assertEqual(set(got.values()), {"high"})
+
+    def test_a_value_typed_in_capitals_is_sent_in_the_lower_case_that_was_accepted(
+        self,
+    ):
+        """The guard compares lower-cased. What is SENT must be that form, or a
+        provider whose enum is case-sensitive answers 400 to every question."""
+        for typed, sent in (("Low", "low"), ("HIGH", "high")):
+            with self.subTest(typed=typed):
+                got = efforts(
+                    "gemini:gemini-3.5-flash,groq", RAG_ANSWERER_REASONING_EFFORT=typed
+                )
+
+                self.assertEqual(set(got.values()), {sent})
+
+        with self.assertLogs("adi.llm", level="WARNING"):
+            got = efforts(
+                "gemini:gemini-3.5-flash,groq", RAG_ANSWERER_REASONING_EFFORT="None"
+            )
+        self.assertEqual(got["gemini:gemini-3.5-flash"], "none")
+        self.assertEqual(got["groq:openai/gpt-oss-120b"], "low")
 
     def test_a_single_groq_ignores_a_value_it_does_not_document(self):
         with self.assertLogs("adi.llm", level="WARNING"):

@@ -429,11 +429,16 @@ def _repair(report, built):
 # vouched for, is the model answering from its own knowledge - unless its words
 # come from those passages after all, in which case it is an answer from the
 # documents that forgot its citation. The share of its content words found in
-# the passages that tells the two apart: well above the share (0.25) that
-# grounding accepts as "drawn from what it cites", because here nothing it
-# cites backs it up and a wrong guess turns a true answer into "your documents
-# do not cover this".
-OWN_KNOWLEDGE_MAX_SUPPORT = 0.5
+# the passages that tells the two apart. A wrong guess turns a true answer into
+# "your documents do not cover this", which is false, so the bar is low: only a
+# reply with hardly any of the passages' words is called "its own knowledge".
+# Natural wording of a short true answer shares well under half its words with
+# the passage ("Yes. If you withdraw before classes begin you are entitled to a
+# refund, less a processing charge." against "Refund of tuition fees is
+# permitted for withdrawals made before the commencement of classes." is 0.45:
+# function words and unstemmed forms count), so 0.5 called it not found. Just
+# above the share (0.25) that grounding accepts as "drawn from what it cites".
+OWN_KNOWLEDGE_MAX_SUPPORT = 0.3
 
 # ...and it must say enough to measure: "No." or "Yes, it is." is a direct
 # answer to a yes/no question whichever passage it came from, and one content

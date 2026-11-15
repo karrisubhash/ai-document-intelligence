@@ -65,8 +65,9 @@ overrides all of them. Degradation adds a note to the answer and increments
 Up to 8 passages within an 8000-character budget when the answer will be quoted; up to 12
 within 14,000 characters (`RAG_CONTEXT_BUDGET_GENERATIVE`, `RAG_MAX_PASSAGES_GENERATIVE`)
 when a model will write it, including - in whatever room is left - the chunk before and
-after each of the top 3 passages (`RAG_NEIGHBOUR_ANCHORS`), so a list that runs over a
-chunk boundary arrives whole.
+after each of the top 3 passages that cleared the relevance floor (`RAG_NEIGHBOUR_ANCHORS`;
+none when every passage was below it), so a list that runs over a chunk boundary arrives
+whole.
 Duplicates and fragments are dropped. Each passage carries its marker, document title and
 page; table passages carry their column labels; passages with instruction-like text are
 marked as data. What a model is shown, and why, is in
@@ -91,8 +92,12 @@ from Django settings, and never logged or stored.
 **Hosted answerers are tested with stub clients** in `tests_providers.py` and
 `tests_llm_gateway.py`, including through the full engine to prove a fabricated figure is
 still rejected. Real calls: the Gemini preset on Google's free tier, measured in development
-on 2026-10-11 and answering on the public deployment since; no other preset has been run
-against its live backend from this repository, and no evaluation has run through one.
+on 2026-10-11 and answering on the public deployment since; on 2026-11-15 the Groq and
+OpenRouter presets were each called with a real key to check the model id and the request
+shape, and the v3 benchmark was run through Gemini's free tier (`--chat-path --pause 12`,
+with a key kept apart from the live site's quota). The Cerebras preset has never been called
+(it needs a verified payment method). Those are development checks on synthetic documents,
+not an evaluation of any institution's.
 
 **When no model can answer** - no key, every link used up for the day, a provider failure -
 the extractive answerer quotes instead, so on a free tier readers see it every day
@@ -103,18 +108,30 @@ answers when it was measured with every model call failing:
 - A title or clause heading comes after the sentences that qualify, and one that states no
   figure cannot answer "how much" or "when"; such a question prefers a sentence with a
   figure or a date. A "label: value" line ("Casual leave: 12 days per calendar year") and a
-  list item are facts, not headings, and are quoted like any sentence.
+  list item are facts, not headings, and are quoted like any sentence; a label followed by
+  a title ("Policy: Staff Leave Policy 2024-25") is a heading, so the sentence under it is
+  not dropped for it.
 - A table row is matched together with its column labels, and dotted codes ("B.Tech",
   "M.Tech") are single terms, so the wrong programme's row is not quoted first.
 - Each part of a two-part question can be answered by its own sentence. A second sentence
-  is added only when it brings terms of its own - not the document title's words, and not
-  one stray word the first sentence already covered.
+  is added only when it brings terms of its own - not the document title's words - and one
+  that brings just a single term must also share a term with the first sentence, so a
+  sentence that merely uses a stray word of the question ("applied", "considered") is not
+  appended.
 - A code or a year in the question that the documents show a gap for makes it decline
   instead of quoting the nearest thing: a dotted or mixed-case code ("B.Arch", "PhD")
-  that no retrieved passage mentions; an acronym a table keyed by codes does not list; a
-  year when the passages state some other year ("2023-24" against the 2024-25 circular).
+  that no retrieved passage mentions, where the passages enumerate codes (prose that names
+  programmes, or a code-keyed table whose columns the question asks about; an attendance
+  rule that names none applies to every programme); an acronym ("MBA") only where it stands
+  where a row key would, right after "for", "of" or "in" or beside a dotted code; a year
+  when the passages state some other year ("2023-24" against the 2024-25 circular).
   A year-less rule is not refused because the question happens to mention a year, and
   emphasis words and common abbreviations ("PLEASE", "HOD", "CGPA") are not codes.
+- What the user says about themselves ("I am a B.Tech student", "As a PhD scholar", "I joined
+  in 2022", "I am in the 2021-25 batch") is not what is asked. It is not refused for the
+  programme or year it names, and the words of it that no passage contains are not held
+  against the sentence that answers the rest (a programme a table lists still picks its
+  row).
 - A sentence cut by a chunk boundary is marked with an ellipsis.
 
 Measured offline on benchmarks v2 and v3 these changes removed wrong answers to questions
@@ -141,10 +158,11 @@ An answer is returned only if:
    `31 March 2025` = `31.03.2025`, `2024-25` = `2024-2025`, `7` = a passage's "seven days"
    (a bare "one" only before a unit of time), `7:30 PM` = `7.30 pm`, `3 lakh` = `300000`,
    `15-day` = `15 days`, list numbering and markers ignored; a year the cited document's
-   title states counts; a figure the user typed in the question may be repeated, though
-   never cited; a range `A-B` needs both ends together in one passage; structured
-   identifiers such as `REG/2024/117`, a date that can be read two ways, and a date that
-   does not exist must match exactly), and
+   title states counts; a figure the user gave about their own situation ("I have 70
+   percent attendance") may be repeated, though never cited, while a figure they only asked
+   about must be in a cited passage; a hyphenated range `A-B` (or with an en dash) needs
+   both ends together in one passage; structured identifiers such as `REG/2024/117`, a
+   date that can be read two ways, and a date that does not exist must match exactly), and
 4. at least 25 % of its content words appear in the cited passages (a backstop against
    answering a different subject).
 

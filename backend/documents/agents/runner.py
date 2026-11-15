@@ -326,10 +326,16 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
 
 def _model_failed(result) -> bool:
     """Whether a model was given the question and did not answer it: the
-    answerer fell back to quoting (an outage, a rate limit, no key), or its
-    reply was empty, cut off or declined (ANSWERER_FAILED)."""
-    return bool(result.answerer_fell_back) or (
-        result.abstention_reason == Abstention.ANSWERER_FAILED
+    answerer fell back to quoting (an outage, a rate limit, no key), its
+    reply was empty, cut off or declined (ANSWERER_FAILED), or its first draft
+    was rejected and the corrective retry never reached a model (the engine
+    records `retry_fallback_reason`). In that last case the first failure
+    stands and the question is refused whole, because a quote of the WHOLE
+    compound question covers one part at best; the parts can each be quoted."""
+    return (
+        bool(result.answerer_fell_back)
+        or result.abstention_reason == Abstention.ANSWERER_FAILED
+        or bool((getattr(result, "llm", None) or {}).get("retry_fallback_reason"))
     )
 
 

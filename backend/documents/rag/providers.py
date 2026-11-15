@@ -177,10 +177,13 @@ PRESETS = {
         key_env="GROQ_API_KEY",
         display="Groq",
         # Groq's published free tier for this model is 1,000 requests and
-        # 200K tokens a day, and 8K tokens a MINUTE. A grounded prompt is now
-        # about 5-6K tokens and an answer a few hundred, so the token cap
+        # 200K tokens a day, and 8K tokens a MINUTE. A full grounded request
+        # is about 5-6K tokens (a typical question measured 2,000-2,700 prompt
+        # tokens, plus the up to 1,500 the request asks for), so the token cap
         # binds first: around 30 questions a day, and one a minute. That is
-        # why Groq belongs LAST in a chain, as a last resort.
+        # why Groq belongs after the links with better limits, as a last
+        # resort (gemini,groq,openrouter; gemini,openrouter,groq serves a
+        # burst better).
         daily_limit=30,
         # gpt-oss is a reasoning model whose hidden reasoning is billed
         # against max_tokens; at the default effort a short answer can be cut

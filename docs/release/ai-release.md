@@ -10,7 +10,7 @@ were measured on one laptop, on **synthetic** documents ([datasets](../data/data
 | | System engineering quality | AI model quality |
 |---|---|---|
 | Question | Does the machinery behave as designed? | Are the answers right for *this institution's* documents and questions? |
-| Evidence | 1,142 backend tests (2026-10-12); a browser suite through nginx over TLS; two evaluation gates (v1 and v2) that fail CI on any regression; a calibration run on a separate development set | 57 synthetic benchmark questions over 9 synthetic documents, and nothing else |
+| Evidence | Over 2,000 backend tests; a browser suite through nginx over TLS; four evaluation gates (v1, v2, v3 and the Search gate) that fail CI on any regression; a calibration run on a separate development set | Synthetic benchmarks only: v2 (57 questions over 9 documents) and v3 (32 questions over 11 documents), and nothing on the institution's own documents |
 | Status | **Verified locally** (CI itself has never run on GitHub) | **Unknown for real institutional use** |
 
 The engineering guarantees hold whatever the documents are:
@@ -35,8 +35,12 @@ the documents and the questions. That has only been measured on synthetic data.
 - On the synthetic v2 benchmark, the recommended configuration put the right document first
   for **98%** of answerable questions (R@1 0.980) and cited correctly in 87.5% of the
   answers it gave.
-- Nothing leaves the host in the recommended configuration: models run locally, and no
-  hosted provider is called.
+- Nothing leaves the host in the recommended pilot configuration (the default, extractive
+  answerer): models run locally, and no hosted provider is called. The public demonstration
+  site is configured differently - its answerer is a hosted free tier (Gemini, with Groq and
+  OpenRouter behind it), which receives up to about 14,000 characters of the asker's
+  documents per question on terms that allow training on them - so it is for demonstration
+  documents only ([llm-providers.md](../ai/llm-providers.md)).
 
 ## What is not safe to claim
 
@@ -53,7 +57,10 @@ the documents and the questions. That has only been measured on synthetic data.
   image. It has not been measured on a scanned corpus.
 - **Document classification for institutional types.** The only trained classifier
   predicts business-document classes (RVL-CDIP), not institutional ones.
-- **Anything about generative answers.** No hosted model has ever been called.
+- **Anything about generative answers on the institution's documents.** A hosted model
+  (Gemini's free tier) has answered questions on the public demonstration site since
+  2026-10-11, and the v3 benchmark was run through hosted models in development, but no
+  evaluation on institutional documents exists and no figure here is about them.
 
 ## Reranker decision
 
@@ -93,12 +100,14 @@ of 57 on synthetic data.
 ## Hosted answerer activation
 
 A generative answerer is the component most likely to raise coverage: the extractive
-answerer is the measured bottleneck. **It is off by default, and no deployment has called
-it.** In development, the Gemini preset of the OpenAI-compatible answerer was run against
-Google's free tier on 2026-10-11 with a developer's own key; commits f11dd83, 170084d and
-3a34936 record what that found. That was a development check, not an evaluation: no
-benchmark was run through a hosted answerer. All of the following are required before
-turning it on, on staging first.
+answerer is the measured bottleneck. **It is off by default in the pilot configuration, and
+the institution has not called it.** The public demonstration site has had it on since 2026-10
+(Gemini's free tier, with demonstration documents only). In development, the Gemini preset of
+the OpenAI-compatible answerer was run against Google's free tier on 2026-10-11 with a
+developer's own key; commits f11dd83, 170084d and 3a34936 record what that found, and the v3
+benchmark was run through hosted models (`--chat-path --pause 12`) on 2026-11-15. Those were
+development checks on synthetic documents, not an evaluation of the institution's. All of the
+following are required before turning it on for the institution, on staging first.
 
 **Institutional decisions**
 
@@ -113,8 +122,9 @@ turning it on, on staging first.
    - on follow-ups, words from earlier questions.
 
    User identities are never sent.
-2. Free tiers are excluded. The code itself flags the Gemini and OpenRouter free tiers as
-   possibly training on inputs. An unset `RAG_ANSWERER_PROVIDER` with a
+2. Free tiers are excluded for institutional documents. The code itself flags the Gemini
+   and OpenRouter free tiers as possibly training on inputs (the public demonstration site
+   uses them, for demonstration documents only). An unset `RAG_ANSWERER_PROVIDER` with a
    `GEMINI_API_KEY` present selects Gemini.
 3. A monthly spend limit, set at the provider. The application has no spend cap. Its
    only bound is the chat throttle (`THROTTLE_CHAT`, 60 questions per user per hour). A
@@ -168,10 +178,11 @@ $DC run --rm --no-deps -e RAG_ANSWERER=… -e … backend sh -c "
 
 Copy the exact flags from the CI job (`ai-regression` in `.github/workflows/ci.yml`). This
 costs 57 provider calls, more if questions are planned. **Then check
-`configuration.degraded` and `metrics.system.answerer_fallbacks` on the stored run.** If
-every case fell back to the extractive answerer, the run scores like the extractive
-baseline and passes. The command does not print the fallback count. The decision to
-enable needs:
+`configuration.degraded` and `metrics.system.answerer_fallbacks` on the stored run.** A run
+in which the answerer fell back is reported as DOWN on `system.answerer_fallbacks` (and
+`system.degraded_reranks`) and fails `--fail-on-regression` against a baseline with 0
+fallbacks, but the quality scores of a run that fell back are the extractive baseline's, so
+read the counter, not only the pass. The decision to enable needs:
 
 - zero fallbacks;
 - coverage higher than extractive;
