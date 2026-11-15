@@ -188,10 +188,19 @@ def parse_number(cell: str):
 
 
 def _forms(number: Decimal) -> set:
-    """How a computed figure may be written: whole, or to 1 or 2 places."""
+    """How a computed figure may be written: whole, or to 1 or 2 places.
+
+    A number too large to round in the decimal context (27 digits or more:
+    a serial or an account number in a numeric column) has no such forms and is
+    skipped. It raised InvalidOperation, and a check that raises withholds every
+    answer that cites the table.
+    """
     forms = set()
     for places in (0, 1, 2):
-        rounded = number.quantize(Decimal(1).scaleb(-places))
+        try:
+            rounded = number.quantize(Decimal(1).scaleb(-places))
+        except InvalidOperation:
+            continue
         text = format(rounded, "f")
         if "." in text:
             text = text.rstrip("0").rstrip(".")

@@ -1352,7 +1352,9 @@ class RepairCitationsTests(SimpleTestCase):
 
         correction = grounding.correction_for(report)
 
-        self.assertIn("2026-03-31", correction)
+        # As a person writes the date, not as the check compares it.
+        self.assertIn("31 March 2026", correction)
+        self.assertNotIn("2026-03-31", correction)
         self.assertIn("rejected by an automated check", correction)
 
 

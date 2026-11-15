@@ -8,12 +8,16 @@ rejects a correct answer for how it spells a fact:
     passage "the 15th day of March, 2025"   answer "15 March 2025"
     passage "Fee Structure 2024-25" answer "the 2024-2025 fee"
     passage "within seven days"     answer "within 7 days"
-    answer  "[1, 2]"                (one citation, written as a group)
+    passage "7.30 pm"               answer "7:30 PM" (or "19:30")
+    passage "Rs 3,00,000"           answer "Rs 3 lakh"
+    passage "within 15 days"        answer "a 15-day window"
+    answer  "[1, 2]", "[1-2]", "[Source 1]"  (citations, written another way)
 
 Each of those threw away a whole, correct, cited answer and showed the reader
 "I couldn't find enough information". The helpers here recognise those
 spellings and reduce them to one form on both sides, and nothing wider. Every
-widening is also a way to accept a WRONG figure, so each one is narrow:
+widening is also a way to accept a WRONG figure, so each one is narrow, and an
+EQUIVALENCE of two spellings of one fact - never "any figure that appears":
 
 - Only dates that can be read one way. A month name or an ISO date always can.
   A numeric date can when one of its numbers is over 12 (31.03.2025) or both
@@ -25,9 +29,31 @@ widening is also a way to accept a WRONG figure, so each one is narrow:
 - A number word counts on the PASSAGE side only, and only when it counts
   something: "seven days" supports 7, "No one may attend" and "the second
   semester" support nothing. Without that, any passage containing "one" would
-  have supported any answer that said 1.
+  have supported any answer that said 1. "One" is an idiom far more often than
+  a quantity ("at one time", "one of", "one another", "one member"), so the bare
+  word stands for 1 only before a unit of time ("within one week"); a
+  compound with a scale word ("one hundred and eighty", "two thousand", "one
+  lakh") is unambiguously a quantity, and so is a number word after "up to",
+  "at least" or "no more than" ("may borrow up to six.").
 - A range of years supports each of its years only when they are consecutive
   ("2024-25" is one academic year). "Rs 1000-2000" does not support "Rs 2000".
+- A range "65-75" the answer states is supported by a passage that states the
+  same range - "65-75", "65 - 75", "65 to 75", "between 65 and 75" - with both
+  ends together in ONE passage within a short window. Its two ends appearing
+  anywhere in the cited passages ("fail mark 40", "attendance 75") do not make
+  "40-75" a fact.
+- A time is the same time however it is written ("7:30 PM", "7.30 pm") and a
+  24-hour time that cannot be read two ways ("17:00", "09:00") is the 12-hour
+  time. "5:00" alone could be either and is not converted.
+- "3 lakh" is 300000 and "1 crore" 10000000, exactly, in both directions.
+- Invisible format characters (soft hyphens, zero-width spaces) are not part of
+  a figure, and a comma between digits is a thousands separator only when the
+  groups are well formed (85,000 or 1,00,000); "7,5" and "1,2,3" are separate
+  numbers.
+- A citation is "[1]", "[1, 2]", "[1-2]", "[ 1 ]", "[Source 1]", "[1 and 2]"
+  or the same in full-width brackets, and "(1)" is not one. A group is split
+  only when every number in it is a passage that exists: "[0, 1]" is an
+  interval.
 - Only ASCII is matched. Case-insensitive matching otherwise treats "\N{LATIN SMALL LETTER LONG S}"
   as an "s", and a month name that is not in the table must never be an error:
   an answer or a document that spells one oddly cannot be allowed to make the
@@ -36,6 +62,8 @@ widening is also a way to accept a WRONG figure, so each one is narrow:
 
 import datetime
 import re
+import unicodedata
+from decimal import Decimal
 
 MONTH_NUMBER = {
     "jan": 1,
@@ -114,8 +142,25 @@ _SHORT_RANGE = re.compile(r"(\d{4})-(\d{2})", re.ASCII)
 _LONG_RANGE = re.compile(r"(\d{4})-(\d{4})", re.ASCII)
 _NUMBER_RANGE = re.compile(r"(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)", re.ASCII)
 
-# "[1, 2]" and "[1; 2]": a model asked to cite as [1] often groups them.
-GROUPED_MARKER = re.compile(r"\[(\d{1,3}(?:\s*[,;]\s*\d{1,3})+)\]", re.ASCII)
+# --- citations, in the forms a model writes them ----------------------------
+
+_OPEN = r"[\[\N{FULLWIDTH LEFT SQUARE BRACKET}\N{LEFT BLACK LENTICULAR BRACKET}]"
+_CLOSE = r"[\]\N{FULLWIDTH RIGHT SQUARE BRACKET}\N{RIGHT BLACK LENTICULAR BRACKET}]"
+_REF = r"(?:(?:sources?|passages?|refs?\.?|references?)\s*)?\d{1,3}"
+_REF_SEPARATOR = r"\s*(?:[,;&]|\band\b|\bto\b|[-\N{EN DASH}\N{EM DASH}])\s*"
+# "[1]", "[ 1 ]", "[Source 1]", "[1, 2]", "[1; 2]", "[1 and 2]", "[1-2]",
+# "[Source 1, Source 2]" and the same in full-width brackets. "(1)" is not
+# here: a number in parentheses is far too often a number.
+CITATION_GROUP = re.compile(
+    _OPEN + r"\s*\^?\s*(" + _REF + r"(?:" + _REF_SEPARATOR + _REF + r")*)\s*" + _CLOSE,
+    _FLAGS,
+)
+# Kept for what imported it under its old name.
+GROUPED_MARKER = CITATION_GROUP
+
+# A range of markers is expanded; one that spans more than this is not a
+# citation, it is a range of something else.
+_MAX_MARKER_SPAN = 50
 
 _UNITS = {
     "one": 1,
@@ -148,6 +193,15 @@ _TENS = {
     "eighty": 80,
     "ninety": 90,
 }
+_SCALES = {
+    "thousand": 1000,
+    "lakh": 100_000,
+    "lakhs": 100_000,
+    "lac": 100_000,
+    "lacs": 100_000,
+    "crore": 10_000_000,
+    "crores": 10_000_000,
+}
 # What a number can count in an institution's documents. A number word counts
 # only when one of these follows it (with at most one qualifier between:
 # "ten working days"), because "one" and "second" turn up in nearly every
@@ -155,35 +209,201 @@ _TENS = {
 _COUNTED = (
     "day|days|week|weeks|month|months|year|years|hour|hours|minute|minutes"
     "|semester|semesters|term|terms|credit|credits|mark|marks|book|books|copy"
-    "|copies|attempt|attempts|time|times|percent|rupee|rupees|lakh|crore"
+    "|copies|attempt|attempts|time|times|percent|per\\s+cent|rupee|rupees"
     "|student|students|member|members|course|courses|subject|subjects|paper"
     "|papers|question|questions|page|pages|word|words|character|characters"
     "|installment|installments|instalment|instalments|session|sessions|class"
     "|classes|lecture|lectures|period|periods|batch|batches|seat|seats|room"
-    "|rooms|copy|copies"
+    "|rooms"
+)
+# The bare word "one" is a quantity before these, and an idiom before nearly
+# anything else ("at one time", "one member", "one of").
+_ONE_COUNTS = frozenset({"day", "week", "month", "year", "hour", "minute"})
+
+_ATOM = (
+    r"(?:(?:"
+    + "|".join(_TENS)
+    + r")(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|"
+    + "|".join(sorted(_UNITS, key=len, reverse=True))
+    + r")"
+)
+_BELOW_THOUSAND = (
+    r"(?:" + _ATOM + r"\s+hundred(?:\s+(?:and\s+)?" + _ATOM + r")?|" + _ATOM + r")"
+)
+_PHRASE = (
+    r"(?:"
+    + _BELOW_THOUSAND
+    + r"\s+(?:"
+    + "|".join(sorted(_SCALES, key=len, reverse=True))
+    + r")(?:\s+(?:and\s+)?"
+    + _BELOW_THOUSAND
+    + r")?|"
+    + _BELOW_THOUSAND
+    + r")"
+)
+# A number word after one of these is a quantity whatever follows it: "may borrow
+# up to six." says how many, and nothing is left to count it ("up to six" is the
+# clause's last words). Never "one": "at least one of the following" is an idiom.
+_QUANTIFIER = (
+    r"(?:up\s+to|upto|at\s+least|at\s+most|no\s+more\s+than|not\s+more\s+than"
+    r"|more\s+than|fewer\s+than|less\s+than|maximum\s+of|minimum\s+of|exactly)"
 )
 _NUMBER_WORD = re.compile(
-    r"\b(?:(" + "|".join(_TENS) + r")(?:[- ](one|two|three|four|five|six|seven|eight"
-    r"|nine))?|(" + "|".join(sorted(_UNITS, key=len, reverse=True)) + r"))"
-    r"\s+(?:(?:calendar|working|academic|full|additional|consecutive)\s+)?"
-    r"(?:" + _COUNTED + r")\b",
+    r"\b("
+    + _QUANTIFIER
+    + r"\s+)?("
+    + _PHRASE
+    + r")\b(\s+(?:(?:calendar|working|academic|full|additional|consecutive)\s+)?("
+    + _COUNTED
+    + r")\b)?",
     _FLAGS,
 )
 
+# "3 lakh", "2.5 lakhs", "1 crore": amounts the way an Indian document writes
+# them. The figure is bounded so the arithmetic below cannot be made to work hard.
+_AMOUNT = re.compile(
+    r"(?<![\d.])(\d{1,12}(?:\.\d{1,6})?)[ \t]{0,3}-?[ \t]{0,3}(lakhs?|lacs?|crores?)\b",
+    _FLAGS,
+)
 
-def normalize_markers(text: str) -> str:
-    """ "[1, 2]" as "[1][2]", which is how a citation is recognised."""
-    return GROUPED_MARKER.sub(
-        lambda match: "".join(
-            f"[{n}]" for n in re.findall(r"\d{1,3}", match.group(1), re.ASCII)
-        ),
-        text,
-    )
+# Clock times. With a meridiem ("7:30 PM", "7.30 pm", "7 p.m.") the hour and
+# minute are unambiguous. Without one, only a 24-hour time that cannot be read
+# as 12-hour: an hour over 12, midnight's "00", or a leading zero ("09:00").
+_CLOCK_MERIDIEM = re.compile(
+    r"(?<![\w.:])(\d{1,2})(?:[:.](\d{2}))?[ \t]*([ap])\.?m\b\.?", _FLAGS
+)
+_CLOCK_24 = re.compile(r"(?<![\w.:])(\d{1,2}):(\d{2})(?![\w:]|\.\d)", re.ASCII)
+
+# Two figures are a range when they stand this close, with a range word or a
+# dash between them: "between 65 and 75", "65 to 75", "65-75", "65 - 75".
+RANGE_WINDOW = 40
+_FIGURE = re.compile(r"\d+(?:\.\d+)?(?::\d{2})?", re.ASCII)
+_RANGE_WORDS = frozenset({"to", "till", "until", "through", "thru", "upto"})
+_NOT_A_RANGE_GAP = re.compile(r"[;|\n]|(?<![Rr][Ss])[.!?](?:\s|$)")
+_BETWEEN = re.compile(r"between\W+(?:\w+\W+){0,2}$", re.I | re.ASCII)
+_DASHES = "-\N{EN DASH}\N{EM DASH}"
+_DASH_BETWEEN = r"[ \t]*[\-\N{EN DASH}\N{EM DASH}][ \t]*"
+_DASHED_NUMBERS = re.compile(
+    r"(?<![\d.])\d+(?:\.\d+)?(?:" + _DASH_BETWEEN + r"\d+(?:\.\d+)?)+", re.ASCII
+)
+_DASH_SPLIT = re.compile(_DASH_BETWEEN, re.ASCII)
+
+_DIGIT_COMMAS = re.compile(r"(?<!\d)\d+(?:,\d+)+", re.ASCII)
+# 85,000 and 1,234,567; and the Indian grouping 1,00,000 and 1,47,500.
+_WELL_FORMED = re.compile(r"\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}", re.ASCII)
+
+
+def strip_format(text: str) -> str:
+    """Text without its invisible format characters (Unicode category Cf).
+
+    A soft hyphen or a zero-width space inside a figure ("7<ZWSP>5") splits it
+    into two figures that a passage may state separately, and shows the reader
+    "75". Only for READING figures: what is shown to a reader is never altered
+    (a zero-width joiner is part of how Indic scripts are spelled).
+    """
+    if text.isascii():
+        return text
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
+
+def digit_commas(text: str) -> str:
+    """A comma between digits, read as a thousands separator only when it is one.
+
+    "85,000" and "1,00,000" are figures. "7,5" and "1,2,3" are a decimal comma
+    and a list, and joined they were "75" and "123": numbers that no one wrote.
+    """
+
+    def read(match):
+        run = match.group(0)
+        if _WELL_FORMED.fullmatch(run):
+            return run.replace(",", "")
+        return run.replace(",", " ")
+
+    return _DIGIT_COMMAS.sub(read, text)
+
+
+def clean(text: str) -> str:
+    """Text as figures are read from it: format characters gone, commas read."""
+    return digit_commas(strip_format(text))
 
 
 def prepare(text: str) -> str:
     """Text with year ranges written one way, before figures are read from it."""
-    return _YEAR_RANGE_DASH.sub(r"\1-\2", text)
+    return _YEAR_RANGE_DASH.sub(r"\1-\2", clean(text))
+
+
+def amounts(text: str) -> str:
+    """Text with "3 lakh" and "1 crore" written as the number they are.
+
+    Exact: "2.5 lakh" is 250000, "0.85 lakh" is 85000. Both sides are read this
+    way, so "Rs 3 lakh" and "Rs 3,00,000" and "300000" are one amount.
+    """
+
+    def number(match):
+        scale = 10_000_000 if match.group(2).lower().startswith("c") else 100_000
+        return format((Decimal(match.group(1)) * scale).normalize(), "f")
+
+    return _AMOUNT.sub(number, text)
+
+
+def range_dashes(text: str) -> str:
+    """A dash, spaced or not, hyphen or en or em dash, between two numbers as
+    one plain hyphen: how an answer's range "65 - 75" or "65\N{EN DASH}75"
+    becomes one figure "65-75" that has to be a range in a passage.
+
+    Only a pair. Three numbers in a chain ("05 - 06 - 2025", "1-2-3") are a
+    date or a part number, not a range, and stay as they are."""
+
+    def pair(match):
+        parts = _DASH_SPLIT.split(match.group(0))
+        return "-".join(parts) if len(parts) == 2 else match.group(0)
+
+    return _DASHED_NUMBERS.sub(pair, text)
+
+
+def _marker_numbers(inner: str):
+    """The markers a bracket names, a range expanded; None for one that is not."""
+    tokens = re.findall(r"\d{1,3}|\bto\b|[" + _DASHES + r"]", inner, _FLAGS)
+    numbers = []
+    index = 0
+    while index < len(tokens):
+        if not tokens[index].isdigit():
+            index += 1
+        elif index + 2 < len(tokens) and tokens[index + 2].isdigit():
+            first, last = int(tokens[index]), int(tokens[index + 2])
+            if last < first or last - first >= _MAX_MARKER_SPAN:
+                return None
+            numbers.extend(range(first, last + 1))
+            index += 3
+        else:
+            numbers.append(int(tokens[index]))
+            index += 1
+    return numbers or None
+
+
+def normalize_markers(text: str, available=None) -> str:
+    """Every citation written as "[1][2]", which is how one is recognised.
+
+    "[1, 2]", "[1-2]", "[1 and 2]", "[Source 1, Source 2]", "[ 1 ]" and the
+    full-width forms all name passages. With `available` (the markers the
+    context has), a group is split only when EVERY number in it is one of them:
+    "[0, 1]" and "[2, 12]" are an interval and a document's own reference, and
+    reading them as citations withheld correct answers. A single number in a
+    longer form ("[ 7 ]", "[Source 7]") is still a citation, of a passage that
+    does not exist: the cheapest hallucination to catch stays caught.
+    """
+
+    def split(match):
+        numbers = _marker_numbers(match.group(1))
+        if numbers is None:
+            return match.group(0)
+        if len(numbers) == 1:
+            return f"[{numbers[0]}]"
+        if available is not None and not all(n in available for n in numbers):
+            return match.group(0)
+        return "".join(f"[{n}]" for n in numbers)
+
+    return CITATION_GROUP.sub(split, text)
 
 
 def _canonical(year: int, month, day: int):
@@ -319,6 +539,78 @@ def extract_dates(text: str, *, inline: bool = False) -> tuple[str, set]:
     return text, found
 
 
+def extract_times(text: str) -> tuple[str, list]:
+    """(text with each clock time taken out, [(the time, the figure as written)]).
+
+    The time is "time:19:30" for "7:30 PM", "7.30 pm" and "19:30" alike. The
+    figure as written ("7:30") is what an answer may fall back on when the
+    passage gives the hour without its meridiem ("from 4 to 7 pm"). A time that
+    could be 12-hour or 24-hour and carries no meridiem ("5:00") is left in the
+    text as it is.
+    """
+    found = []
+
+    def meridiem(match):
+        hour, minute = int(match.group(1)), int(match.group(2) or 0)
+        if not (1 <= hour <= 12 and minute <= 59):
+            return match.group(0)
+        afternoon = match.group(3).lower() == "p"
+        hour24 = hour % 12 + (12 if afternoon else 0)
+        written = re.match(r"\d{1,2}(?:[:.]\d{2})?", match.group(0)).group(0)
+        found.append((f"time:{hour24:02d}:{minute:02d}", written))
+        return " "
+
+    def twenty_four(match):
+        digits, hour, minute = match.group(1), int(match.group(1)), int(match.group(2))
+        if hour > 23 or minute > 59:
+            return match.group(0)
+        if not (hour >= 13 or hour == 0 or (len(digits) == 2 and digits[0] == "0")):
+            return match.group(0)
+        found.append((f"time:{hour:02d}:{minute:02d}", f"{digits}:{match.group(2)}"))
+        return " "
+
+    text = _CLOCK_MERIDIEM.sub(meridiem, text)
+    text = _CLOCK_24.sub(twenty_four, text)
+    return text, found
+
+
+def _range_end(figure: str) -> str:
+    """A range's end as it is compared: "9:00" is "9"."""
+    return figure[: -len(":00")] if figure.endswith(":00") else figure
+
+
+def range_pairs(text: str) -> set:
+    """The ranges a text states, each as "range:65-75".
+
+    Two figures are a range when they stand within RANGE_WINDOW characters of
+    each other with nothing but a few words between them and a dash or a range
+    word ("to", "until") among them, or "and" after a "between": "between 65
+    and 75 percent", "from Rs 1500 to Rs 2000", "65 - 75". "Attendance 65 and
+    a fee of 75" is two figures, and so is a table row.
+    """
+    pairs = set()
+    figures = list(_FIGURE.finditer(text))
+    for first, second in zip(figures, figures[1:], strict=False):
+        gap = text[first.end() : second.start()]
+        if len(gap) > RANGE_WINDOW or _NOT_A_RANGE_GAP.search(gap):
+            continue
+        words = re.findall(r"[a-z]+", gap.lower())
+        if sum(1 for word in words if word not in _RANGE_WORDS and word != "and") > 3:
+            continue
+        if any(char in gap for char in _DASHES) or _RANGE_WORDS.intersection(words):
+            joined = True
+        elif "and" in words:
+            before = text[max(0, first.start() - 30) : first.start()]
+            joined = bool(_BETWEEN.search(before))
+        else:
+            joined = False
+        if joined:
+            pairs.add(
+                f"range:{_range_end(first.group(0))}-{_range_end(second.group(0))}"
+            )
+    return pairs
+
+
 _SHORT_RANGE_IN_TEXT = re.compile(r"\b(\d{4})-(\d{2})\b", re.ASCII)
 
 
@@ -329,7 +621,7 @@ def prose_form(text: str) -> str:
     "2024-25" against "2024-2025", counted as unsupported words even when the
     figure check had accepted them.
     """
-    text, _ = extract_dates(prepare(text), inline=True)
+    text, _ = extract_dates(amounts(prepare(text)), inline=True)
     return _SHORT_RANGE_IN_TEXT.sub(lambda m: canonical_range(m.group(0)), text)
 
 
@@ -363,25 +655,120 @@ def range_parts(fact: str):
     return match.groups() if match else None
 
 
+def _phrase_value(words) -> int:
+    """The number "one hundred and eighty" or "two thousand five hundred" is."""
+    total = current = 0
+    for word in words:
+        if word in _UNITS:
+            current += _UNITS[word]
+        elif word in _TENS:
+            current += _TENS[word]
+        elif word == "hundred":
+            current = max(current, 1) * 100
+        elif word in _SCALES:
+            total += max(current, 1) * _SCALES[word]
+            current = 0
+    return total + current
+
+
 def number_words(text: str) -> set:
     """The numerals a passage's number words stand for, when they count something.
 
-    "seven days" and "twenty-five rupees" as "7" and "25". For the passage side
-    only, and never for "one" or an ordinal on its own (see the module
-    docstring): "No one may attend", "the second semester".
+    "seven days" and "twenty-five rupees" as "7" and "25"; "one hundred and
+    eighty", "two thousand" and "two lakh" as 180, 2000 and 200000, with or
+    without a noun after them, because a scale word makes a quantity. For the
+    passage side only, and never for "one" or an ordinal on its own (see the
+    module docstring): "No one may attend", "at one time", "the second
+    semester". The bare word "one" counts before a unit of time and nowhere else.
+    After "up to", "at least", "no more than" and the like a number word is a
+    quantity with nothing after it ("may borrow up to six.").
     """
     numerals = set()
     for match in _NUMBER_WORD.finditer(text):
-        tens, unit, small = match.groups()
-        if tens:
-            value = _TENS.get(tens.lower())
-            if value is None:
-                continue
-            if unit:
-                value += _UNITS.get(unit.lower(), 0)
+        words = re.findall(r"[a-z]+", match.group(2).lower())
+        noun = re.sub(r"\s+", " ", (match.group(4) or "").lower())
+        scaled = any(word == "hundred" or word in _SCALES for word in words)
+        if scaled:
+            counts = True
+        elif words == ["one"]:
+            counts = noun in _ONE_COUNTS
         else:
-            value = _UNITS.get(small.lower())
-            if value is None:
-                continue
-        numerals.add(str(value))
+            counts = bool(noun) or bool(match.group(1))
+        if counts:
+            numerals.add(str(_phrase_value(words)))
     return numerals
+
+
+# --- what a reader and a model are told --------------------------------------
+
+# The month as a name: the longest spelling the table has for each number.
+_MONTH_NAME = {
+    number: name.capitalize()
+    for name, number in sorted(MONTH_NUMBER.items(), key=lambda item: len(item[0]))
+}
+_ORDINAL = r"(?:st|nd|rd|th)?"
+_SPELLED_RANGE = re.compile(
+    r"(\d{1,2})"
+    + _ORDINAL
+    + r"(to|until|till|through)(\d{1,2})"
+    + _ORDINAL
+    + r"(?:of)?("
+    + _MONTH
+    + r")(\d{4})"
+)
+_SPELLED_DAY_MONTH_YEAR = re.compile(
+    r"(\d{1,2})" + _ORDINAL + r"(?:day)?(?:of)?(" + _MONTH + r")(\d{4})"
+)
+_SPELLED_MONTH_DAY_YEAR = re.compile(
+    r"(" + _MONTH + r")(\d{1,2})" + _ORDINAL + r"(\d{4})"
+)
+_SPELLED_DAY_MONTH = re.compile(
+    r"(\d{1,2})" + _ORDINAL + r"(?:day)?(?:of)?(" + _MONTH + r")"
+)
+
+
+def _month_name(word: str) -> str:
+    return _MONTH_NAME[MONTH_NUMBER[word]]
+
+
+def _readable_date(body: str) -> str:
+    """A date token as a person writes the date."""
+    if body.startswith("?"):
+        spelled = body[1:]
+        shown = None
+        if match := _SPELLED_RANGE.fullmatch(spelled):
+            first, word, last, month, year = match.groups()
+            shown = f"{int(first)} {word} {int(last)} {_month_name(month)} {year}"
+        elif match := _SPELLED_DAY_MONTH_YEAR.fullmatch(spelled):
+            day, month, year = match.groups()
+            shown = f"{int(day)} {_month_name(month)} {year}"
+        elif match := _SPELLED_MONTH_DAY_YEAR.fullmatch(spelled):
+            month, day, year = match.groups()
+            shown = f"{int(day)} {_month_name(month)} {year}"
+        elif match := _SPELLED_DAY_MONTH.fullmatch(spelled):
+            day, month = match.groups()
+            shown = f"{int(day)} {_month_name(month)}"
+        if shown is None:
+            shown = re.sub(r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", spelled)
+        return f"{shown} (not a real date)"
+    if match := re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", body):
+        year, month, day = match.groups()
+        return f"{int(day)} {_MONTH_NAME[int(month)]} {year}"
+    if match := re.fullmatch(r"--(\d{2})-(\d{2})", body):
+        month, day = match.groups()
+        return f"{int(day)} {_MONTH_NAME[int(month)]}"
+    return body
+
+
+def readable(fact: str) -> str:
+    """A fact as a person reads it. The tokens grounding compares ("date:--08-15",
+    "date:?31april2025", "time:19:30|7:30") are internal: shown to a reader, or
+    to a model that is asked to correct itself, they say nothing."""
+    try:
+        if fact.startswith("date:"):
+            return _readable_date(fact[len("date:") :])
+        if fact.startswith("time:"):
+            return fact.partition("|")[2] or fact[len("time:") :]
+    except (KeyError, ValueError):  # a shape nobody anticipated: say it as it is
+        return fact
+    return fact
