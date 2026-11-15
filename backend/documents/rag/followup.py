@@ -228,10 +228,20 @@ def looks_dependent(question: str) -> tuple:
     # Two content words before the pronoun are taken to include its
     # antecedent ("students renew THEIR"); one is usually just a verb or an
     # adverb ("Can I get IT renewed?", "How long is IT valid?").
+    # The tail of an expletive "it" ("is it mandatory TO") is skipped, and a
+    # later "it" is judged on what comes after that tail alone: "Is it possible
+    # to extend it?" has one content term ("extend") before its second "it",
+    # not two - the adjective belongs to the expletive.
+    after_expletive = 0
     for match in PRONOUN.finditer(stripped):
-        if match.group().lower() == "it" and EXPLETIVE_IT.match(stripped, match.end()):
+        if match.start() < after_expletive:
             continue
-        if len(_content_terms(stripped[: match.start()])) < 2:
+        if match.group().lower() == "it":
+            tail = EXPLETIVE_IT.match(stripped, match.end())
+            if tail:
+                after_expletive = tail.end()
+                continue
+        if len(_content_terms(stripped[after_expletive : match.start()])) < 2:
             return True, "refers to something said earlier"
 
     terms = _content_terms(stripped)

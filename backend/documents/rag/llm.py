@@ -64,19 +64,30 @@ _DECLINE = re.compile(
 )
 _CITATION = re.compile(r"\[\d{1,3}\]")
 _HAS_FIGURE = re.compile(r"\d")
+_DIGIT_RUN = re.compile(r"\d+")
 
 
-def declines_to_answer(text: str) -> bool:
+def declines_to_answer(text: str, question: str = "") -> bool:
     """Whether a reply refuses in its own words rather than answering.
 
     Only a reply with no citation and no figure qualifies: it says it found
     nothing and offers nothing a reader could act on. One that cites a
     passage or states a number is an answer - possibly a wrong one - and
     still goes through grounding, which is how a wrong answer is caught.
+
+    A figure the QUESTION typed does not count against a refusal: "I couldn't
+    find the 2023-24 fee in these documents" repeats the user's own year, and
+    offers nothing new. Only a whole run of digits that is also in the question
+    is set aside, so "2024" is still a new figure beside a question for "2023".
     """
     text = (text or "").replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
     text = text.replace("\N{LEFT SINGLE QUOTATION MARK}", "'")
-    if not text.strip() or _CITATION.search(text) or _HAS_FIGURE.search(text):
+    if not text.strip() or _CITATION.search(text):
+        return False
+    typed = set(_DIGIT_RUN.findall(question or ""))
+    if typed:
+        text = _DIGIT_RUN.sub(lambda m: " " if m.group() in typed else m.group(), text)
+    if _HAS_FIGURE.search(text):
         return False
     return bool(_DECLINE.search(text))
 
@@ -222,6 +233,8 @@ class _Candidate:
     # chunk that stops mid-sentence: both are cut by a chunk boundary.
     leading: bool
     trailing: bool
+    # A table row (it is quoted with its columns), as opposed to a sentence.
+    row: bool = False
 
     @property
     def order(self):
@@ -261,6 +274,10 @@ class ExtractiveAnswerer:
     # How many sentences an answer may quote. More than this stops being an
     # answer and becomes a search result page.
     MAX_SENTENCES = 3
+
+    # A sentence that covers this share of the question's terms answers it: a
+    # second sentence that adds a single term is then padding.
+    MOSTLY_ANSWERED = 0.75
 
     # A "how much" or "when" question is answered by a sentence with a figure
     # or a date in it. Added to the coverage of a sentence that has one, so it
@@ -318,7 +335,7 @@ class ExtractiveAnswerer:
                 " ".join(getattr(passage, "table_header", ()) or ())
             )
             sentences = self._sentences(passage.text)
-            fragment_start = passage.text.lstrip()[:1].islower()
+            fragment_start = quoting.begins_mid_text(passage.text)
 
             for position, sentence in enumerate(sentences):
                 own_terms = quoting.quote_terms(sentence)
@@ -392,6 +409,7 @@ class ExtractiveAnswerer:
                     leading=position == 0 and fragment_start,
                     trailing=position == len(sentences) - 1
                     and quoting.ends_cut(sentence),
+                    row=looks_like_a_row and not is_header,
                 )
                 # A sentence that matches enough terms but not enough of the
                 # WHOLE question may still answer one part of it (below).
@@ -516,6 +534,14 @@ class ExtractiveAnswerer:
         #
         # A sentence that covers nothing new is not added, which keeps a
         # single-topic answer from being padded with the same clause twice.
+        #
+        # A good-match sentence that adds only ONE term must also share a term
+        # with the best one, or it is just another sentence that happens to use
+        # a word of the question ("applied", "considered") - and a table row
+        # is never set beside a prose answer on a stray word. The words of the
+        # DOCUMENT's title do not count for either: every sentence of "Staff
+        # Attendance and Leave Rules" shares "staff" and "leave", which shows
+        # none of them answers another part of the question.
         if not first.demoted:
             covered = set().union(*(candidate.matched for candidate in chosen))
             good = [candidate for candidate in pool if not candidate.demoted]
@@ -531,15 +557,45 @@ class ExtractiveAnswerer:
             # July" for "the last day to submit applications for aid") is not
             # a second part of it.
             form_terms = quoting.FORM_TERMS if date_question else frozenset()
+            first_matched = first.matched
+            # The best sentence already addresses most of what was asked: one
+            # more term is a leftover, not another part of the question.
+            wanted = asked - form_terms
+            mostly_answered = bool(wanted) and (
+                len(first_matched & wanted) / len(wanted) >= self.MOSTLY_ANSWERED
+            )
+
+            def topic_terms(candidate):
+                return quoting.quote_terms(
+                    getattr(candidate.passage, "title_text", "") or ""
+                )
+
             while len(chosen) < self.MAX_SENTENCES:
                 uncovered = asked - covered - form_terms
                 if not uncovered:
                     break
                 options = []
                 for candidate in good:
-                    gained = candidate.matched & uncovered
-                    if gained and key_of(candidate) not in seen:
-                        options.append((-len(gained), candidate.order, candidate))
+                    if key_of(candidate) in seen:
+                        continue
+                    topic = topic_terms(candidate) | topic_terms(first)
+                    gained = (candidate.matched & uncovered) - topic
+                    shared = candidate.matched & first_matched
+                    if not gained:
+                        continue
+                    # Two table rows each name their own entity ("B.Tech CSE",
+                    # "B.Tech ECE"): the second row of a question about both is
+                    # not a leftover.
+                    two_rows = candidate.row and first.row
+                    if (
+                        len(gained) < self.MIN_MATCHED_TERMS
+                        and not two_rows
+                        and (not shared or mostly_answered)
+                    ):
+                        continue
+                    if candidate.row and not first.row and not shared:
+                        continue
+                    options.append((-len(gained), candidate.order, candidate))
                 if not options:
                     for candidate in partial_ok:
                         gained = candidate.matched & uncovered
@@ -547,6 +603,11 @@ class ExtractiveAnswerer:
                             len(gained) >= self.MIN_MATCHED_TERMS
                             and len(gained) / len(uncovered) >= self.MIN_COVERAGE
                             and key_of(candidate) not in seen
+                            and not (
+                                candidate.row
+                                and not first.row
+                                and not candidate.matched & first_matched
+                            )
                         ):
                             options.append((-len(gained), candidate.order, candidate))
                 if not options:

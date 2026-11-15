@@ -24,14 +24,17 @@ the reader like an answer:
 
 Nothing here reads the passages semantically. Each helper is a narrow,
 checkable rule, and the ones that REFUSE (names_what_the_passages_lack) refuse
-only on something a reader can see for themselves: a code or a year in the
-question that appears in no retrieved passage.
+only on something a reader can see for themselves: a code the passages' own
+table is keyed by, or a year, that the passages do not have. A refusal is the
+"not found" a reader sees, so each rule is as narrow as it can be made: a
+question that merely mentions a year, a room number or a capitalised word is
+still answered.
 """
 
 import re
 
 from . import facts as fact_forms
-from .reranking import _terms, stem
+from .reranking import STOPWORDS, _terms, stem
 
 # A line that ends one of these is a sentence; one that does not and is short
 # is a title, a clause heading or a list label.
@@ -77,15 +80,42 @@ NOT_A_CODE = frozenset({"eg", "ie", "vs", "etc", "dr", "mr", "mrs", "ms", "no", 
 MIXED_CASE = re.compile(r"\b[A-Za-z]*[a-z][A-Z][A-Za-z]*\b")
 ACRONYM = re.compile(r"\b[A-Z]{3,}\b")
 
-# A figure a reader can check: a year, a year range, a number of three or more
-# digits. "2" and "75" turn up in most passages and prove nothing.
-FIGURE = re.compile(r"\d{4}-\d{2,4}|\d[\d,]*")
+# What a capitalised word in a question is NOT evidence of. A question can
+# shout ("PLEASE", "ASAP", "SUNDAYS"), name a product ("WiFi") or use an
+# abbreviation the documents spell out ("HOD" for "head of department", "INR"
+# for "rupees"): none of these is a row the passages should have. These are
+# ordinary English and common abbreviations, not words taken from any one
+# corpus; the question's own words, and the words the retrieved passages use in
+# lower case, are checked as well (_is_ordinary_word).
+_ORDINARY_CAPS = frozenset(
+    """asap urgent urgently only really very just all any now today immediately
+    always never must important kindly sorry thanks thank again also exactly
+    quickly clearly hurry help needed required mandatory compulsory free fast
+    sure maybe yes not none nothing everything everyone anyone someone
+    monday tuesday wednesday thursday friday saturday sunday weekday weekdays
+    weekend weekends mondays tuesdays wednesdays thursdays fridays saturdays
+    sundays january february march april june july august september october
+    november december
+    pdf doc docx xls xlsx ppt pptx jpg jpeg png gif zip csv txt url faq otp pin
+    atm upi sms gps cctv fyi tbd rsvp eta
+    wifi youtube linkedin whatsapp powerpoint facebook instagram github google
+    inr usd eur gst vat
+    hod cgpa sgpa gpa ncc nss ews obc nptel swayam mooc ugc aicte""".split()
+)
 
 # One- and two-letter words a chunk can start with. Anything else short at the
 # start of a lowercase fragment is the end of a word the chunk boundary cut.
 _SHORT_WORDS = frozenset(
     "a an as at be by do go he if in is it me my no of oh on or so to up us we".split()
 )
+
+
+def _is_real_start(token: str) -> bool:
+    """Whether a lowercase-led token a text starts with is a word or a label
+    rather than the end of a word a chunk boundary cut: one with a capital
+    after its first letter (pH, eBooks, iPhone, tV), or a list label or
+    hyphenated start ("a)", "i.", "e-")."""
+    return any(char.isupper() for char in token[1:]) or token.endswith((".", ")", "-"))
 
 
 # The words of a question for a date that name the KIND of answer rather than
@@ -164,18 +194,82 @@ def _terminated(text: str) -> bool:
     return core.endswith(SENTENCE_END + (":",))
 
 
+# What a clause or section heading starts with ("Clause 4.2: Attendance").
+_CLAUSE_LABEL = re.compile(
+    r"^\s*(?:clause|section|article|rule|paragraph|para|chapter|annexure|appendix"
+    r"|item|step|part|unit|schedule)\b",
+    re.I,
+)
+# "Casual leave: 12 days per calendar year": a short label, a colon, a value.
+_LABEL_VALUE = re.compile(r"^([^:]{1,60}):\s*\S")
+MAX_LABEL_WORDS = 6
+# The label of a memo or circular header ("Subject: Campus bus services for the
+# academic year 2024-25") introduces a TITLE, not a fact.
+_TITLE_LABELS = frozenset(
+    "subject title re ref reference topic heading regarding sub".split()
+)
+# A list item: a bullet, "a)", "(iv)", "(2)". A bare "1." is judged below.
+_LIST_ITEM = re.compile(
+    r"^\s*(?:[-*•–—]\s+|\(?[a-z][.)]\s+|\(?[A-Za-z]\)\s+"
+    r"|\(?(?:ii|iii|iv|vi|vii|viii|ix)[.)]\s+|\(\d{1,2}\)\s+)\S"
+)
+_NUMBERED_ITEM = re.compile(r"^\s*\d{1,2}[.)]\s+(\S.*)$")
+
+
+def _is_data_line(text: str) -> bool:
+    """A "label: value" line or a list item. Documents hold facts this way
+    ("Casual leave: 12 days", "Monday to Saturday: 9 am to 8 pm", "- Admission
+    letter"), and a line like that is the fact, not a title above one."""
+    if _LIST_ITEM.match(text):
+        return True
+
+    item = _NUMBERED_ITEM.match(text)
+    if item:
+        # "2. Fee receipt" is an item of a list; "3. Library Rules" and
+        # "4. ATTENDANCE" are numbered headings, which every word capitalised
+        # (or in capitals) gives away. A single word is left a heading.
+        words = item.group(1).split()
+        return len(words) > 1 and any(word[:1].islower() for word in words[1:])
+
+    labelled = _LABEL_VALUE.match(text)
+    if labelled:
+        label = labelled.group(1)
+        return (
+            not _CLAUSE_LABEL.match(label)
+            and label.strip().lower() not in _TITLE_LABELS
+            and len(label.split()) <= MAX_LABEL_WORDS
+        )
+    return False
+
+
 def is_heading(sentence: str, *, is_row: bool) -> bool:
     """A title, a clause heading or a list label rather than a sentence.
 
-    No full stop and a dozen words or fewer. A table row is never one, and a
-    heading is not always useless ("Subject: Campus bus services for the
-    academic year 2024-25" IS the answer to "which year"), so the answerer
-    quotes one only when nothing else qualifies.
+    No full stop and a dozen words or fewer. A table row is never one, nor is a
+    "label: value" line or a list item (a fact set out as a line), and a heading
+    is not always useless ("Subject: Campus bus services for the academic year
+    2024-25" IS the answer to "which year"), so the answerer quotes one only
+    when nothing else qualifies. "FEE STRUCTURE 2024-25", "Library Hours" and
+    "Clause 3.1 Visitors" are headings.
     """
     text = sentence.strip()
-    if is_row or not text or _terminated(text):
+    if is_row or not text or _terminated(text) or _is_data_line(text):
         return False
     return len(text.split()) <= MAX_HEADING_WORDS
+
+
+def begins_mid_text(text: str) -> bool:
+    """Whether a passage starts in the middle of a word or a sentence.
+
+    A passage that starts with a lowercase letter was cut by a chunk boundary,
+    except one that starts with a word that is written that way (pH, eBooks,
+    iPhone) or a list label ("a) ..."): marking those would tell the reader the
+    text continues from before when it does not.
+    """
+    text = text.lstrip()
+    if not text or not text[0].islower():
+        return False
+    return not _is_real_start(text.split(None, 1)[0])
 
 
 def trim_cut_start(sentence: str):
@@ -185,12 +279,15 @@ def trim_cut_start(sentence: str):
     end of "staff". A leftover of one or two letters that is not a word is
     dropped; the caller marks the start with an ellipsis, so the reader is told
     the sentence continues from before and the quote is still a substring of
-    the passage.
+    the passage. A token that is a real word or label (pH, eBooks, "a)", "e-")
+    is never dropped, and a sentence that starts with one is not marked.
     """
     text = sentence.lstrip()
     if not text or not text[0].islower():
         return sentence, False
     first, _, rest = text.partition(" ")
+    if _is_real_start(first):
+        return text, False
     if len(first) <= 2 and first not in _SHORT_WORDS and rest.strip():
         return rest.lstrip(), True
     return text, True
@@ -206,34 +303,130 @@ def ends_cut(sentence: str) -> bool:
     )
 
 
-def _identifier_tokens(question: str) -> set:
-    found = set()
+def _identifier_tokens(text: str, *, allow_shouting: bool = False) -> dict:
+    """The codes a text names, as {letters: kind}: "dotted" (B.Tech, Ph.D),
+    "mixed" (PhD, CoE) or "caps" (CSE, MBA). A dotted code is the strongest
+    evidence, an acronym the weakest."""
+    found = {}
     # A question typed in capitals is shouting, not naming: every word of it
     # would be an "acronym". A dotted code is still a code.
-    patterns = (
-        (DOTTED_CODE,) if question.isupper() else (DOTTED_CODE, MIXED_CASE, ACRONYM)
-    )
-    for pattern in patterns:
-        for match in pattern.finditer(question):
-            letters = re.sub(r"[^a-z]", "", match.group(0).lower())
-            if len(letters) >= 3 and letters not in NOT_A_CODE:
-                found.add(letters)
+    shouting = text.isupper() and not allow_shouting
+    for kind, pattern in (
+        ("dotted", DOTTED_CODE),
+        ("mixed", MIXED_CASE),
+        ("caps", ACRONYM),
+    ):
+        if shouting and kind != "dotted":
+            continue
+        for match in pattern.finditer(text):
+            word = match.group(0)
+            letters = re.sub(r"[^a-z]", "", word.lower())
+            if len(letters) < 3 or letters in NOT_A_CODE:
+                continue
+            # iPhone, eBooks: a product word that starts in lower case is not
+            # a programme or a degree.
+            if kind == "mixed" and word[0].islower():
+                continue
+            found.setdefault(letters, kind)
     return found
+
+
+_LOWER_WORD = re.compile(r"\b[a-z]{3,}\b")
+
+
+def _is_ordinary_word(token: str, support: str) -> bool:
+    """Whether a capitalised token is an ordinary word or a common
+    abbreviation: on the list above, or a word the passages themselves write in
+    lower case ("only", "sundays")."""
+    root = stem(token)
+    if token in _ORDINARY_CAPS or root in _ORDINARY_CAPS or token in STOPWORDS:
+        return True
+    return any(stem(word) == root for word in _LOWER_WORD.findall(support))
+
+
+def _lists_codes(passages) -> bool:
+    """Whether a retrieved passage is a table whose rows carry codes (B.Tech
+    CSE, MECH): the one place a missing acronym is a visible gap and not a
+    different way of saying something."""
+    return any(
+        getattr(p, "is_table", False)
+        and _identifier_tokens(p.text, allow_shouting=True)
+        for p in passages
+    )
 
 
 def _letters_only(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def distinctive_figures(text: str) -> set:
-    """The figures in `text` a reader could check against a document."""
+# A year range ("2024-25", "2023-2024") and a bare year (19xx, 20xx) in text
+# that has had its full dates taken out.
+_YEAR_RANGE = re.compile(
+    r"(?<![\d.,/-])((?:19|20)\d{2})-((?:19|20)\d{2}|\d{2})(?![\d-])"
+)
+_BARE_YEAR = re.compile(r"(?<![\w.,/-])((?:19|20)\d{2})(?![\w-]|[.,]\d)")
+# 2000 is also an amount: "Rs 2000", "2000 rupees", "1990 pages" are not years.
+_CURRENCY_BEFORE = re.compile(r"(?:\brs\.?|\binr|\busd|\beur|[₹$€£])\s*$", re.I)
+_QUANTITY_AFTER = re.compile(
+    r"\s*(?:%|per\b|percent\b|rs\b|rupees?\b|inr\b|usd\b|dollars?\b|pages?\b"
+    r"|credits?\b|marks?\b|books?\b|words?\b|characters?\b|[kmg]b\b|copies\b)",
+    re.I,
+)
+# A range of years states each year in it, up to this many.
+MAX_RANGE_SPAN = 10
+
+
+def _range_stated(asked: str, known: set) -> bool:
+    """Whether a year range is one a passage states, or lies inside a longer
+    one it states ("2019-2025" covers "2023-2024")."""
+    first, last = (int(year) for year in asked.split("-"))
+    for other in known:
+        start, end = (int(year) for year in other.split("-"))
+        if start <= first and last <= end:
+            return True
+    return False
+
+
+def year_facts(text: str) -> tuple:
+    """(year ranges, years) that `text` states, as strings.
+
+    "2024-25" is the range "2024-2025" and also the years 2024 and 2025;
+    "15 August 2025" states the year 2025 and "15 August" none. Only a year or
+    a year range counts: a room number, a roll number or an amount is not
+    something a document is "for", so a question that names one is not
+    refused for it (see names_what_the_passages_lack).
+    """
     remainder, dates = fact_forms.extract_dates(fact_forms.prepare(text))
-    figures = set(dates)
-    for token in FIGURE.findall(remainder):
-        normal = fact_forms.canonical_range(token.replace(",", "").strip("-"))
-        if len(re.sub(r"\D", "", normal)) >= 3:
-            figures.add(normal)
-    return figures
+    years = set()
+    ranges = set()
+    for date in dates:
+        match = re.fullmatch(r"date:(\d{4})-\d{2}-\d{2}", date)
+        if match:
+            years.add(match.group(1))
+
+    def take_range(match):
+        first = int(match.group(1))
+        tail = match.group(2)
+        last = int(tail) if len(tail) == 4 else first // 100 * 100 + int(tail)
+        if len(tail) == 2 and last < first:
+            last += 100
+        if last < first:
+            return match.group(0)
+        ranges.add(f"{first}-{last}")
+        if last - first <= MAX_RANGE_SPAN:
+            years.update(str(year) for year in range(first, last + 1))
+        else:
+            years.update((str(first), str(last)))
+        return " "
+
+    remainder = _YEAR_RANGE.sub(take_range, remainder)
+    for match in _BARE_YEAR.finditer(remainder):
+        if _CURRENCY_BEFORE.search(remainder[: match.start()]):
+            continue
+        if _QUANTITY_AFTER.match(remainder[match.end() :]):
+            continue
+        years.add(match.group(1))
+    return ranges, years
 
 
 def names_what_the_passages_lack(question: str, passages) -> str:
@@ -241,10 +434,22 @@ def names_what_the_passages_lack(question: str, passages) -> str:
 
     A word-overlap ranker has no way to notice that the question is about
     something else. Two things it can see for itself, and that a reader sees
-    at once, are a CODE (PhD, B.Arch, CSE) or a FIGURE (a year, an amount) in
-    the question that appears in no retrieved passage, title or column label:
-    asked the tuition for a programme the fee table does not list, it quoted
-    the table; asked the bus pass for 2023-24, it quoted the 2024-25 circular.
+    at once, are a CODE (PhD, B.Arch, CSE) or a YEAR in the question that the
+    passages cannot have: asked the tuition for a programme the fee table does
+    not list, it quoted the table; asked the bus pass for 2023-24, it quoted
+    the 2024-25 circular. Each rule is as narrow as it can be, because a
+    refusal is the "not found" a reader sees:
+
+    - A dotted code (B.Arch, Ph.D) must appear. A mixed-case code (PhD) must
+      too. An acronym (CSE) must only when a retrieved table is keyed by codes
+      like it, and it is not an ordinary word or a common abbreviation: "PLEASE",
+      "ASAP", "SUNDAYS", "PDF", "HOD" name nothing the passages should have.
+    - A year (2025, 2023-24, "15 August 2025") must be one the passages state,
+      but only when they state some year at all. A rule with no year in it
+      (leave, curfew, attendance) is year-less: "in 2025" or "I joined in 2022"
+      does not make it unanswerable. Other numbers (a room, a roll number, a
+      premise like "250 pages") are never grounds.
+
     Nothing is said about a word that is merely worded differently ("IT" for
     "computer", "complaint" for "grievance"): those stay with the overlap
     rules.
@@ -257,24 +462,43 @@ def names_what_the_passages_lack(question: str, passages) -> str:
     )
 
     present = _letters_only(support)
-    for token in sorted(_identifier_tokens(question)):
-        if token not in present:
-            return (
-                f"the question names {token.upper()!r}, which no retrieved "
-                f"passage, title or column mentions"
-            )
+    keyed = None
+    for token, kind in sorted(_identifier_tokens(question).items()):
+        if token in present:
+            continue
+        if kind != "dotted":
+            if _is_ordinary_word(token, support):
+                continue
+            if kind == "caps":
+                if keyed is None:
+                    keyed = _lists_codes(passages)
+                if not keyed:
+                    continue
+        return (
+            f"the question names {token.upper()!r}, which no retrieved "
+            f"passage, title or column mentions"
+        )
 
-    asked = distinctive_figures(question)
-    if asked:
-        known = distinctive_figures(support)
-        known |= fact_forms.year_less(known)
-        for figure in list(known):
-            known |= fact_forms.range_years(figure)
-        missing = sorted(figure for figure in asked if figure not in known)
-        if missing:
-            shown = ", ".join(
-                f[len("date:") :] if f.startswith("date:") else f for f in missing
+    asked_ranges, asked_years = year_facts(question)
+    if asked_ranges or asked_years:
+        known_ranges, known_years = year_facts(support)
+        # No year in any passage or title: the rule is year-less.
+        if known_ranges or known_years:
+            missing_ranges = sorted(
+                r for r in asked_ranges if not _range_stated(r, known_ranges)
             )
-            return f"the question names {shown}, which no retrieved passage mentions"
+            # The years of an asked range are judged by the range, not twice.
+            in_a_range = set()
+            for asked_range in asked_ranges:
+                first, last = (int(y) for y in asked_range.split("-"))
+                in_a_range.update(str(y) for y in range(first, last + 1))
+            missing = missing_ranges + sorted(
+                y for y in asked_years - known_years if y not in in_a_range
+            )
+            if missing:
+                return (
+                    f"the question names {', '.join(missing)}, which no "
+                    f"retrieved passage mentions"
+                )
 
     return ""
