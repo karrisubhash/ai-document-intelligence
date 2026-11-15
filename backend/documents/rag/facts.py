@@ -841,37 +841,72 @@ def readable(fact: str) -> str:
 # --- What the user typed, as far as an answer may repeat it ---------------------
 #
 # A figure the user gives about THEIR OWN situation is a given: "I have 70
-# percent attendance", "my family earns two lakh", "a student with 60 percent".
-# An answer that works with it has to be able to say it back, and rejecting "at 70
-# percent you may apply for condonation" for containing 70 turned a correct
-# answer into "not found".
+# percent attendance", "I'm at 70%", "with 70 percent attendance", "my family
+# earns two lakh", "a student with 60 percent". An answer that works with it has
+# to be able to say it back, and rejecting "at 70 percent you may apply for
+# condonation" for containing 70 turned a correct answer into "not found".
 #
-# A figure the user asks ABOUT, or only reports hearing, is a claim or a target,
-# not a given: "Is the minimum 70 percent?", "What does the bus pass cost for
-# 2023-24?", "Can I borrow 10 books?", "We heard the hostel closes on 15 August".
-# An answer that states one of those has to find it in the passages: echoing it
-# back is how an answer agrees with a wrong number or answers for a year the
-# documents do not cover.
+# A figure the user asks ABOUT, or only reports hearing or checking, is a claim
+# or a target, not a given: "Is the minimum 70 percent?", "What does the bus pass
+# cost for 2023-24?", "Can I borrow 10 books?", "We heard the hostel closes on 15
+# August", "I am checking whether the hostel fee is 50000". An answer that states
+# one of those has to find it in the passages: echoing it back is how an answer
+# agrees with a wrong number or answers for a year the documents do not cover.
 #
-# So only a CLAUSE that states the user's own situation counts: a first-person
-# subject with a verb of having, being, scoring, earning, paying or joining, or
-# "my/our X is ...", or "a student with ...". A clause with a question mark does
-# not (except "a student with 60 percent attendance, can she apply?"), and neither
-# does one that reports hearsay or doubt, or asks for a requirement. Clauses are
-# cut at sentence ends, commas, semicolons and "and"/"but", so "I have 70 percent
-# attendance, what is the minimum?" keeps its first half.
+# Two earlier designs judged whole CLAUSES by words anywhere in them, and lost both
+# ways: a first-person verb anywhere let "I got a mail with the hostel fee 50000"
+# through, and one doubt word anywhere refused "I have 70 percent attendance, what
+# is the minimum?". So each FIGURE is judged on its own, by what stands right
+# before it, and a figure that is not the user's own is masked out of what the
+# answer may repeat:
+#
+# - an ownership cue close before it: "I have", "I'm", "I scored", "my X is", "a
+#   student with", or "with"/"at"/"having" right before it, or a personal
+#   attribute named with it ("attendance is 70", "70 percent attendance" opening a
+#   sentence);
+# - and nothing before it in its clause that only reports, checks or hears
+#   ("heard", "says", "whether", "checking", "regarding", "screenshot"...);
+# - and not right after a noun that names what an institution CHARGES or REQUIRES
+#   ("fee", "fine", "minimum", "limit"...), unless the clause is in the past ("my
+#   hostel fee WAS 55000" is what they paid; "the hostel fee is 50000" is a claim);
+# - and not followed by a tag that asks for agreement ("isn't it", "right?");
+# - and in a clause that opens with a question word, only when "with"/"at" or an
+#   ownership cue that is not the question's own subject ("Can I get...") says so.
+#
+# What no rule can do is tell "I paid 50000 as hostel fee last year" (their own
+# payment, which an answer needs to be able to mention) from the same words as a
+# claim about the fee: that stays a given, and a model that agrees with it as policy
+# is then the model's mistake, not a figure the check can catch.
 _USER_CLAUSES = re.compile(
     r"(?<=[.!?;])\s+|\n+|,\s+|\s+(?:and|but|so|because|while|although)\s+",
     re.IGNORECASE,
 )
 _PEOPLE = r"(?:student|candidate|employee|member|applicant|resident|person|someone)"
+# The apostrophes a phone keyboard types.
+_APOS = "['" + chr(0x2018) + chr(0x2019) + chr(0x2BC) + "]"
+_I = (
+    r"(?:i|i"
+    + _APOS
+    + r"m|i"
+    + _APOS
+    + r"ve|i"
+    + _APOS
+    + r"d|we|we"
+    + _APOS
+    + r"re|we"
+    + _APOS
+    + r"ve)"
+)
+_CONTRACTED_I = (
+    r"\b(?:i" + _APOS + r"m|i" + _APOS + r"ve|we" + _APOS + r"re|we" + _APOS + r"ve)\b"
+)
 _OWN_STATE = re.compile(
-    r"\b(?:i|i'm|i've|i'd|we|we're|we've)\s+(?:\w+\s+){0,2}?"
+    r"\b" + _I + r"\s+(?:\w+\s+){0,2}?"
     r"(?:have|had|has|am|was|were|are|scored?|secured?|got|get|earn(?:s|ed)?"
     r"|paid|pay|joined|enrolled|admitted|completed|passed|failed|attended|missed"
     r"|owe|owed|graduated|born|started|began|entered|registered|applied|appeared"
     r"|submitted|received|bought|purchased)\b"
-    r"|\b(?:my|our|mine)\s+(?:\w+\s+){0,3}?"
+    r"|" + _CONTRACTED_I + r"|\b(?:my|our|mine)\s+(?:\w+\s+){0,3}?"
     r"(?:is|was|are|were|has|have|had|earn(?:s|ed)?|stands?|comes?|came|totals?"
     r"|scored?|secured?)\b"
     r"|\b" + _PEOPLE + r"s?\s+(?:with|who\s+(?:has|have|had|scored?|secured?|got"
@@ -891,8 +926,9 @@ _DOUBT = re.compile(
 
 
 def user_stated_clauses(user_text) -> list:
-    """The clauses of what the user typed that state THEIR OWN situation; see the
-    comment above for what counts."""
+    """The clauses of what the user typed that state THEIR OWN situation, judged
+    by words anywhere in them. For what a QUESTION is about (quoting.py sets such
+    clauses aside); what an answer may repeat is user_stated_text."""
     kept = []
     for clause in _USER_CLAUSES.split(user_text or ""):
         clause = clause.strip()
@@ -904,7 +940,123 @@ def user_stated_clauses(user_text) -> list:
     return kept
 
 
+# A figure in what the user typed: digits with their grouping, or a spelled number
+# ("two lakh", "sixty-five").
+_NUMBER_WORDS = "|".join(
+    sorted({*_UNITS, *_TENS, *_SCALES, "hundred"}, key=len, reverse=True)
+)
+_USER_FIGURE = re.compile(
+    r"\d(?:[\d,.:/]*\d)?|\b(?:"
+    + _NUMBER_WORDS
+    + r")(?:[ -]+(?:"
+    + _NUMBER_WORDS
+    + r"))*\b",
+    re.IGNORECASE,
+)
+_WORD = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
+_APOSTROPHE_FOLD = {0x2018: 0x27, 0x2019: 0x27, 0x2BC: 0x27}
+_QUESTION_WORDS = frozenset(
+    "is are am do does did can could may will would should shall what which how "
+    "when where why who whom whose".split()
+)
+# Before a figure: the user is reporting, hearing or checking it, not stating it.
+_REPORTED = re.compile(
+    r"\b(?:heard|hear|read|told|tell|says?|said|think|thought|believe[ds]?"
+    r"|rumou?r\w*|supposed\w*|apparently|claims?|whether|wonder\w*|check\w*"
+    r"|verif\w*|quer(?:y|ies)|regarding|screenshot|mail|email|looked|looking|saw"
+    r"|seen|shows?|showing|notes?|know|aware|expect\w*|suspect\w*|assum\w*"
+    r"|confirm\w*)\b",
+    re.IGNORECASE,
+)
+# What an institution charges or requires: a figure right after one is a claim
+# about it, unless the clause is in the past ("my hostel fee WAS 55000").
+_POLICY_NOUNS = frozenset(
+    "fee fees fine fines charge charges cost costs price prices tuition penalty "
+    "limit minimum maximum cutoff deadline threshold requirement quota rate "
+    "stipend".split()
+)
+_PAST_WORDS = frozenset("was were paid had charged spent".split())
+# What a person has: "attendance is 70", "70 percent attendance".
+_PERSONAL_NOUNS = frozenset(
+    "attendance marks mark score scores cgpa gpa percentage rank income aggregate "
+    "backlog backlogs age".split()
+)
+_STATE_WORDS = frozenset("is was at of stands".split())
+# After a figure: a request to agree with it.
+_AGREEMENT_TAGS = frozenset("isnt isn't right correct true no na okay ok".split())
+# How close before a figure an ownership cue has to end, and how far from the
+# user's own figure the next one may stand and still be part of it ("15 August
+# 2025", "the 2021-25 batch", "4500 for my bus pass in 2023").
+_CUE_REACH = 40
+_SAME_FIGURE_GAP = 24
+
+
+def _mask_clause(clause: str):
+    """(the clause with every figure that is not the user's own replaced by "_",
+    how many figures are)."""
+    text = clause.translate(_APOSTROPHE_FOLD).replace("cut-off", "cutoff")
+    lowered = text.lower()
+    first_words = _WORD.findall(lowered)
+    asking = bool(first_words) and first_words[0] in _QUESTION_WORDS
+    pieces, last, own, last_own_end = [], 0, 0, None
+    for match in _USER_FIGURE.finditer(text):
+        before = lowered[: match.start()]
+        words = _WORD.findall(before)
+        after = _WORD.findall(lowered[match.end() :])[:3]
+
+        # A cue owns the figure(s) of its own predicate: one with another figure
+        # between it and this one does not reach it, unless that figure is the
+        # user's own and close ("15 August 2025").
+        owner = (
+            last_own_end is not None
+            and match.start() - last_own_end <= _SAME_FIGURE_GAP
+        )
+        for found in _OWN_STATE.finditer(before):
+            if len(before) - found.end() > _CUE_REACH:
+                continue
+            if _USER_FIGURE.search(before[found.end() :]):
+                continue
+            # "Can I get ...", "Do I have ...": the pronoun is the question's own.
+            if asking and len(_WORD.findall(before[: found.start()])) < 3:
+                continue
+            owner = True
+        situational = bool(words) and words[-1] in ("with", "at", "having")
+        personal = not asking and (
+            (
+                len(words) >= 2
+                and words[-1] in _STATE_WORDS
+                and words[-2] in _PERSONAL_NOUNS
+            )
+            or (not words and any(word in _PERSONAL_NOUNS for word in after[:2]))
+        )
+        reported = bool(_REPORTED.search(before))
+        policy = any(word in _POLICY_NOUNS for word in words[-3:]) and not any(
+            word in _PAST_WORDS for word in words
+        )
+        agreement = any(word in _AGREEMENT_TAGS for word in after)
+
+        if (owner or situational or personal) and not (reported or policy or agreement):
+            own += 1
+            last_own_end = match.end()
+            continue
+        pieces.append(text[last : match.start()])
+        pieces.append("_")
+        last = match.end()
+    pieces.append(text[last:])
+    return "".join(pieces), own
+
+
 def user_stated_text(user_text) -> str:
-    """The clauses of what the user typed that state their own situation, joined.
-    Only figures in this text may be repeated by an answer."""
-    return " ".join(user_stated_clauses(user_text))
+    """What the user typed, reduced to the figures they gave about themselves (see
+    the comment above for what counts): each clause that holds one, with every
+    other figure in it masked. Only figures in this text may be repeated by an
+    answer."""
+    kept = []
+    for clause in _USER_CLAUSES.split(user_text or ""):
+        clause = clause.strip()
+        if not clause:
+            continue
+        masked, own = _mask_clause(clause)
+        if own:
+            kept.append(masked.strip())
+    return " ".join(kept)

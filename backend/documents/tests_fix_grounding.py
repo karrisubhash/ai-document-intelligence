@@ -1665,3 +1665,110 @@ class LookalikeCharacterTests(Base):
     def test_strip_format_still_strips_only_format_characters(self):
         text = f"a{NNBSP}b{chr(0x2011)}c{chr(0x200B)}"
         self.assertEqual(facts.strip_format(text), f"a{NNBSP}b{chr(0x2011)}c")
+
+
+# --- the third review: a user's figure is judged where it stands -------------
+
+HOSTEL_FEE = "The hostel fee is Rs 60000 per year, payable in two instalments."
+CONDONATION_RULE = (
+    "Students with attendance between 65 and 75 percent may apply for condonation."
+)
+APOSTROPHES = ("'", chr(0x2019))
+
+
+class UserFigureLocalityTests(Base):
+    """Two earlier designs judged whole CLAUSES by words anywhere in them, and lost
+    both ways. A first-person verb anywhere let "I got a mail with the hostel fee
+    50000" through, so an answer that agreed with 50000 as policy was accepted
+    (G7); one doubt word anywhere refused "I have 70 percent attendance, what is
+    the minimum?", and "I'm at 70%" never matched at all, so the right answer was
+    refused and the reader was told "not found". Each figure is judged on its own."""
+
+    LEAKS = (
+        "i am in 3rd year is the hostel fee 50000",
+        "I am checking whether hostel fee is 50000",
+        "I am verifying the hostel fee 50000",
+        "I have a query regarding hostel fee of 50000",
+        "We are looking for the hostel fee 50000 per year",
+        "I have looked up hostel fee 50000",
+        "I got a mail with the hostel fee 50000",
+        "I have a screenshot that shows the hostel fee is 50000",
+        "As a student the fee is 50000 per year no",
+        "I am wondering whether the fee is 50000",
+        "I got to know the fee is 50000",
+        "Our hostel fee is 50000 isn't it",
+        "Our hostel fee is 50000 isn" + chr(0x2019) + "t it",
+    )
+    ECHO = "The hostel fee is Rs 50000 per year [1]."
+
+    def test_a_claim_hearsay_or_check_is_not_a_given(self):
+        for user_text in self.LEAKS:
+            with self.subTest(user_text=user_text):
+                self.rejected(self.ECHO, HOSTEL_FEE, user_text=user_text)
+
+    def test_the_figure_that_is_not_theirs_is_masked_and_the_rest_stays(self):
+        kept = facts.user_stated_text
+        self.assertEqual(
+            kept("i am in 3rd year is the hostel fee 50000"),
+            "i am in 3rd year is the hostel fee _",
+        )
+        self.assertEqual(kept("I am checking whether hostel fee is 50000"), "")
+        self.assertEqual(kept("I got a mail with the hostel fee 50000"), "")
+        # A figure of their own beside one that is a claim: only the claim goes.
+        self.assertEqual(
+            kept("I have 70 percent attendance but the minimum is 75 percent"),
+            "I have 70 percent attendance",
+        )
+
+    GIVENS = (
+        "With 70 percent attendance, can I sit the exam?",
+        "I'm at 70 percent attendance. Can I sit the exam?",
+        "I" + chr(0x2019) + "m at 70 percent attendance. Can I sit the exam?",
+        "I have 70 percent attendance what is the minimum",
+        "If I have 70 percent attendance can I sit the exam?",
+        "Can I sit the exam if I have 70 percent attendance?",
+        "My attendance is 70 percent (is that bad?)",
+        "Attendance is 70 percent, what can I do?",
+        "70 percent attendance, can I sit?",
+        "I have 70 percent attendance. Can I sit the exam?",
+        "I attended 70 percent of classes, can I write the exam?",
+        "my attendance is 70%, can I write the exam?",
+    )
+
+    def test_what_they_say_about_themselves_can_be_said_back(self):
+        answer = "At 70 percent attendance you may apply for condonation [1]."
+        for user_text in self.GIVENS:
+            with self.subTest(user_text=user_text):
+                self.accepted(answer, CONDONATION_RULE, user_text=user_text)
+
+    def test_the_same_figures_stated_as_a_requirement_are_still_not_given(self):
+        answer = "The minimum attendance is 70 percent [1]."
+        passage = "The minimum attendance is 75 percent for every course."
+        for user_text in (
+            "Do I need 70 percent attendance?",
+            "Is 70 percent enough for me?",
+            "Can I get a 20 percent scholarship?",
+            "I need 70 percent attendance, right?",
+            "What is the fine if the limit is 70 percent?",
+            "A student who has 60 percent can appear in exam of 70 percent attendance",
+        ):
+            with self.subTest(user_text=user_text):
+                self.rejected(answer, passage, user_text=user_text)
+
+    def test_a_payment_they_made_is_theirs_to_mention(self):
+        self.accepted(
+            "You paid Rs 50000 last year; this year the hostel fee is Rs 60000 [1].",
+            HOSTEL_FEE,
+            user_text="I paid 50000 as hostel fee last year. What is the fee now?",
+        )
+        self.accepted(
+            "Your hostel fee was Rs 55000, and it is now Rs 60000 [1].",
+            HOSTEL_FEE,
+            user_text="I joined in 2022 and my hostel fee was 55000. What is it now?",
+        )
+
+    def test_a_curly_apostrophe_is_an_apostrophe(self):
+        for apostrophe in APOSTROPHES:
+            text = f"I{apostrophe}ve scored 8.5 CGPA. Am I eligible?"
+            with self.subTest(apostrophe=apostrophe):
+                self.assertIn("8.5", facts.user_stated_text(text))
