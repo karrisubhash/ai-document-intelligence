@@ -87,16 +87,18 @@ class ChatView(APIView):
         replaced = self._replaced_turn(conversation, data.get("replaces"))
 
         try:
-            # Read once, and only what follow-up resolution and the general
-            # reply use. Each assistant turn also stores its citations - the
-            # cited passages' full text - and its metadata. Follow-up
-            # resolution used to fetch all of that, for every turn, on every
-            # question, and the general reply fetched it again whenever it
-            # answered.
+            # Read once, and only what follow-up resolution, the grounded
+            # answer and the general reply use. Each assistant turn also
+            # stores its citations - the cited passages' full text - and its
+            # metadata. Follow-up resolution used to fetch all of that, for
+            # every turn, on every question, and the general reply fetched it
+            # again whenever it answered. `abstained` is the one other column
+            # wanted: an earlier refusal is shown to the model as "no answer
+            # found", not as the sentence it is told to say (rag.history).
             history = [
                 message
                 for message in conversation.messages.order_by("created_at").only(
-                    "role", "content"
+                    "role", "content", "abstained"
                 )
                 if message.id not in replaced
             ]
@@ -136,6 +138,10 @@ class ChatView(APIView):
                     # a follow-up: retrieval searched on the widened form,
                     # the answer must still be about what was actually asked.
                     focus=resolved.original if resolved.rewritten else "",
+                    # The turns before this one, for a model writing the
+                    # answer to read ("what does that cost?" needs to know
+                    # what "that" was). Not a source: see documents.rag.history.
+                    history=history,
                 )
             source = "none" if answer.abstained else "documents"
 
@@ -223,6 +229,10 @@ class ChatView(APIView):
                         # rewrite that caused it rather than blamed on
                         # retrieval.
                         "followup": resolved.as_metadata,
+                        # How many earlier messages the model was shown, so
+                        # an answer that read a turn wrongly can be traced
+                        # to it. 0: a first question, or a quote.
+                        "history_messages": answer.history_messages,
                         "timings": answer.timings,
                         "source": source,
                         # What the provider said: model actually used, what
