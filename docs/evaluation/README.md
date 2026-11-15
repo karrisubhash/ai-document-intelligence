@@ -29,6 +29,8 @@ stores per-case results (`EvaluationCaseResult`) beside the run's configuration.
 | Source coverage | share of relevant documents the answer cited |
 | Groundedness | mean grounding support ratio of answered cases |
 | Token overlap | bag-of-words overlap with the reference answer — a weak signal, never reported as correctness |
+| Correctness | of the cases with an expected answer, the share whose answer contains its key facts (`documents/evaluation/correctness.py`): every figure it states, in any spelling the grounding check treats as the same fact, or with no figure 60 % of its content words. A declined case counts as not correct; citation markers are not figures. A heuristic: it cannot read a negation or penalise an extra wrong statement |
+| General replies to answerable (`--chat-path`) | answerable questions that chat answered from the model's general knowledge instead of from the documents |
 | p50 / p95 / max latency | wall time per question inside the engine |
 
 Loaded datasets are immutable: loading a changed version is refused, so a run always
@@ -52,7 +54,22 @@ match their reference more closely) - and the committed baseline was raised to t
 later change cannot quietly give the gain back. The offline pipeline is deterministic, so
 the higher bar costs no flakiness.
 
-A third gate scores the **Search endpoint** per passage: it seeds `search-relevance` s1
+CI then seeds **v3** (`institutional-v3`, `evaluation/benchmark-v3.template.json`) and
+gates on `evaluation/baseline-v3.json`. v3 asks v2's corpus questions the way people ask
+them - paraphrased with no shared words, dates and year ranges written another way, compound
+questions, "Is it mandatory to..." - plus questions that must be refused because they name a
+programme or a year the documents do not have. Offline it gates the quoting path, which is
+what a reader gets whenever no model can answer; its `correctness` only moves much with a
+model.
+
+To measure a model, run the same benchmark with a provider configured and
+`--chat-path --pause 12`: `--chat-path` also does what chat does when the documents had
+nothing (a general-knowledge reply), and counts those replies to answerable questions;
+`--pause` keeps a free tier's per-minute limit from turning the run into a measurement of the
+quota. Use keys whose daily quota is not the live site's: Gemini's quota is per Google
+project.
+
+A fourth gate scores the **Search endpoint** per passage: it seeds `search-relevance` s1
 under its own user and department and runs `evaluate_search --baseline
 evaluation/search-baseline.json --fail-on-regression`. See
 [search relevance](search-relevance.md).

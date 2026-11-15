@@ -86,7 +86,9 @@ confidential documents, attach billing to the Gemini key, or use `ollama`.
 
 A sensible free setup for the public site: `RAG_ANSWERER_CHAIN=gemini,cerebras,groq` - about
 80 + 100 + 30 written answers a day before anything is quoted. Groq is last because its
-8K-tokens-a-minute window fits roughly one grounded question a minute.
+8K-tokens-a-minute window fits roughly one grounded question a minute. On that chain every
+answer Gemini writes sends Google up to about 14,000 characters of the asker's documents
+(see below), on a tier whose terms allow training on them.
 
 **Two presets ask for less reasoning, and that is unverified.** `groq` and `cerebras` send
 `reasoning_effort: "low"` (gpt-oss is a reasoning model and bills its hidden reasoning
@@ -107,6 +109,12 @@ a rate limit still counts for chat, which tries it rather than give up, and a ch
 key or every link used up for the day does not. A quote keeps the settings it was measured
 with. They are all in `.env.example`.
 
+"A model will answer" is one test, and everything below that is for a model's benefit
+follows from it: the larger context, the neighbouring chunks, the corrective retry, and
+answering a compound question whole. Whether the model is also handed passages the relevance
+floor rejects is a separate switch, `RAG_MODEL_JUDGES_RELEVANCE`, so turning that off does
+not turn the rest off with it.
+
 - **The model judges relevance, not the score floor.** The small reranker scores a correct
   paraphrase 0.00-0.08 against a floor of 0.30, so the model never saw it and the reader was
   told "not found" - or, with general knowledge on, got a general reply to a question about
@@ -123,14 +131,30 @@ with. They are all in `.env.example`.
   only list Y" was stored as an ungrounded answer - the hallucination signal - and kept
   chat's general reply away. Only a reply with no citation and no figure counts.
 - **A correct answer is not discarded for how it spells a fact:** a date written another
-  way ("31 March 2025" for "31.03.2025"), a year range ("2024-25"), a number word, a
-  citation written "[1, 2]", a marker one past the last passage. A date that could be read
-  two ways ("04.03.2025") and a wrong date are still rejected.
-- **A rejected answer gets two chances before it is discarded:** a figure written in exactly
-  one passage the answer did not cite gets that passage's citation; otherwise the model is
-  told which figures were not in its passages and asked once more (`RAG_GROUNDING_RETRY`).
-  The second answer is checked exactly like the first, and if it fails too the first failure
-  stands.
+  way ("31 March 2025" for "31.03.2025"), a day and month without the year ("15 August" for
+  "15 August 2025"), a year range ("2024-25"), a numeral for a number the passage spells
+  out ("7 days" for "seven days" - only when the number counts something, so "no one" never
+  supports a 1), a citation written "[1, 2]". These are still rejected: a date that could
+  be read two ways ("04.03.2025") unless written the same way, a date that does not exist
+  ("31 April 2025", which is one exact token and is never rescued by a 31 and a 2025
+  elsewhere), a different day or month, and any marker that does not name a passage.
+  Numbers the *answer* spells out ("seven days") are not checked.
+- **A rejected answer gets two chances before it is discarded.** A figure the answer states
+  after its last citation in a sentence, that is written in exactly one passage it did not
+  cite, and where the sentence shares at least two words with that passage, gets that
+  passage's citation (at most two per answer, never a table row, and the result is checked
+  again from scratch). Otherwise the model is told which figures were not in its passages
+  and asked once more (`RAG_GROUNDING_RETRY`). The second answer is checked exactly like the
+  first, and if it fails too the first failure stands. The retry is a second provider call
+  on a free tier's small daily count, which is why it is only for figures the passages lack.
+- **The check cannot turn into an error page or a pass.** If the grounding check itself
+  raises on something in a document, the answer is withheld as ungrounded and the failure
+  is logged (`grounding.check_failed`).
+- **How often the first draft is wrong is counted.** An answer that was repaired or retried
+  no longer reaches the abstention counter, so
+  `adi_rag_grounding_recoveries_total{outcome}` counts them: `repaired`, `retried_grounded`
+  and `retried_failed`. That, not the abstention rate, is the number that says whether a
+  provider is any good.
 
 To measure all of it, `manage.py evaluate --chat-path --pause 12` against
 `evaluation/benchmark-v3.template.json` reports `correctness` (the expected answer's key facts

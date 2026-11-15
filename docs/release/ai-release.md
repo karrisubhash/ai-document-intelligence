@@ -104,7 +104,10 @@ turning it on, on staging first.
 
 1. Which provider is allowed to receive document text, under what data-processing terms,
    and in which region. Each question sends a third party the following:
-   - up to 8 passages, about 8,000 characters;
+   - up to 12 passages, about 14,000 characters (`RAG_CONTEXT_BUDGET_GENERATIVE`,
+     `RAG_MAX_PASSAGES_GENERATIVE`) - within that, the chunk either side of the top 3
+     (`RAG_NEIGHBOUR_ANCHORS`) and, with `RAG_MODEL_JUDGES_RELEVANCE`, passages the
+     relevance floor rejected;
    - their document titles and page numbers;
    - the question;
    - on follow-ups, words from earlier questions.
@@ -114,8 +117,10 @@ turning it on, on staging first.
    possibly training on inputs. An unset `RAG_ANSWERER_PROVIDER` with a
    `GEMINI_API_KEY` present selects Gemini.
 3. A monthly spend limit, set at the provider. The application has no spend cap. Its
-   only bound is the chat throttle (`THROTTLE_CHAT`, 60 questions per user per hour), and
-   a question can make up to 4 provider calls (`RAG_MAX_PLAN_STEPS`). A preset with a
+   only bound is the chat throttle (`THROTTLE_CHAT`, 60 questions per user per hour). A
+   question makes one provider call, and a second when the first answer states a figure
+   its passages lack (`RAG_GROUNDING_RETRY`); with `RAG_PLAN_WHEN_GENERATIVE` on, a
+   compound question makes one per part, up to 4 (`RAG_MAX_PLAN_STEPS`). A preset with a
    fallback chain - Gemini's has three fallback models - sends a throttled or failing
    call to the next model, so one call can become several requests. A general-knowledge
    reply ([D8](institutional-decisions.md)) is one more call.

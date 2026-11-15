@@ -62,15 +62,21 @@ overrides all of them. Degradation adds a note to the answer and increments
 
 ## Context
 
-Up to 8 passages within an 8000-character budget; duplicates and fragments are dropped.
-Each passage carries its marker, document title and page; table passages carry their
-column labels; passages with instruction-like text are marked as data.
+Up to 8 passages within an 8000-character budget when the answer will be quoted; up to 12
+within 14,000 characters (`RAG_CONTEXT_BUDGET_GENERATIVE`, `RAG_MAX_PASSAGES_GENERATIVE`)
+when a model will write it, including - in whatever room is left - the chunk before and
+after each of the top 3 passages (`RAG_NEIGHBOUR_ANCHORS`), so a list that runs over a
+chunk boundary arrives whole.
+Duplicates and fragments are dropped. Each passage carries its marker, document title and
+page; table passages carry their column labels; passages with instruction-like text are
+marked as data. What a model is shown, and why, is in
+[llm-providers.md](llm-providers.md#what-a-model-is-shown-and-what-happens-when-it-is-wrong).
 
 ## Answering
 
 | Answerer | Setting | Generative | Behaviour |
 |---|---|---|---|
-| Extractive (default) | *(empty)* | no | Quotes up to three sentences verbatim; cannot hallucinate; will not quote a table header alone or a flagged passage |
+| Extractive (default) | *(empty)* | no | Quotes up to three sentences verbatim; cannot hallucinate; will not quote a table header alone or a flagged passage, and declines a question that names a code or a year no retrieved passage mentions |
 | Claude | `…rag.claude.ClaudeAnswerer` | yes | Anthropic API or Bedrock (`RAG_ANSWERER_BACKEND`) |
 | OpenAI-compatible | `…rag.openai_compat.OpenAICompatibleAnswerer` | yes | Presets for Gemini, Groq, Cerebras, OpenRouter, Mistral, GitHub Models, Ollama, OpenAI; any `/chat/completions` server. Calls go through the LLM gateway (`rag/gateway.py`): a chain of provider:model links (`RAG_ANSWERER_CHAIN`), a daily budget shared by every process, and a reserve kept for chat - see [llm-providers.md](llm-providers.md) |
 
@@ -88,6 +94,26 @@ still rejected. Real calls: the Gemini preset on Google's free tier, measured in
 on 2026-10-11 and answering on the public deployment since; no other preset has been run
 against its live backend from this repository, and no evaluation has run through one.
 
+**When no model can answer** - no key, every link used up for the day, a provider failure -
+the extractive answerer quotes instead, so on a free tier readers see it every day
+(`rag/quoting.py`). It still selects sentences by the words they share with the question,
+so it cannot follow a paraphrase, but it no longer makes the mistakes that looked like
+answers when it was measured with every model call failing:
+
+- A title or clause heading comes after the sentences that qualify, and one that states no
+  figure cannot answer "how much" or "when"; such a question prefers a sentence with a
+  figure or a date.
+- A table row is matched together with its column labels, and dotted codes ("B.Tech",
+  "M.Tech") are single terms, so the wrong programme's row is not quoted first.
+- Each part of a two-part question can be answered by its own sentence.
+- A code or a year in the question that no retrieved passage, title or column mentions
+  ("PhD" against a fee table that has no PhD row; "2023-24" against the 2024-25 circular)
+  makes it decline instead of quoting the nearest thing.
+- A sentence cut by a chunk boundary is marked with an ellipsis.
+
+Measured offline on benchmark v3: wrong answers to questions that should be refused 4 → 1,
+correct answers 14 → 15; v2 kept its 27 correct.
+
 Every answer records which model actually wrote it and what the provider reported
 (`Message.metadata.llm`), and the chat payload names it for people (`model_display`) and
 says when the answer was quoted because no model could take it (`degraded`).
@@ -102,8 +128,11 @@ An answer is returned only if:
 2. it cites at least one passage,
 3. **every figure it states** (numbers, percentages, amounts, dates, identifiers) appears
    in a passage it cites — formatting-insensitive (`75%` = `75 percent`,
-   `85,000` = `85000`, `Rs 1200` = `Rs1200`, `10 PM` = `10:00 p.m.`, list ordinals and
-   markers ignored; structured identifiers such as `REG/2024/117` must match exactly), and
+   `85,000` = `85000`, `Rs 1200` = `Rs1200`, `10 PM` = `10:00 p.m.`,
+   `31 March 2025` = `31.03.2025`, `2024-25` = `2024-2025`, `7` = a passage's "seven days",
+   list ordinals and markers ignored; a year the cited document's title states counts;
+   structured identifiers such as `REG/2024/117`, a date that can be read two ways, and a
+   date that does not exist must match exactly), and
 4. at least 25 % of its content words appear in the cited passages (a backstop against
    answering a different subject).
 
@@ -114,6 +143,11 @@ never reported as an ungrounded answer.
 Check 3 is the gate. The earlier design gated on a 55 % word-overlap ratio, which rejected
 correct, well-written answers and passed a fluent answer that changed 75 to 80; the reasons
 are recorded in `grounding.py`.
+
+A model's answer that fails check 3 may have a missing citation added, or be asked for once
+more, before it is withheld; the rules, and the counter that records each case, are in
+[llm-providers.md](llm-providers.md#what-a-model-is-shown-and-what-happens-when-it-is-wrong).
+If the check itself raises, the answer is withheld, never shown unchecked.
 
 ## Follow-ups
 
@@ -132,8 +166,9 @@ the attendance question — and is pinned by a regression test that fails withou
 
 ## Planning
 
-Questions that ask several things are split (up to `RAG_MAX_PLAN_STEPS`, 4) and each part
-is answered and grounded independently; markers are renumbered into one answer, and parts
+When the answer will be quoted, questions that ask several things are split (up to
+`RAG_MAX_PLAN_STEPS`, 4) and each part is answered and grounded independently (a model
+reads the question whole unless `RAG_PLAN_WHEN_GENERATIVE` is on); markers are renumbered into one answer, and parts
 that could not be answered are listed. A widened follow-up is planned on the user's own
 words, and each part is answered against its own words with the borrowed terms widening its
 retrieval - planned on the widened string, the borrowed terms used to split off into a part
@@ -160,4 +195,5 @@ that re-asked the previous turn.
 - **Telemetry.** Per-stage timings (`retrieval`, `rerank`, `generation`, `grounding`) are
   returned with every answer and exported as `adi_rag_stage_duration_seconds{stage}`;
   answerer latency as `adi_llm_duration_seconds{model}`; tokens and characters per model;
-  abstentions by reason.
+  abstentions by reason; first drafts that failed grounding and were then repaired or
+  retried as `adi_rag_grounding_recoveries_total{outcome}`.
