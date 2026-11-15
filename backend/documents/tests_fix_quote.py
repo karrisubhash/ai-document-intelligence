@@ -739,6 +739,18 @@ class OwnSituationIsNotWhatIsAskedTests(SimpleTestCase):
                 self.assertFalse(response.abstained, question)
                 self.assertIn("4500 rupees per semester", response.text)
 
+    def test_a_question_about_a_student_with_a_figure_is_all_question(self):
+        """ "A student with 60 percent attendance" is own-situation text for the
+        grounding rule, but a question made of it is not a statement the year in
+        it could be set aside with."""
+        circular = prose(1, BUS_CIRCULAR)
+        for question in (
+            "Can a student with 60 percent attendance get the 2023-24 bus pass?",
+            "Is a student with 60 percent attendance charged for a 2022 bus pass?",
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(ask(question, circular).abstained, question)
+
     def test_a_year_asked_about_is_still_refused(self):
         circular = prose(1, BUS_CIRCULAR)
         for question in (
@@ -802,3 +814,89 @@ class ASentenceThatHoldsTheAnswerIsNotDroppedTests(SimpleTestCase):
 
         self.assertIn("200 pages per semester", response.text)
         self.assertIn("fee of 2 rupees per page", response.text)
+
+
+class WhatTheAnswerAlreadyHasIsNotAddedAgainTests(SimpleTestCase):
+    """The offline v2 gate caught the cost of the rule above: a sentence that adds
+    ONE term and shares another with the first was appended even when the term was
+    the asker's own figure or the same word in another form."""
+
+    CONDONATION = (
+        "A student with attendance between 65 and 75 percent may apply for "
+        "condonation on medical grounds, supported by a certificate.\n"
+        "A student with an aggregate below 60 percent, or with a pending backlog, "
+        "is not eligible for a scholarship."
+    )
+    AID = (
+        "Families whose annual income is below 300000 rupees may apply for aid, "
+        "which covers the examination fee in full."
+    )
+
+    def test_a_number_the_asker_gave_about_themselves_is_not_a_second_part(self):
+        response = ask(
+            "Can a student with 60 percent attendance apply for condonation?",
+            prose(1, self.CONDONATION),
+        )
+
+        self.assertFalse(response.abstained)
+        self.assertIn("apply for condonation", response.text)
+        self.assertNotIn("aggregate below 60 percent", response.text)
+
+    def test_a_number_that_is_asked_about_still_picks_its_sentence(self):
+        """Not the asker's own: nothing says "I" or "student with"."""
+        response = ask(
+            "What happens to attendance of 60 percent and condonation?",
+            prose(1, self.CONDONATION),
+        )
+
+        self.assertIn("apply for condonation", response.text)
+        self.assertIn("below 60 percent", response.text)
+
+    def test_the_same_word_in_another_form_is_not_a_part_still_missing(self):
+        """ "examination" is not "exam": the stemmer does not join them, and the
+        row under "Exam Fee" was set beside an aid sentence for the other form."""
+        response = ask(
+            "What is the examination fee for M.Tech CSE?",
+            table(1),
+            prose(2, self.AID),
+        )
+
+        self.assertIn("95000", response.text)
+        self.assertNotIn("annual income", response.text)
+
+    def test_variants_the_stemmer_does_not_join(self):
+        for term, others in (
+            ("examination", {"exam", "fee"}),
+            ("exam", {"examination"}),
+            ("charge", {"charg"}),
+            ("booking", {"book"}),
+        ):
+            with self.subTest(term=term):
+                self.assertTrue(quoting.is_variant_of(term, others))
+
+    def test_things_that_are_not_variants(self):
+        for term, others in (
+            ("fee", {"feed"}),  # under four letters
+            ("hostel", {"hostelsandmoreinfo"}),  # more than seven letters longer
+            ("2021", {"20215"}),  # numbers are never variants
+            ("fee", {"fee"}),  # the same word is covered, not a variant
+            ("tuition", {"hostel"}),
+            ("exam", set()),
+        ):
+            with self.subTest(term=term, others=others):
+                self.assertFalse(quoting.is_variant_of(term, others))
+
+    def test_the_figures_a_user_gives_about_themselves(self):
+        self.assertEqual(
+            quoting.own_figure_terms(
+                "Can a student with 60 percent attendance apply for condonation?"
+            ),
+            frozenset({"60"}),
+        )
+        self.assertEqual(
+            quoting.own_figure_terms("I have 70 percent. What is the minimum?"),
+            frozenset({"70"}),
+        )
+        self.assertEqual(
+            quoting.own_figure_terms("Is the minimum 70 percent?"), frozenset()
+        )

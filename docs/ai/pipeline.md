@@ -117,7 +117,12 @@ answers when it was measured with every model call failing:
   is added only when it brings terms of its own - not the document title's words - and one
   that brings just a single term must also share a term with the first sentence, so a
   sentence that merely uses a stray word of the question ("applied", "considered") is not
-  appended.
+  appended. Two kinds of term never earn a second sentence: a number the asker gave about
+  themselves ("60" in "a student with 60 percent attendance"), and a word the answer already
+  has in another form ("examination" for a row under "Exam Fee"). The price of this rule is
+  that a sentence about a neighbouring case can still follow the right one ("An
+  undergraduate student may borrow up to four books" after the postgraduate limit), because
+  a word-overlap ranker cannot tell it from the sentence that holds the missing term.
 - A code or a year in the question that the documents show a gap for makes it decline
   instead of quoting the nearest thing: a dotted or mixed-case code ("B.Arch", "PhD")
   that no retrieved passage mentions, where the passages enumerate codes (prose that names

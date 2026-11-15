@@ -235,6 +235,9 @@ class _Candidate:
     trailing: bool
     # A table row (it is quoted with its columns), as opposed to a sentence.
     row: bool = False
+    # Every term the sentence has (a row's include its column labels), not only
+    # those the question asked about.
+    terms: frozenset = frozenset()
 
     @property
     def order(self):
@@ -329,6 +332,11 @@ class ExtractiveAnswerer:
             focus_terms = (focus_terms - aside) or focus_terms
             asked = focus_terms or query_terms
 
+        # ...and the figures it gives about itself ("60" in "a student with 60
+        # percent attendance") pick the first sentence like any term, but a
+        # sentence that only repeats one is not a second part of the answer.
+        own_figures = quoting.own_figure_terms(focus_text or question)
+
         wants_figure = quoting.wants_figure(focus_text or question)
         date_question = quoting.wants_date(focus_text or question)
 
@@ -415,6 +423,7 @@ class ExtractiveAnswerer:
                     trailing=position == len(sentences) - 1
                     and quoting.ends_cut(sentence),
                     row=looks_like_a_row and not is_header,
+                    terms=frozenset(terms),
                 )
                 # A sentence that matches enough terms but not enough of the
                 # WHOLE question may still answer one part of it (below).
@@ -570,7 +579,16 @@ class ExtractiveAnswerer:
                 )
 
             while len(chosen) < self.MAX_SENTENCES:
-                uncovered = asked - covered - form_terms
+                # A word the answer already has in another form ("examination"
+                # for a row under "Exam Fee") is not one it still lacks, and a
+                # number the asker gave about themselves is not a part of the
+                # question.
+                shown = set().union(*(candidate.terms for candidate in chosen))
+                uncovered = {
+                    term
+                    for term in asked - covered - form_terms - own_figures
+                    if not quoting.is_variant_of(term, shown)
+                }
                 if not uncovered:
                     break
                 options = []

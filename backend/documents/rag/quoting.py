@@ -441,14 +441,57 @@ def year_facts(text: str) -> tuple:
     return ranges, years
 
 
+def _own_situation_clauses(question: str) -> list:
+    """The clauses in which the user describes THEMSELVES, as statements.
+
+    A clause with a question mark in it is never one: "Can a student with 60
+    percent attendance get the 2023-24 bus pass?" is a question whose subject is
+    a student with 60 percent (that is own-situation text for the GROUNDING rule,
+    which only decides what an answer may repeat), but it is ALL question, and
+    taking it out would leave nothing to ask about."""
+    return [
+        clause
+        for clause in fact_forms.user_stated_clauses(question)
+        if "?" not in clause
+    ]
+
+
 def _without_own_situation(question: str) -> str:
     """The question with the clauses in which the user describes THEMSELVES taken
     out ("I am a B.Tech student", "I joined in 2022", "as a PhD scholar"): who is
     asking is not what is asked. A question that names its asker's programme or
     year is about the rule, not about that programme or year."""
-    for clause in fact_forms.user_stated_clauses(question):
+    for clause in _own_situation_clauses(question):
         question = question.replace(clause, " ")
     return question
+
+
+def own_figure_terms(question: str) -> frozenset:
+    """The numbers the user gives about themselves ("60" in "a student with 60
+    percent attendance", "70" in "I have 70 percent"). They describe the asker, so
+    a sentence that merely repeats the number ("... below 60 percent ...") is not a
+    second part of the answer; the first sentence is still chosen with them."""
+    figures = set()
+    for clause in fact_forms.user_stated_clauses(question):
+        figures |= {term for term in quote_terms(clause) if term.isdigit()}
+    return frozenset(figures)
+
+
+def is_variant_of(term: str, others) -> bool:
+    """Whether `term` is another form of a term in `others` that the stemmer does
+    not join ("examination" and "exam", "charge" and "charg"): one is the other
+    plus up to seven letters, and both are at least four letters long. Only used to
+    keep a sentence from being added for a word the answer already has in another
+    form, so a wrong join costs an addition and never an answer."""
+    if not term.isalpha() or len(term) < 4:
+        return False
+    for other in others:
+        if other == term or not other.isalpha() or len(other) < 4:
+            continue
+        short, long = sorted((term, other), key=len)
+        if long.startswith(short) and len(long) - len(short) <= 7:
+            return True
+    return False
 
 
 def own_situation_terms(question: str, passages) -> frozenset:
@@ -462,7 +505,7 @@ def own_situation_terms(question: str, passages) -> frozenset:
     semester" covered 2 of 6, under the floor). A term some passage DOES contain
     stays, because it can pick a row: "I am a B.Tech CSE student, what is my
     tuition?" is answered from the CSE row."""
-    clauses = fact_forms.user_stated_clauses(question)
+    clauses = _own_situation_clauses(question)
     if not clauses:
         return frozenset()
     mine = set()
