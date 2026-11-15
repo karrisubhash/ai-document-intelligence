@@ -90,13 +90,17 @@ A sensible free setup for the public site: `RAG_ANSWERER_CHAIN=gemini,cerebras,g
 answer Gemini writes sends Google up to about 14,000 characters of the asker's documents
 (see below), on a tier whose terms allow training on them.
 
-**Two presets ask for less reasoning, and that is unverified.** `groq` and `cerebras` send
-`reasoning_effort: "low"` (gpt-oss is a reasoning model and bills its hidden reasoning
-against `max_tokens`, so a short answer could be cut off and recorded as a failure), and
-`groq` also caps the reply it asks for at 1,500 tokens - its window counts the reply a request
-*asks* for, not the one it gets. Neither was measured against a live key from here. After
-adding a key, press **Test** on System status; a provider that rejects the parameter answers
-400, and the chain moves on to the next link rather than failing the question.
+**Two presets ask for less reasoning.** `groq` and `cerebras` send `reasoning_effort: "low"`
+(gpt-oss is a reasoning model and bills its hidden reasoning against `max_tokens`, so a short
+answer could be cut off and recorded as a failure), and `groq` also caps the reply it asks
+for at 1,500 tokens - its window counts the reply a request *asks* for, not the one it gets.
+Both providers' documentation (read 2026-11-15) lists `reasoning_effort` with the values
+low, medium and high as a top-level parameter for gpt-oss-120b, and Cerebras states that
+reasoning tokens count against the completion cap; the model ids (`openai/gpt-oss-120b` on
+Groq, `gpt-oss-120b` on Cerebras, 65K context on its free tier) are listed there too. Neither
+preset has been called with a real key from here. After adding a key, press **Test** on
+System status; a provider that rejects the parameter answers 400, and the chain moves on to
+the next link rather than failing the question.
 
 A **413** ("request too large": a prompt that does not fit a free tier's window) is handled
 like a 429 - handed back, not counted, and the link rested for a minute - instead of costing
