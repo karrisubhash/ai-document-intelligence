@@ -1535,3 +1535,133 @@ class IdentifiersWithALetterSuffixStayWholeTests(Base):
         self.assertEqual(grounding._split_glued("rs500/week"), ["500"])
         # ...but a month is not a unit: "15-Sep" is a date.
         self.assertEqual(grounding._split_glued("15-sep"), ["15-sep"])
+
+
+# --- found by running the benchmark through a real model ---------------------
+
+NBSP = chr(0xA0)
+NNBSP = chr(0x202F)
+THIN_SPACE = chr(0x2009)
+FIGURE_SPACE = chr(0x2007)
+HYPHEN_LIKES = {
+    "hyphen U+2010": chr(0x2010),
+    "non-breaking hyphen U+2011": chr(0x2011),
+    "figure dash U+2012": chr(0x2012),
+    "minus sign U+2212": chr(0x2212),
+    "small hyphen-minus U+FE63": chr(0xFE63),
+    "fullwidth hyphen-minus U+FF0D": chr(0xFF0D),
+}
+SPACES = (
+    ("no-break space", NBSP),
+    ("narrow no-break space", NNBSP),
+    ("thin space", THIN_SPACE),
+    ("figure space", FIGURE_SPACE),
+)
+REGISTER = (
+    "A student must register with the placement cell before 15 August of the "
+    "final year."
+)
+CURFEW = "The hostel curfew is 10 pm on weekdays and 11 pm on Saturdays."
+YEAR_FEES = (
+    "Fee structure for the year 2024-25 is given below. B.Tech CSE tuition is "
+    "85000 per year."
+)
+CONDONATION = (
+    "A student with attendance between 65-75 percent may apply for condonation."
+)
+FINE = "A library book returned late attracts a fine of 5 rupees per day."
+
+
+class LookalikeCharacterTests(Base):
+    """gpt-oss, the second link of the live chain, writes a NARROW NO-BREAK SPACE
+    between a number and its unit or month in most of its answers and a
+    NON-BREAKING HYPHEN in "2024-25". Every pattern looked for an ordinary space
+    and hyphen: a date whose space was not read was only its day number, which "15
+    August" supports ("15 September" was ACCEPTED, G1), and a range whose hyphen
+    was not read was two figures nobody wrote (a correct answer was refused, and a
+    Word or PDF passage with a no-break space in its date was refused the same
+    way)."""
+
+    def test_a_date_with_a_lookalike_space_is_still_a_date(self):
+        for name, space in SPACES:
+            with self.subTest(space=name):
+                self.accepted(f"Register before 15{space}August [1].", REGISTER)
+                self.rejected(f"Register before 15{space}September [1].", REGISTER)
+                self.rejected(f"Register before 16{space}August [1].", REGISTER)
+
+    def test_a_passage_with_a_lookalike_space_in_its_date_still_supports_it(self):
+        for name, space in SPACES:
+            passage = REGISTER.replace("15 August", f"15{space}August")
+            with self.subTest(space=name):
+                self.accepted("Register before 15 August [1].", passage)
+                self.rejected("Register before 15 September [1].", passage)
+
+    def test_a_time_an_amount_and_a_percentage_with_a_lookalike_space(self):
+        self.accepted(f"The curfew on Saturdays is 11{NNBSP}pm [1].", CURFEW)
+        self.accepted(f"The curfew on Saturdays is 11.00{NNBSP}p.m. [1].", CURFEW)
+        self.rejected(f"The curfew on Saturdays is 9{NNBSP}pm [1].", CURFEW)
+        self.accepted(f"The fine is 5{NNBSP}rupees per day [1].", FINE)
+        self.rejected(f"The fine is 50{NNBSP}rupees per day [1].", FINE)
+        self.accepted(f"You need 75{NNBSP}percent [1].", "A minimum of 75 percent.")
+        self.rejected(f"You need 70{NNBSP}percent [1].", "A minimum of 75 percent.")
+
+    def test_a_range_written_with_a_lookalike_hyphen(self):
+        for name, dash in HYPHEN_LIKES.items():
+            with self.subTest(dash=name):
+                self.accepted(f"The tuition for 2024{dash}25 is 85000 [1].", YEAR_FEES)
+                self.rejected(f"The tuition for 2023{dash}24 is 85000 [1].", YEAR_FEES)
+                self.accepted(f"Between 65{dash}75 percent [1].", CONDONATION)
+                self.rejected(f"Between 60{dash}75 percent [1].", CONDONATION)
+
+    def test_a_digit_of_another_script_is_that_digit(self):
+        passage = "B.Tech CSE tuition is 85000 per year."
+        for name, zero in (
+            ("fullwidth", 0xFF10),
+            ("arabic-indic", 0x660),
+            ("devanagari", 0x966),
+        ):
+            right = "".join(chr(zero + int(digit)) for digit in "85000")
+            wrong = "".join(chr(zero + int(digit)) for digit in "95000")
+            with self.subTest(script=name):
+                self.accepted(f"Tuition is {right} per year [1].", passage)
+                self.rejected(f"Tuition is {wrong} per year [1].", passage)
+                # ...and a document in that script, answered in ASCII digits.
+                written = f"B.Tech CSE tuition is {right} per year."
+                self.accepted("Tuition is 85000 per year [1].", written)
+                self.rejected("Tuition is 95000 per year [1].", written)
+
+    def test_a_citation_with_a_lookalike_hyphen_or_space(self):
+        answer = "Register before 15 August and the curfew is 10 pm [%s]."
+        for name, dash in HYPHEN_LIKES.items():
+            with self.subTest(dash=name):
+                report = self.accepted(answer % f"1{dash}2", REGISTER, CURFEW)
+                self.assertEqual(report.cited_markers, (1, 2))
+        for inner in (f"1,{NNBSP}2", f"{NBSP}1,{NBSP}2{NNBSP}", f"1{THIN_SPACE}and 2"):
+            with self.subTest(inner=inner):
+                report = self.accepted(answer % inner, REGISTER, CURFEW)
+                self.assertEqual(report.cited_markers, (1, 2))
+
+    def test_what_a_reader_is_shown_is_not_altered(self):
+        report = self.accepted(f"Register before 15{NNBSP}August [1].", REGISTER)
+
+        self.assertIn(f"15{NNBSP}August", report.text)
+
+    def test_lookalikes_changes_only_spaces_hyphens_and_decimal_digits(self):
+        plain = "Fee Rs 500 - due 15 August 2024 (see [1])"
+        self.assertEqual(facts.lookalikes(plain), plain)
+        self.assertEqual(
+            facts.lookalikes(f"a{NNBSP}b{chr(0x2011)}c{chr(0x668)}"), "a b-c8"
+        )
+        # Not decimal digits, not spaces, not the hyphens the patterns name.
+        for text in (
+            "5" + chr(0x2075),  # superscript five
+            "65" + EN + "75",  # the range patterns name the en dash
+            "65" + EM + "75",
+            "a" + chr(0x200B) + "b",  # a format character is strip_format's
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(facts.lookalikes(text), text)
+
+    def test_strip_format_still_strips_only_format_characters(self):
+        text = f"a{NNBSP}b{chr(0x2011)}c{chr(0x200B)}"
+        self.assertEqual(facts.strip_format(text), f"a{NNBSP}b{chr(0x2011)}c")

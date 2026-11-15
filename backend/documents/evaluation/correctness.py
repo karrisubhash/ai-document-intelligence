@@ -151,6 +151,9 @@ def _number_span(match) -> str:
 def _normalise(text: str, clocks=frozenset()):
     """(the text with equivalent spellings in one form, the clock times it states)."""
     text = grounding.MARKER.sub(" ", fact_forms.normalize_markers(text or ""))
+    # The patterns below look for an ordinary space and hyphen, and gpt-oss writes
+    # "11<NARROW NO-BREAK SPACE>pm" and "2024<NON-BREAKING HYPHEN>25".
+    text = fact_forms.lookalikes(text)
     text = _CURRENCY.sub("", text)
     text = _CLOCK_SUFFIXED.sub(_suffixed_clock, text)
     text = _CLOCK_COLON.sub(lambda m: _clock(int(m.group(1)), int(m.group(2))), text)

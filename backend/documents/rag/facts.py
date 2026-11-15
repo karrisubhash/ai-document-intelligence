@@ -98,6 +98,14 @@ _MONTH = "(?:" + "|".join(sorted(MONTH_NUMBER, key=len, reverse=True)) + ")"
 
 _FLAGS = re.I | re.ASCII
 
+# The hyphens that are not the ASCII one: the hyphen, the non-breaking hyphen (what
+# gpt-oss writes in "2024-25"), the figure dash, the minus sign and two
+# compatibility forms. Built from code points so no editor or tool can turn them
+# into the one they look like. The en and em dash are named in the patterns below.
+_HYPHEN_CHARS = "".join(
+    chr(code) for code in (0x2010, 0x2011, 0x2012, 0x2212, 0xFE63, 0xFF0D)
+)
+
 _DAY_MONTH_YEAR = re.compile(
     r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(" + _MONTH + r")\b\.?,?\s+(\d{4})\b",
     _FLAGS,
@@ -146,13 +154,38 @@ _NUMBER_RANGE = re.compile(r"(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)", re.ASCII)
 
 _OPEN = r"[\[\N{FULLWIDTH LEFT SQUARE BRACKET}\N{LEFT BLACK LENTICULAR BRACKET}]"
 _CLOSE = r"[\]\N{FULLWIDTH RIGHT SQUARE BRACKET}\N{RIGHT BLACK LENTICULAR BRACKET}]"
-_REF = r"(?:(?:sources?|passages?|refs?\.?|references?)\s*)?\d{1,3}"
-_REF_SEPARATOR = r"\s*(?:[,;&]|\band\b|\bto\b|[-\N{EN DASH}\N{EM DASH}])\s*"
+# \s is ASCII-only under re.ASCII, and a model puts a no-break space where it
+# writes one ("[1,<NARROW NO-BREAK SPACE>2]"): the space separators count too.
+_WS = (
+    r"[\s"
+    + "".join(chr(code) for code in (0xA0, 0x1680, *range(0x2000, 0x200B), 0x202F))
+    + "".join(chr(code) for code in (0x205F, 0x3000))
+    + r"]*"
+)
+_REF = r"(?:(?:sources?|passages?|refs?\.?|references?)" + _WS + r")?\d{1,3}"
+_REF_SEPARATOR = (
+    _WS
+    + r"(?:[,;&]|\band\b|\bto\b|[-\N{EN DASH}\N{EM DASH}"
+    + _HYPHEN_CHARS
+    + r"])"
+    + _WS
+)
 # "[1]", "[ 1 ]", "[Source 1]", "[1, 2]", "[1; 2]", "[1 and 2]", "[1-2]",
 # "[Source 1, Source 2]" and the same in full-width brackets. "(1)" is not
 # here: a number in parentheses is far too often a number.
 CITATION_GROUP = re.compile(
-    _OPEN + r"\s*\^?\s*(" + _REF + r"(?:" + _REF_SEPARATOR + _REF + r")*)\s*" + _CLOSE,
+    _OPEN
+    + _WS
+    + r"\^?"
+    + _WS
+    + "("
+    + _REF
+    + r"(?:"
+    + _REF_SEPARATOR
+    + _REF
+    + r")*)"
+    + _WS
+    + _CLOSE,
     _FLAGS,
 )
 # Kept for what imported it under its old name.
@@ -306,6 +339,36 @@ def strip_format(text: str) -> str:
     return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
 
 
+def lookalikes(text: str) -> str:
+    """Text with every space separator read as a space, every hyphen-like character
+    as a hyphen and every decimal digit as 0-9.
+
+    Every pattern here looks for an ordinary space, hyphen and digit, and real text
+    is not that tidy. gpt-oss writes "15<NARROW NO-BREAK SPACE>August" and
+    "2024<NON-BREAKING HYPHEN>25" in most of its answers, and a Word or PDF
+    document puts a no-break space between a number and its unit. A date whose
+    space is not read is only the bare day, which "15 August" supports: "15
+    September" was accepted. A range whose hyphen is not read is two figures nobody
+    wrote: the right answer was refused. Only for READING figures, like
+    strip_format: what a reader is shown is never altered. The en and em dash stay
+    as they are, the range patterns name them.
+    """
+    if text.isascii():
+        return text
+    out = []
+    for char in text:
+        if char < chr(128):
+            out.append(char)
+        elif unicodedata.category(char) == "Zs":
+            out.append(" ")
+        elif char in _HYPHEN_CHARS:
+            out.append("-")
+        else:
+            digit = unicodedata.decimal(char, None)
+            out.append(char if digit is None else str(digit))
+    return "".join(out)
+
+
 def digit_commas(text: str) -> str:
     """A comma between digits, read as a thousands separator only when it is one.
 
@@ -323,8 +386,9 @@ def digit_commas(text: str) -> str:
 
 
 def clean(text: str) -> str:
-    """Text as figures are read from it: format characters gone, commas read."""
-    return digit_commas(strip_format(text))
+    """Text as figures are read from it: format characters gone, lookalike spaces,
+    hyphens and digits written the ordinary way, commas read."""
+    return digit_commas(lookalikes(strip_format(text)))
 
 
 def prepare(text: str) -> str:

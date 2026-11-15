@@ -125,6 +125,26 @@ class CorrectnessSpellingTests(SimpleTestCase):
             correctness.is_correct("Between 65-75%.", "between 65 and 80 percent")
         )
 
+    def test_a_model_s_no_break_space_and_hyphen_are_the_ordinary_ones(self):
+        """A real-model run flagged six right answers wrong because gpt-oss writes
+        a NARROW NO-BREAK SPACE between a number and its unit or month."""
+        narrow = chr(0x202F)
+        hyphen = chr(0x2011)
+        for answer, expected in (
+            (f"The curfew is 11{narrow}pm.", "11 pm"),
+            (f"Register before 15{narrow}August.", "15 August"),
+            (f"The fine is 5{narrow}rupees per day.", "5 rupees per day"),
+            (f"It covers 2024{hyphen}25.", "2024-25"),
+        ):
+            with self.subTest(answer=answer):
+                self.assertTrue(correctness.is_correct(answer, expected))
+        self.assertFalse(
+            correctness.is_correct(f"Register before 15{narrow}September.", "15 August")
+        )
+        self.assertFalse(
+            correctness.is_correct(f"It covers 2023{hyphen}24.", "2024-25")
+        )
+
 
 class CorrectnessGuardTests(SimpleTestCase):
     """E1: what a number must not be credited for."""
