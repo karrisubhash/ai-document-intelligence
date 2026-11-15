@@ -29,6 +29,9 @@ differently:
   401, 403      the ACCOUNT is refused: skip every link on that endpoint, but
                 another provider's links still get their turn
   no status     the endpoint is unreachable or broke mid-reply: likewise
+  200, unusable the caller's `acceptable` test refused the reply (empty, cut
+                off, filtered): try the next. Served and counted, not benched,
+                and not marked as having answered; see Gateway.run
 
 Only when every link has failed does the caller see an error. The SDK's own
 retries - which honour Retry-After, 14 s on a free-tier 429 - are kept only
@@ -131,6 +134,13 @@ class OpenAICompatibleNotConfigured(Unavailable):
         super().__init__(NOT_CONFIGURED, None, detail)
 
 
+class UnusableCompletion(RuntimeError):
+    """A completion the caller's `acceptable` test refused: served and
+    counted, with nothing in it to use (an empty reply, one cut off at the
+    token limit, one a content filter stopped). Recorded as that link's last
+    error so the status panel can say why it was passed over; never raised."""
+
+
 class NoChoicesReturned(RuntimeError):
     """A 200 with no `choices` - a provider failure wearing a success.
 
@@ -221,6 +231,33 @@ class Completion:
     # one answered in its place ("provider/model").
     link: Link | None = None
     fell_back_from: str = ""
+    # Completions an earlier link served that the caller's `acceptable` test
+    # refused, before this one answered. They were billed, so what they used
+    # is part of what this answer cost (see spend).
+    skipped: list = field(default_factory=list)
+
+
+def spend(completion: "Completion") -> tuple:
+    """(prompt tokens, completion tokens, cost or None) of an answer: the
+    completion that was kept and every one passed over before it."""
+    prompt = reply = 0
+    for served in (completion, *completion.skipped):
+        usage = served.usage
+        prompt += getattr(usage, "prompt_tokens", 0) or 0
+        reply += getattr(usage, "completion_tokens", 0) or 0
+
+    kept = getattr(completion.usage, "cost", None)
+    if kept is not None and not isinstance(kept, (int, float)):
+        return prompt, reply, kept
+    costs = [
+        cost
+        for cost in (
+            kept,
+            *(getattr(served.usage, "cost", None) for served in completion.skipped),
+        )
+        if isinstance(cost, (int, float))
+    ]
+    return prompt, reply, (sum(costs) if costs else None)
 
 
 @dataclass
@@ -373,20 +410,54 @@ def _setting(name: str) -> str:
     return (getattr(settings, name, "") or "").strip()
 
 
-def _extras(preset, *, explicit_chain: bool) -> tuple:
-    """A preset's request extras, with RAG_ANSWERER_REASONING_EFFORT applied.
+def _extras(preset, model: str = "", *, explicit_chain: bool) -> tuple:
+    """A preset's request extras for `model`, with
+    RAG_ANSWERER_REASONING_EFFORT applied.
 
     In a single-provider configuration the override applies as it always
     has. In an explicit chain it only changes links whose preset already
     sends `reasoning_effort`: providers that do not implement it answer a
     400, and one global knob must not break half the chain.
+
+    Two guards, because a 400 is not capacity - it is refunded to nobody, so
+    every question pays a counted request that can never succeed:
+
+    - a model of a family the preset's extras are not for (a llama model
+      pinned on Groq, whose extra is for gpt-oss) is sent none of them and no
+      override (Preset.extras_models);
+    - an override the provider does not document ("none" is Gemini's; gpt-oss
+      takes low, medium or high) is not sent to it, and is logged
+      (Preset.effort_values).
     """
-    extras = dict(preset.request_extras) if preset else {}
+    takes_extras = not (
+        preset
+        and preset.extras_models
+        and model
+        and not model.startswith(tuple(preset.extras_models))
+    )
+    extras = dict(preset.request_extras) if preset and takes_extras else {}
     effort = _setting("RAG_ANSWERER_REASONING_EFFORT")
     if effort.lower() == "default":
         extras.pop("reasoning_effort", None)
-    elif effort and (not explicit_chain or "reasoning_effort" in extras):
-        extras["reasoning_effort"] = effort
+    elif (
+        effort and takes_extras and (not explicit_chain or "reasoning_effort" in extras)
+    ):
+        if (
+            preset
+            and preset.effort_values
+            and effort.lower() not in preset.effort_values
+        ):
+            logger.warning(
+                "llm.effort_not_sent",
+                extra={
+                    "reason": "this provider does not document that "
+                    "reasoning_effort value, so its own is kept",
+                    "value": effort,
+                    "model": model,
+                },
+            )
+        else:
+            extras["reasoning_effort"] = effort
     return tuple(extras.items())
 
 
@@ -470,11 +541,18 @@ def _single_provider_links() -> tuple:
     else:
         fallbacks = preset.fallback_models if (preset and not model) else ()
 
-    extras = _extras(preset, explicit_chain=False)
     _warn_if_base_url_looks_wrong(base_url)
     models = [primary, *(m for m in fallbacks if m != primary)]
     return tuple(
-        _link(provider, m, base_url, key_env, preset, trains=trains, extras=extras)
+        _link(
+            provider,
+            m,
+            base_url,
+            key_env,
+            preset,
+            trains=trains,
+            extras=_extras(preset, m, explicit_chain=False),
+        )
         for m in dict.fromkeys(models)
     )
 
@@ -527,7 +605,6 @@ def _explicit_links(chain: str) -> tuple:
                 f"one of {', '.join(sorted(PRESETS))}, or `custom` with "
                 "RAG_ANSWERER_BASE_URL."
             )
-        extras = _extras(preset, explicit_chain=True)
         models = [model] if model else [preset.model, *preset.fallback_models]
         for name in models:
             links.append(
@@ -538,7 +615,7 @@ def _explicit_links(chain: str) -> tuple:
                     preset.key_env,
                     preset,
                     trains=preset.trains_on_free_tier,
-                    extras=extras,
+                    extras=_extras(preset, name, explicit_chain=True),
                 )
             )
 
@@ -799,12 +876,25 @@ class Gateway:
         on_reset=None,
         trace: Trace | None = None,
         pin: Link | None = None,
+        acceptable=None,
     ) -> Completion:
         """One completion: `build(link)` makes each link's request.
 
         Raises the LAST link's error when every link failed, or Unavailable
         when no link was eligible to try. `pin` sends to that one link only,
         whatever its state - an explicit probe, not a question.
+
+        `acceptable(completion) -> bool` is the caller's test of a reply that
+        did not fail but may be no use: an empty one, one cut off at the token
+        limit, one a content filter stopped. A reply it refuses is a failure
+        of that link, not an answer: the next link is tried, as for a 500. It
+        was served, so its request stays counted against the day's allowance
+        and the link is not marked as having answered cleanly; the link is not
+        benched or skipped with its endpoint, because the next model on the
+        same account may well do better. The LAST link's reply is returned
+        whatever the test says - the caller reports it, as it always has - and
+        so is a refused reply that has already been shown to a reader who
+        cannot have it withdrawn (no `on_reset`).
         """
         if pin is not None:
             plan = Plan([pin])
@@ -816,6 +906,7 @@ class Gateway:
         dead = set()
         last_error = None
         shown = False  # text this walk streamed and has not withdrawn
+        passed_over = []  # replies `acceptable` refused, served by earlier links
 
         for index, link in enumerate(plan.links):
             if link.endpoint in dead:
@@ -913,10 +1004,40 @@ class Gateway:
                 )
                 continue
 
+            if acceptable is not None and not acceptable(completion):
+                shown = shown or bool(emitted)
+                remaining = [
+                    later
+                    for later in plan.links[index + 1 :]
+                    if later.endpoint not in dead
+                ]
+                if remaining and not (shown and on_reset is None):
+                    refused = UnusableCompletion(
+                        f"{link.provider} served a reply with nothing to use "
+                        f"(finish_reason {completion.finish_reason or 'none'!r})"
+                    )
+                    self.broker.record_error(link, refused)
+                    if trace is not None:
+                        trace.failed(link, refused)
+                    passed_over.append(completion)
+                    logger.warning(
+                        "llm.completion_unusable",
+                        extra={
+                            "provider": link.provider,
+                            "model": link.model,
+                            "finish_reason": completion.finish_reason or "",
+                            "empty": not completion.text.strip(),
+                            "next_provider": remaining[0].provider,
+                            "next_model": remaining[0].model,
+                        },
+                    )
+                    continue
+
             self.broker.record_success(link)
             # It answered: whatever benched it is over.
             self.broker.clear(link)
             completion.link = link
+            completion.skipped = passed_over
             if pin is None:
                 # Measured against the first link that COULD have answered:
                 # one with no key was never a choice, so nothing fell back
@@ -1151,7 +1272,7 @@ def response_from(
 ) -> LLMResponse:
     """An LLMResponse for a completion, carrying what the provider said."""
     link = result.link
-    usage = result.usage
+    prompt_tokens, completion_tokens, cost = spend(result)
     details = {
         "provider": link.provider if link else "",
         "model": result.model,
@@ -1169,7 +1290,6 @@ def response_from(
     # OpenRouter prices every response and reports it on the usage block.
     # Recorded when present rather than assumed, because no other backend
     # here sends it.
-    cost = getattr(usage, "cost", None)
     if cost is not None:
         details["cost"] = cost
     return LLMResponse(
@@ -1179,8 +1299,10 @@ def response_from(
         generative=True,
         prompt_characters=prompt_characters,
         completion_characters=len(text),
-        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        # Every reply this answer needed, the ones an earlier link served and
+        # the caller refused included: they were billed too.
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
         model=result.model,
         provider=link.provider if link else "",
         finish_reason=result.finish_reason,

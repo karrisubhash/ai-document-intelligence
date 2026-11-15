@@ -50,6 +50,7 @@ import logging
 
 from django.conf import settings
 
+from . import judging
 from .llm import (
     ABSTENTION_TEXT,
     ExtractiveAnswerer,
@@ -137,6 +138,11 @@ Rules, in order of priority:
    table itself: say what it lists, name its columns, and give a few of its
    rows as examples, citing the passage. Describing a table is not
    something the passages "do not contain".
+
+9. Write the answer in the language the passages are written in, even when
+   the question is asked in another language. An automated check compares
+   your words with the passages' words, and a translation cannot be checked
+   that way: an answer in another language is discarded, however correct.
 
 HOW TO WRITE IT
 
@@ -233,6 +239,23 @@ class ClaudeAnswerer:
 
         return self._client
 
+    def can_answer(self) -> bool:
+        """Whether this answerer can reach a model at all: a client can be
+        built (the SDK is installed, a Bedrock region is set). Sends nothing.
+
+        A missing or revoked KEY is not visible from here - the SDK reads
+        credentials when it makes a request - so this is a floor, not a
+        promise. It is what rag.judging.model_will_answer asks: an answerer
+        that cannot build a client is going to quote, and must not be handed
+        what only a model can judge, nor have a compound question kept whole
+        for it.
+        """
+        try:
+            self._get_client()
+        except Exception:  # noqa: BLE001 - answer() treats any failure alike
+            return False
+        return True
+
     def _region(self) -> str:
         """The Bedrock region, or a refusal.
 
@@ -310,10 +333,11 @@ class ClaudeAnswerer:
             )
             # Quoting cannot tell that a passage is beside the point, so it
             # gets only the passages the reranker vouched for - not the ones a
-            # model was handed to judge (rag.judging).
+            # model was handed to judge - and no more of them than a quote is
+            # measured on (rag.judging.quote_context).
             response = self._fallback.answer(
                 question=question,
-                context=context.without_model_judged(),
+                context=judging.quote_context(context),
                 prompt=prompt,
             )
             response.metadata = {
@@ -393,7 +417,7 @@ class ClaudeAnswerer:
 
         return LLMResponse(
             text=text,
-            abstained=is_abstention(text) or declines_to_answer(text),
+            abstained=is_abstention(text) or declines_to_answer(text, question),
             cited_markers=_markers(text),
             model_name=self.name,
             model_version=self.model,

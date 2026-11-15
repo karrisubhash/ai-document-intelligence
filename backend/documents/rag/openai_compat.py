@@ -47,12 +47,17 @@ which turns `choices[0]` into an IndexError several frames from the cause.
 Ollama ignores the API key but the SDK refuses to build a client without
 one. Each of those is handled where it bites, and named in a comment there.
 
-WHICH BACKEND TO POINT IT AT. A grounded prompt is the system rules plus at
-most RAG_MAX_PASSAGES passages inside RAG_CONTEXT_BUDGET characters - 8,000
-by default, so about two to three thousand tokens. Every preset takes that
-in one request; what binds on a free tier is how many requests a model will
-take a minute and a day (Gemini: 5 and 20), and on Groq's free gpt-oss tier
-its 8K tokens a minute, two or three questions. The default is Gemini Flash
+WHICH BACKEND TO POINT IT AT. A grounded prompt for a model is the system
+rules plus at most RAG_MAX_PASSAGES_GENERATIVE passages inside
+RAG_CONTEXT_BUDGET_GENERATIVE characters - 14,000 by default. Measured with
+real models that is about 2,000-2,700 prompt tokens for a typical question and
+about 5,000 for a full 12-passage context. Every preset takes that in one
+request; what binds on a free tier is how many requests a model will take a
+minute and a day (Gemini: 5 and 20), and on Groq's free gpt-oss tier its 8K
+tokens a minute, counting the reply a request ASKS for: about one grounded
+question a minute, so a corrective retry inside the same minute is refused and
+the chain moves on. (A quote after a model failure keeps the older 8,000
+characters and 8 passages.) The default is Gemini Flash
 because this is an instruction-following task rather than a knowledge one: a
 weaker model here does not produce confidently wrong answers so much as
 answers that miss markers and get downgraded, so the pipeline stays safe and
@@ -91,7 +96,7 @@ import logging
 
 from django.conf import settings
 
-from . import budget, streaming
+from . import budget, judging, streaming
 from . import gateway as gateway_module
 
 # Shared with the Claude answerer on purpose: this prompt encodes the
@@ -270,9 +275,16 @@ class OpenAICompatibleAnswerer:
 
         trace = Trace()
         try:
-            return self._generate(
+            response = self._generate(
                 question=question, context=context, prompt=prompt, trace=trace
             )
+            # The question and its passages reached every link the walk tried,
+            # not only the one that answered: a link that served a reply the
+            # walk then passed over (Gateway.run's `acceptable`) had them.
+            response.may_train_on_input = (
+                response.may_train_on_input or self._reached_a_trainer(trace)
+            )
+            return response
         except Exception as exc:
             # Deliberately broad at the gateway boundary: a missing
             # package, a revoked key, an exhausted free-tier quota, a
@@ -302,10 +314,11 @@ class OpenAICompatibleAnswerer:
             )
             # Quoting cannot tell that a passage is beside the point, so it
             # gets only the passages the reranker vouched for - not the ones a
-            # model was handed to judge (rag.judging).
+            # model was handed to judge - and no more of them than a quote is
+            # measured on (rag.judging.quote_context).
             response = self._fallback.answer(
                 question=question,
-                context=context.without_model_judged(),
+                context=judging.quote_context(context),
                 prompt=prompt,
             )
             response.metadata = {
@@ -322,12 +335,16 @@ class OpenAICompatibleAnswerer:
             response.fell_back_from = self.version
             # The question and its passages reached every link tried, even
             # the ones that then failed.
-            response.may_train_on_input = any(
-                link.trains_on_input
-                for link in self.gateway.links
-                if link.version in trace.tried
-            )
+            response.may_train_on_input = self._reached_a_trainer(trace)
             return response
+
+    def _reached_a_trainer(self, trace: Trace) -> bool:
+        """Whether any link a walk tried may train on what it was sent."""
+        return any(
+            link.trains_on_input
+            for link in self.gateway.links
+            if link.version in trace.tried
+        )
 
     def _request_kwargs(self, prompt: str) -> dict:
         """The request for the first link; see _request_for."""
@@ -373,6 +390,9 @@ class OpenAICompatibleAnswerer:
             on_delta=streaming.emit if streaming.active() else None,
             on_reset=streaming.reset,
             trace=trace,
+            # A reply with nothing to use is that link failing, so the next
+            # one is tried; only the last link's is reported as it is below.
+            acceptable=_usable,
         )
         link = result.link
         finish_reason = result.finish_reason
@@ -443,7 +463,7 @@ class OpenAICompatibleAnswerer:
                 "purpose": gateway_module.current_purpose(),
             },
         )
-        response.abstained = is_abstention(text) or declines_to_answer(text)
+        response.abstained = is_abstention(text) or declines_to_answer(text, question)
         response.cited_markers = _markers(text)
         return response
 
@@ -479,7 +499,7 @@ class OpenAICompatibleAnswerer:
     def _abstained(
         self, prompt: str, *, reason: str, completion: Completion
     ) -> LLMResponse:
-        usage = completion.usage
+        prompt_tokens, completion_tokens, _ = gateway_module.spend(completion)
         link = completion.link
         return LLMResponse(
             text=ABSTENTION_TEXT,
@@ -492,9 +512,10 @@ class OpenAICompatibleAnswerer:
             completion_characters=len(ABSTENTION_TEXT),
             # The call was made and billed even though its reply is unusable;
             # the engine records usage for every response so cost is not
-            # counted only on success, and a zero here would undo that.
-            prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-            completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            # counted only on success, and a zero here would undo that. So
+            # were the replies earlier links served and the walk passed over.
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             model=completion.model,
             provider=link.provider if link else self.provider,
             finish_reason=completion.finish_reason,
@@ -512,3 +533,17 @@ def _markers(text: str) -> tuple:
     from .grounding import extract_markers
 
     return extract_markers(text)
+
+
+# Finish reasons that leave no answer to use: the reply was cut off at the
+# token limit, or a content filter stopped it. Another model may do neither.
+UNUSABLE_FINISH_REASONS = frozenset({"length", "content_filter"})
+
+
+def _usable(completion: Completion) -> bool:
+    """Whether a reply that did not fail has an answer in it (Gateway.run's
+    `acceptable`): some text, and not one cut off or filtered."""
+    return (
+        bool(completion.text.strip())
+        and completion.finish_reason not in UNUSABLE_FINISH_REASONS
+    )

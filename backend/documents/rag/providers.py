@@ -67,6 +67,19 @@ class Preset:
     # for why.
     request_extras: tuple = ()
 
+    # Which models `request_extras` is sent to: ids starting with one of these.
+    # Empty means every model of the provider. A backend that serves several
+    # families takes an extra for ONE of them (gpt-oss reasons, llama does not)
+    # and answers 400 to the rest, so a model pinned from another family is
+    # sent none - and each 400 is a request counted against the day.
+    extras_models: tuple = ()
+
+    # The `reasoning_effort` values the backend documents. Empty means any is
+    # passed on. RAG_ANSWERER_REASONING_EFFORT is one global knob and one
+    # provider's value is another's 400 ("none" is Gemini's; gpt-oss takes
+    # low, medium or high), so a value outside this list is not sent.
+    effort_values: tuple = ()
+
     # How a person should read the provider's name, e.g. "GitHub Models".
     display: str = ""
 
@@ -142,16 +155,18 @@ PRESETS = {
         # time to the first streamed word (3.4 s -> 1.6 s). This is
         # extraction over supplied passages, which needs no deliberation.
         request_extras=(("reasoning_effort", "none"),),
+        effort_values=("none", "minimal", "low", "medium", "high"),
         # The measured 20 a day, above. Google's rate-limit documentation
         # says daily quotas reset at midnight Pacific time, not UTC.
         daily_limit=20,
         quota_tz="America/Los_Angeles",
     ),
-    # Very fast. The free tier caps gpt-oss at 8K tokens PER MINUTE, and a
-    # grounded prompt here is the system rules plus at most RAG_MAX_PASSAGES
-    # passages inside RAG_CONTEXT_BUDGET characters (8,000 by default):
-    # roughly 2-3K tokens, so two or three questions a minute. That makes
-    # it a good second provider behind Gemini rather than the only one.
+    # Very fast, but the free tier caps gpt-oss at 8K tokens PER MINUTE and
+    # counts the reply a request ASKS for. A grounded prompt for a model is
+    # about 2-5K tokens (measured with real models; RAG_CONTEXT_BUDGET_GENERATIVE
+    # is 14,000 characters), plus the up to 1,500 tokens asked for below: about
+    # ONE question a minute. That makes it a last resort behind Gemini, not a
+    # second provider.
     #
     # The llama-3.x ids are deliberately not the default: they are absent
     # from the free-tier table and one of them is already deprecated in
@@ -176,6 +191,8 @@ PRESETS = {
         # NOT verified against a live key from here: confirm with the AI
         # providers test on System status before relying on it.
         request_extras=(("reasoning_effort", "low"),),
+        extras_models=("openai/gpt-oss",),
+        effort_values=("low", "medium", "high"),
         max_output_tokens=1500,
         json_object=True,
     ),
@@ -228,6 +245,8 @@ PRESETS = {
         # NOT verified against a live key from here: confirm with the AI
         # providers test on System status before relying on it.
         request_extras=(("reasoning_effort", "low"),),
+        extras_models=("gpt-oss",),
+        effort_values=("low", "medium", "high"),
     ),
     # Mistral's own API speaks /chat/completions at this path. Its free
     # ("Experiment") plan meters tokens per month rather than requests per
@@ -253,6 +272,12 @@ PRESETS = {
     # Its own variable rather than GITHUB_TOKEN: that name is commonly
     # exported for the gh CLI with far wider scopes, and a token issued for
     # something else should not quietly switch a provider on.
+    #
+    # RETIRED: GitHub's documentation says "As of July 30, 2026, GitHub Models
+    # has been fully retired" (docs.github.com/en/github-models), so this link
+    # can no longer answer. The preset is kept only so an old configuration that
+    # still names it fails visibly (the link errors and the chain moves on)
+    # instead of raising "unknown provider" at start-up. Do not recommend it.
     GITHUB: Preset(
         base_url="https://models.github.ai/inference",
         model="openai/gpt-4.1-mini",

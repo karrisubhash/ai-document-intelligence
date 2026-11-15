@@ -285,7 +285,9 @@ grounding_recoveries = Counter(
     "adi_rag_grounding_recoveries_total",
     "Answers that failed grounding the first time, by what happened next:"
     " repaired (a missing citation added), retried_grounded (the model answered"
-    " again and passed), retried_failed (it did not).",
+    " again and passed), retried_failed (it answered again and failed again),"
+    " retry_unavailable (the second call never reached a model - an outage or a"
+    " rate limit, not a verdict on the model - and the passages were quoted).",
     ["outcome"],
     registry=REGISTRY,
 )

@@ -150,6 +150,12 @@ class BuiltContext:
     # follow-up. Answerers use it to decide what the answer must be ABOUT;
     # the widened question only decided which passages were read.
     focus: str = ""
+    # Everything the user typed for this answer: the question and, on a
+    # follow-up, their own earlier words. The grounding check lets an answer
+    # repeat a figure that is in here ("I have 70 percent attendance ..." ->
+    # "At 70 percent you ..."): the user supplied it, so echoing it back is not
+    # a figure the passages failed to support. It is never a source.
+    user_text: str = ""
 
     @property
     def is_empty(self) -> bool:
@@ -177,6 +183,7 @@ class BuiltContext:
             dropped_as_tiny=self.dropped_as_tiny,
             suspected_injections=sum(1 for p in kept if p.suspected_injection),
             focus=self.focus,
+            user_text=self.user_text,
         )
 
 

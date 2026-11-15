@@ -17,7 +17,10 @@ would hide which part is failing.
 
 import functools
 import logging
+import os
+import re
 import time
+import traceback
 from dataclasses import dataclass, field
 
 from django.conf import settings
@@ -355,6 +358,24 @@ def _figure_hints(document_ids) -> list:
     return hints
 
 
+def _where(exc) -> str:
+    """Where an exception was raised, and nothing it said.
+
+    The innermost frames as file:line:function. Not the traceback: its last
+    line is the exception's own message, and for the code that parses a
+    passage or an answer that message can be the text it choked on (a KeyError
+    names the key it looked up) - while the structured log keeps the tail of a
+    traceback as it finds it, redacted by field name only. The type and the
+    place are what someone debugging needs; the text is the document's.
+    """
+    frames = traceback.extract_tb(exc.__traceback__)[-2:]
+    where = " < ".join(
+        f"{os.path.basename(frame.filename)}:{frame.lineno}:{frame.name}"
+        for frame in reversed(frames)
+    )
+    return where[:120]
+
+
 def _check(text, built):
     """grounding.validate, failing CLOSED.
 
@@ -363,11 +384,27 @@ def _check(text, built):
     ever raises - a spelling nobody anticipated, a malformed passage - the
     answer is WITHHELD, as it would be for any other failure, and the failure
     is logged. It must not become a 500, and it must never become a pass.
+
+    Logged as the exception's TYPE and place (_where), never logger.exception:
+    that would put the end of the traceback, message included, in the log.
+
+    What the user typed travels on the context (`built.user_text`), so every
+    re-check - the repaired text, the retry's answer, a quoted fallback - lets
+    an answer repeat a figure the user supplied without each call site having
+    to remember to pass it.
     """
     try:
-        return grounding.validate(text, built, abstained=False)
-    except Exception:  # noqa: BLE001 - see above
-        logger.exception("grounding.check_failed")
+        return grounding.validate(
+            text,
+            built,
+            abstained=False,
+            user_text=getattr(built, "user_text", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - see above
+        logger.error(
+            "grounding.check_failed",
+            extra={"error": type(exc).__name__, "where": _where(exc)},
+        )
         report = grounding.GroundingReport(grounded=False, text=text or "")
         report.failures.append(
             "the grounding check itself failed on this answer, so it was withheld"
@@ -380,9 +417,107 @@ def _repair(report, built):
     the answer as it was."""
     try:
         return grounding.repair_citations(report, built)
-    except Exception:  # noqa: BLE001
-        logger.exception("grounding.repair_failed")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "grounding.repair_failed",
+            extra={"error": type(exc).__name__, "where": _where(exc)},
+        )
         return report.text, []
+
+
+# An uncited reply with no figure in it, to passages that no relevance score
+# vouched for, is the model answering from its own knowledge - unless its words
+# come from those passages after all, in which case it is an answer from the
+# documents that forgot its citation. The share of its content words found in
+# the passages that tells the two apart: well above the share (0.25) that
+# grounding accepts as "drawn from what it cites", because here nothing it
+# cites backs it up and a wrong guess turns a true answer into "your documents
+# do not cover this".
+OWN_KNOWLEDGE_MAX_SUPPORT = 0.5
+
+# ...and it must say enough to measure: "No." or "Yes, it is." is a direct
+# answer to a yes/no question whichever passage it came from, and one content
+# word found in no passage is not evidence of anything.
+OWN_KNOWLEDGE_MIN_TERMS = 3
+
+_DIGIT = re.compile(r"\d")
+_MARKER = re.compile(r"\[\d{1,3}\]")
+
+
+def _answered_from_own_knowledge(text, report, built) -> bool:
+    """Whether a reply that failed grounding is the model answering from what
+    it knows, not from the passages it was handed.
+
+    All of these must hold, and each one keeps a case on the checked path:
+
+    - every passage the model saw was only handed to it to judge (rag.judging):
+      nothing passed the relevance floor, so there was no evidence to answer
+      from, and "what is the capital of France" met a handful of unrelated
+      passages;
+    - it cites nothing, valid or not: an answer that cites a passage is
+      checked against it, however badly;
+    - it states no figure: a number, date or identifier is the claim grounding
+      exists to check, so it is checked even without a citation;
+    - most of its content words are in none of the passages
+      (OWN_KNOWLEDGE_MAX_SUPPORT), and there are enough of them to mean
+      something (OWN_KNOWLEDGE_MIN_TERMS).
+
+    The last two are measured with the grounding check itself, against every
+    passage at once: the reply is shown the whole context's markers. Any
+    failure of that measurement leaves the answer UNGROUNDED, as before.
+    """
+    if report.cited_markers or report.invalid_markers:
+        return False
+    if any(not passage.model_judged for passage in built.passages):
+        return False
+    body = report.text or text or ""
+    # A figure, not the digit inside a citation marker: that is what the
+    # "cites nothing" test above is for.
+    if _DIGIT.search(_MARKER.sub("", body)):
+        return False
+    markers = " ".join(f"[{passage.marker}]" for passage in built.passages)
+    try:
+        probe = grounding.validate(
+            f"{body} {markers}",
+            built,
+            abstained=False,
+            user_text=getattr(built, "user_text", ""),
+        )
+    except Exception:  # noqa: BLE001 - the check decides, not this
+        return False
+    return (
+        probe.support_ratio < OWN_KNOWLEDGE_MAX_SUPPORT
+        and len(probe.unsupported_terms) >= OWN_KNOWLEDGE_MIN_TERMS
+    )
+
+
+def _joined_llm(first: dict, second: dict, shown: dict) -> dict:
+    """The provider record of an answer that took two model calls.
+
+    `shown` is the call whose answer is kept: it says which provider and model
+    wrote it. What the answer COST and who SAW the documents is both calls', so
+    tokens and cost are summed and may_train_on_input is true if either call's
+    provider may train on what it was sent - the retry can be served by a
+    different link than the first call (the first is rate-limited by then),
+    and the passages went to both. The first call's provider stays recorded as
+    first_provider for the same reason.
+    """
+    joined = dict(shown)
+    for key in ("prompt_tokens", "completion_tokens"):
+        joined[key] = (first.get(key) or 0) + (second.get(key) or 0)
+    costs = [
+        record["cost"]
+        for record in (first, second)
+        if isinstance(record.get("cost"), (int, float))
+    ]
+    if costs:
+        joined["cost"] = sum(costs)
+    joined["may_train_on_input"] = bool(
+        first.get("may_train_on_input") or second.get("may_train_on_input")
+    )
+    if first.get("provider"):
+        joined["first_provider"] = first["provider"]
+    return joined
 
 
 def _abstain(question, reason, started, **extra) -> RagAnswer:
@@ -446,7 +581,11 @@ def _ask(
     focus: str = "",
     retrieval_depth: int = None,
     relevance_floor: float = None,
+    answerer=None,
 ) -> RagAnswer:
+    """`answerer` replaces the configured one for this question: how the
+    planner answers the parts of a question by quoting, after the whole
+    question went to a model that failed (agents.runner)."""
     started = time.monotonic()
     question = (question or "").strip()
 
@@ -541,7 +680,7 @@ def _ask(
 
     # A generative model, not the score floor, decides whether a passage
     # answers the question. See documents.rag.judging.
-    answerer = get_answerer()
+    answerer = answerer if answerer is not None else get_answerer()
     # Whether a model will write this answer. The larger context, the chunks
     # beside the best passages and the corrective retry follow from that;
     # handing it the passages the floor rejects is a separate switch.
@@ -658,6 +797,10 @@ def _ask(
         )
 
     built.focus = (focus or "").strip()
+    # Figures the user typed may be repeated in the answer (see
+    # BuiltContext.user_text): what they asked, and on a follow-up their own
+    # earlier words that widened it.
+    built.user_text = " ".join(part for part in (question, built.focus) if part)
     prompt = context_builder.render(built, question)
     # The passages the answer is about to be written from - authorized, above
     # the floor and inside the budget - so a reader sees where it is looking
@@ -733,6 +876,28 @@ def _ask(
     report = _check(response.text, built)
     timings["grounding"] = _elapsed_ms(stage_started)
 
+    # A model handed only passages nothing vouched for, which answers without
+    # citing any of them or stating a figure, is answering from what it knows.
+    # That is a refusal of the documents, and it is treated as one: chat's
+    # general reply may then answer (labelled as general knowledge). It used to
+    # be counted as UNGROUNDED, the hallucination signal that a general reply
+    # never replaces, and so blocked every general question that reached a
+    # model with weak passages in front of it.
+    if not report.ok and _answered_from_own_knowledge(response.text, report, built):
+        notes.append(
+            "the model answered without citing a passage, in words the passages "
+            "do not contain: taken as not found in the documents"
+        )
+        streaming.reset()
+        return _abstain(
+            question,
+            Abstention.MODEL_ABSTAINED,
+            started,
+            notes=notes,
+            relevant_document_ids=ranked_document_ids(evidence),
+            **common,
+        )
+
     # A rejected answer that states figures the passages lack gets two chances
     # before it is thrown away, each of which can only make it TRACEABLE:
     #
@@ -752,7 +917,10 @@ def _ask(
                 telemetry.grounding_recovery("repaired")
                 notes.append(
                     "added the citation the answer left out for "
-                    + ", ".join(f"{fact} -> [{marker}]" for fact, marker in repairs)
+                    + ", ".join(
+                        f"{grounding.readable(fact)} -> [{marker}]"
+                        for fact, marker in repairs
+                    )
                 )
 
         if (
@@ -785,15 +953,53 @@ def _ask(
             )
             retried = "; ".join(report.failures[:1])
 
-            # What this answer cost is both calls, whichever one is shown.
+            # What this answer cost, and who saw the documents, is both calls
+            # whichever one is shown (_joined_llm).
             first_llm = dict(common.get("llm") or {})
             second_llm = llm_metadata(second)
-            spent = {
-                key: (first_llm.get(key) or 0) + (second_llm.get(key) or 0)
-                for key in ("prompt_tokens", "completion_tokens")
-            }
+            joined = _joined_llm(first_llm, second_llm, second_llm or first_llm)
 
-            if second_report is not None and second_report.ok:
+            if second_fell_back:
+                # The retry never reached a model - a timeout, a rate limit on
+                # every link, a refused request - and the answerer quoted
+                # instead. That is an outage, not the model failing to ground
+                # an answer, and it is counted and worded as one: the number
+                # of retried_failed says whether a provider is any good.
+                telemetry.grounding_recovery("retry_unavailable")
+                why = (second.metadata or {}).get("fallback_reason") or "unspecified"
+                # The quote goes through the check like any other answer. It
+                # is built from passages the reranker vouched for and cannot
+                # state a figure the passages lack, but a check that is not
+                # run is not a check.
+                quoted = None if second.abstained else _check(second.text, built)
+                if quoted is not None and quoted.ok:
+                    notes.append(
+                        f"the first answer was rejected ({retried}); the retry "
+                        f"was unavailable ({why}); answered by quoting passages "
+                        f"instead"
+                    )
+                    response, report = second, quoted
+                    common.update(
+                        model_name=response.model_name,
+                        model_version=response.model_version,
+                        generative=response.generative,
+                        answerer_fell_back=True,
+                        llm=joined,
+                    )
+                else:
+                    notes.append(
+                        f"the first answer was rejected ({retried}); the retry "
+                        f"was unavailable ({why}), so the first failure stands"
+                    )
+                    if first_llm:
+                        common["llm"] = {
+                            **_joined_llm(first_llm, second_llm, first_llm),
+                            "retry_fallback_reason": why,
+                            "retry_fallback_kind": second_llm.get(
+                                "fallback_kind", "error"
+                            ),
+                        }
+            elif second_report is not None and second_report.ok:
                 notes.append(
                     f"the first answer was rejected ({retried}); "
                     f"asked the model once more and its second answer was grounded"
@@ -804,7 +1010,7 @@ def _ask(
                     model_name=response.model_name,
                     model_version=response.model_version,
                     generative=response.generative,
-                    llm={**second_llm, **spent} if second_llm else first_llm,
+                    llm=joined,
                 )
             else:
                 notes.append(
@@ -813,7 +1019,7 @@ def _ask(
                 )
                 telemetry.grounding_recovery("retried_failed")
                 if first_llm:
-                    common["llm"] = {**first_llm, **spent}
+                    common["llm"] = _joined_llm(first_llm, second_llm, first_llm)
 
     if not report.ok:
         # The model said something; it could not be substantiated. Section

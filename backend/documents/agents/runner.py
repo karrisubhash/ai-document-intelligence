@@ -26,8 +26,8 @@ from dataclasses import dataclass, field
 from django.conf import settings
 
 from documents.rag import judging
-from documents.rag.engine import ask, get_answerer
-from documents.rag.llm import ABSTENTION_TEXT
+from documents.rag.engine import Abstention, ask, get_answerer
+from documents.rag.llm import ABSTENTION_TEXT, ExtractiveAnswerer
 
 from . import planner
 
@@ -140,15 +140,28 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
     # part spends one of a free tier's few daily calls, and when every part
     # abstains chat's general reply is never tried. So while a model can
     # write the answer, the question goes to it whole.
+    whole, planned_parts = None, []
     if len(parts) > 1 and not getattr(settings, "RAG_PLAN_WHEN_GENERATIVE", False):
         if judging.model_will_answer(get_answerer()):
-            parts = []
+            planned_parts, parts = parts, []
 
     if len(parts) <= 1:
         # Not compound, or planning is switched off. This is the ordinary
         # path and must behave exactly as it did before this module
         # existed - one retrieval, one answer, same object shape.
-        return _single(user, question, started, **kwargs)
+        result = ask(user, question, **kwargs)
+        if not (planned_parts and _model_failed(result)):
+            return _single(result, question, started)
+
+        # The whole question went to a model and the model did not answer: a
+        # timeout, a rate limit on every link, an empty or cut-off reply. What
+        # is left is a quote, and a quote answers one thing per retrieval - the
+        # four-part question this planner exists for is refused whole ("0 of
+        # 4", above). So the question is cut up after all, and its parts are
+        # answered by quoting, with no further model call: the model has had
+        # its turn, and every call it was given is a call of the day.
+        whole, parts = result, planned_parts
+        kwargs = {**kwargs, "answerer": ExtractiveAnswerer()}
 
     # Each part then retrieves with the borrowed terms behind it, exactly
     # as a single follow-up does, and is answered against ITS OWN words.
@@ -176,6 +189,19 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         "grounding_failures": [],
     }
     timings = {}
+    # Everything that was asked, the whole question first when a model was
+    # given it and failed: the answer's provenance (what fell back, what was
+    # spent, who saw the documents) is the whole attempt's, not only the parts'.
+    asked = []
+    if whole is not None:
+        asked.append(whole)
+        notes += whole.notes
+        notes.append(
+            f"the question went to the model whole and it did not answer it; its "
+            f"{len(parts)} parts were answered by quoting passages instead"
+        )
+        for stage, milliseconds in whole.timings.items():
+            timings[stage] = timings.get(stage, 0) + milliseconds
 
     for part in parts:
         if focus:
@@ -184,6 +210,7 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         else:
             result = ask(user, part, **kwargs)
         results.append(result)
+        asked.append(result)
         if answerer is None and result.model_name:
             # Which answerer produced these answers, taken from the first
             # step that reached one. Reported rather than left blank so a
@@ -252,9 +279,9 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             reranker_name=totals["reranker"],
             grounding_failures=totals["grounding_failures"],
             timings=timings,
-            reranker_degraded=any(r.reranker_degraded for r in results),
-            answerer_fell_back=any(r.answerer_fell_back for r in results),
-            llm=_combined_llm(results),
+            reranker_degraded=any(r.reranker_degraded for r in asked),
+            answerer_fell_back=any(r.answerer_fell_back for r in asked),
+            llm=_combined_llm(asked),
         )
 
     if unanswered:
@@ -291,15 +318,22 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
         reranker_name=totals["reranker"],
         grounding_failures=totals["grounding_failures"],
         timings=timings,
-        reranker_degraded=any(r.reranker_degraded for r in results),
-        answerer_fell_back=any(r.answerer_fell_back for r in results),
-        llm=_combined_llm(results),
+        reranker_degraded=any(r.reranker_degraded for r in asked),
+        answerer_fell_back=any(r.answerer_fell_back for r in asked),
+        llm=_combined_llm(asked),
     )
 
 
-def _single(user, question: str, started: float, **kwargs) -> PlannedAnswer:
-    result = ask(user, question, **kwargs)
+def _model_failed(result) -> bool:
+    """Whether a model was given the question and did not answer it: the
+    answerer fell back to quoting (an outage, a rate limit, no key), or its
+    reply was empty, cut off or declined (ANSWERER_FAILED)."""
+    return bool(result.answerer_fell_back) or (
+        result.abstention_reason == Abstention.ANSWERER_FAILED
+    )
 
+
+def _single(result, question: str, started: float) -> PlannedAnswer:
     return PlannedAnswer(
         question=result.question,
         answer=result.answer,

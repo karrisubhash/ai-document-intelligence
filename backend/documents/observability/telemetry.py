@@ -198,7 +198,8 @@ def llm_called(response, duration_seconds: float):
 @_safe
 def grounding_recovery(outcome: str):
     """A first draft that failed grounding, and how it ended: repaired,
-    retried_grounded or retried_failed."""
+    retried_grounded, retried_failed (the model failed again) or
+    retry_unavailable (the retry never reached a model)."""
     metrics.grounding_recoveries.labels(outcome=str(outcome)).inc()
 
 

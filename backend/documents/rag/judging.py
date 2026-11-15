@@ -35,6 +35,7 @@ from django.conf import settings
 from django.db.models import Q
 
 from . import gateway as gateway_module
+from .context import DEFAULT_CONTEXT_BUDGET, BuiltContext
 from .reranking import RerankedChunk
 
 DEFAULT_MIN_PASSAGES = 6
@@ -84,7 +85,15 @@ def model_will_answer(answerer) -> bool:
 
     gateway = getattr(answerer, "gateway", None)
     if not isinstance(gateway, gateway_module.Gateway):
-        # An answerer with no budget to consult (the Claude answerer).
+        # An answerer with no budget to consult (the Claude answerer). It can
+        # still say it has no way to reach a model - the SDK is not installed,
+        # Bedrock has no region - and then it is going to quote.
+        can_answer = getattr(answerer, "can_answer", None)
+        if callable(can_answer):
+            try:
+                return bool(can_answer())
+            except Exception:  # noqa: BLE001 - as for the budget below
+                return True
         return True
 
     try:
@@ -99,6 +108,49 @@ def model_can_judge(answerer) -> bool:
     """Whether the model is also handed the passages the relevance floor would
     reject (RAG_MODEL_JUDGES_RELEVANCE)."""
     return enabled() and model_will_answer(answerer)
+
+
+def quote_context(context):
+    """What a QUOTE may be written from, when a model was meant to answer.
+
+    A model is shown a bigger context than a quote has ever been measured on
+    (RAG_MAX_PASSAGES_GENERATIVE passages inside RAG_CONTEXT_BUDGET_GENERATIVE
+    characters), flagged where it was only asked to judge a passage. When it
+    then fails and the passages are quoted instead, the quote gets the passages
+    the reranker vouched for (`without_model_judged`) - and no more of them than
+    a quote always had, RAG_MAX_PASSAGES inside RAG_CONTEXT_BUDGET: more
+    sentences tied for a place is a different answer from the one the quoting
+    path was measured to give, and the settings say it does not move.
+
+    The passages keep their markers, so what is quoted still resolves against
+    the full context in grounding. Within the cap they are taken in order, and
+    one that does not fit the budget is skipped for a smaller one after it, as
+    `context.build` does.
+    """
+    vetted = context.without_model_judged()
+    limit = getattr(settings, "RAG_MAX_PASSAGES", 8)
+    budget = getattr(settings, "RAG_CONTEXT_BUDGET", DEFAULT_CONTEXT_BUDGET)
+
+    kept, used = [], 0
+    for passage in vetted.passages:
+        if len(kept) >= limit:
+            break
+        if used + len(passage.text) > budget:
+            continue
+        kept.append(passage)
+        used += len(passage.text)
+
+    if len(kept) == len(vetted.passages):
+        return vetted
+    return BuiltContext(
+        passages=kept,
+        characters=used,
+        dropped_for_budget=vetted.dropped_for_budget + len(vetted.passages) - len(kept),
+        dropped_as_duplicate=vetted.dropped_as_duplicate,
+        dropped_as_tiny=vetted.dropped_as_tiny,
+        suspected_injections=sum(1 for p in kept if p.suspected_injection),
+        focus=vetted.focus,
+    )
 
 
 def admit(reranked, kept, retrieval_ranks, *, minimum=None, retrieval_top=None) -> list:
