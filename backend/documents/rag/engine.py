@@ -797,10 +797,13 @@ def _ask(
         )
 
     built.focus = (focus or "").strip()
-    # Figures the user typed may be repeated in the answer (see
-    # BuiltContext.user_text): what they asked, and on a follow-up their own
-    # earlier words that widened it.
-    built.user_text = " ".join(part for part in (question, built.focus) if part)
+    # Figures the user gave about their own situation may be repeated in the
+    # answer (see BuiltContext.user_text and facts.user_stated_clauses): the
+    # words they TYPED this turn. On a follow-up that is `focus`; `question` is
+    # then the retrieval query, their words with terms borrowed from earlier
+    # turns appended with no sentence break, which could join a pronoun in the
+    # follow-up to a figure from another turn.
+    built.user_text = built.focus or question
     prompt = context_builder.render(built, question)
     # The passages the answer is about to be written from - authorized, above
     # the floor and inside the budget - so a reader sees where it is looking

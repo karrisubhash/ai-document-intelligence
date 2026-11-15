@@ -201,11 +201,23 @@ def _normalize_fact(token: str) -> str:
 UNIT_FIGURE = re.compile(r"[a-z]*?(\d+(?:\.\d+)?)[a-z%]*")
 WHOLE_HOUR = re.compile(r"(\d{1,2}):00")
 
-# A figure a word is stuck to with a hyphen or a slash: "15-day", "8-week",
+# A figure a UNIT WORD is stuck to with a hyphen or a slash: "15-day", "8-week",
 # "12-character", "Rs500/week", "85000/year", "15-day-window". It is its
-# number: the passage says "15 days". A letter prefix other than a currency is
-# an identifier ("ME204-lab") and stays whole.
-GLUED_UNIT = re.compile(r"(?:rs|inr)?(\d+(?:\.\d+)?)(?:[-/][a-z]+)+")
+# number: the passage says "15 days". Only a unit: any other letters after the
+# dash are part of an identifier ("Form 16-A", "Section 12-B", "80-CCD") and stay
+# whole, or "Form 16-B" would pass for "Form 16-A" and "Section 80-C" for "80
+# percent". A letter prefix other than a currency is an identifier too
+# ("ME204-lab").
+_COMPOUND_UNIT = (
+    r"(?:seconds?|minutes?|hours?|days?|weeks?|fortnights?|months?|quarters?"
+    r"|semesters?|trimesters?|terms?|years?|sessions?|characters?|letters?"
+    r"|digits?|words?|pages?|marks?|credits?|units?|rupees?|percent|points?"
+    r"|classes|lectures?|attempts?|copies|copy|books?|members?|students?"
+    r"|seats?|rooms?|beds?|floors?|km|kg|gb|mb|tb)"
+)
+GLUED_UNIT = re.compile(
+    r"(?:rs|inr)?(\d+(?:\.\d+)?)[-/]" + _COMPOUND_UNIT + r"(?:[-/][a-z]+)*"
+)
 # "2nd/3rd": two figures.
 GLUED_ORDINALS = re.compile(r"\d+(?:st|nd|rd|th)(?:/\d+(?:st|nd|rd|th))+")
 
@@ -333,46 +345,9 @@ def _fact_supported(fact: str, supported: set, cores: set) -> bool:
     return bool(ends) and f"range:{ends[0]}-{ends[1]}" in supported
 
 
-# --- What the user typed, as far as an answer may repeat it ---------------------
-#
-# A figure the user gives about THEIR OWN situation is a given: "I have 70
-# percent attendance", "my family earns two lakh", "a student with 60 percent".
-# An answer that works with it has to be able to say it back, and rejecting
-# "at 70 percent you may apply for condonation" for containing 70 turned a
-# correct answer into "not found".
-#
-# A figure the user asks ABOUT is a claim or a target, not a given: "Is the
-# minimum 70 percent?", "What does the bus pass cost for 2023-24?", "Do I need
-# 70 percent?". An answer that states one of those has to find it in the
-# passages. Echoing it back is exactly how an answer agrees with a wrong number
-# or answers for a year the documents do not cover, which is the failure this
-# check exists to catch.
-_USER_SENTENCES = re.compile(r"(?<=[.!?])\s+|\n+")
-_OWN_SITUATION = re.compile(
-    r"\b(?:i|i'm|i've|i'd|i'll|my|mine|me|we|we're|we've|our|ours)\b"
-    r"|\b(?:student|candidate|employee|member|applicant|resident|person|someone)s?"
-    r"\s+(?:with|who)\b",
-    re.IGNORECASE,
-)
-_ASKS_ABOUT_A_FIGURE = re.compile(
-    r"\b(?:need|needs|needed|require|requires|required|requirement|must|minimum"
-    r"|maximum|limit|fees?|cost|costs|price|fine|fines|charge|charges|penalty"
-    r"|penalties|tuition|amount|salary|stipend|rate|deadline|last\s+(?:date|day)"
-    r"|how\s+(?:much|many|long))\b",
-    re.IGNORECASE,
-)
-
-
-def user_stated_text(user_text: str) -> str:
-    """The sentences of what the user typed in which they describe their own
-    situation, and in which they are not asking what a requirement, price or
-    date is. Only figures in these sentences may be repeated by an answer."""
-    kept = [
-        sentence
-        for sentence in _USER_SENTENCES.split(user_text or "")
-        if _OWN_SITUATION.search(sentence) and not _ASKS_ABOUT_A_FIGURE.search(sentence)
-    ]
-    return " ".join(kept)
+# What the user typed, as far as an answer may repeat it: the clauses in which they
+# state their OWN situation (facts.user_stated_clauses says what counts and why).
+user_stated_text = fact_forms.user_stated_text
 
 
 def validate(
@@ -598,19 +573,28 @@ def _beside(word: str) -> str:
     return word
 
 
-def _figure_context(text: str, fact: str) -> set:
-    """What a figure counts, as the words next to it in `text` say: the one or
-    two words either side of each place it is written ("rupees", "days",
-    "payment of"), less the little words, with a unit written one way.
+_BEFORE_A_UNIT = _FILLER | {"per"}
 
-    Empty when the figure is not found in the text as a figure, which is also
-    the answer for a kind of figure this does not read (a range, a time).
+
+def _figure_reading(text: str, fact: str, depth: int):
+    """What a figure is ABOUT, as the words around it say, or None for a kind of
+    figure this does not read (a time, a range): those are never repaired.
+
+    (units, subject). `units` is what it counts: the word right after it, or the
+    currency mark right before it ("rupee", "day", "percent", "seat"). `subject`
+    is the `depth` content words nearest before it ("hostel fee", "late fine").
+    "200 rupees" and "200 days" differ in unit, "200 students" and "200 seats"
+    too, and "the exam fee is 4500" and "a bus pass costs 4500" in subject; a
+    clause and a passage about the same thing share a subject.
     """
+    if fact.startswith("time:") or fact_forms.range_parts(fact):
+        return None
     prepared = fact_forms.amounts(fact_forms.prepare(text))
     inline, _ = fact_forms.extract_dates(prepared, inline=True)
     words = _WORD.findall(inline.lower())
+    is_date = fact.startswith("date:")
 
-    if fact.startswith("date:"):
+    if is_date:
         code = fact[len("date:") :].replace("-", "").replace(":", "")
         year_less = fact.startswith("date:--")
 
@@ -630,17 +614,35 @@ def _figure_context(text: str, fact: str) -> set:
                 for found in _facts(word)
             )
 
-    context = set()
+    units, subject = set(), set()
     for index, word in enumerate(words):
         if not is_the_figure(word):
             continue
-        before = words[max(0, index - FIGURE_NEIGHBOURS) : index]
-        after = words[index + 1 : index + 1 + FIGURE_NEIGHBOURS]
-        for near in before + after:
-            near = _beside(near)
-            if len(near) > 1 and near not in _FILLER and not re.search(r"\d", near):
-                context.add(near)
-    return context
+        if not is_date:
+            if index and words[index - 1] in _UNIT_WORD:
+                units.add(_beside(words[index - 1]))
+            for after in words[index + 1 : index + 1 + FIGURE_NEIGHBOURS]:
+                after = _beside(after)
+                if after in _BEFORE_A_UNIT:
+                    continue
+                if len(after) > 1 and not any(c.isdigit() for c in after):
+                    units.add(after)
+                break
+        taken = 0
+        for before in reversed(words[max(0, index - 3 * depth) : index]):
+            before = _beside(before)
+            if (
+                before in _UNIT_WORD
+                or before in _BEFORE_A_UNIT
+                or len(before) <= 1
+                or any(c.isdigit() for c in before)
+            ):
+                continue
+            subject.add(before)
+            taken += 1
+            if taken == depth:
+                break
+    return units, subject
 
 
 def repair_citations(report: GroundingReport, context):
@@ -658,11 +660,14 @@ def repair_citations(report: GroundingReport, context):
       that is the failure the check exists to catch, and it is not repaired.
     - Only from a passage's own text, in exactly one uncited passage, and only
       when the clause shares at least two words with it.
-    - Only when the clause says the figure counts what the passage says it
-      counts: a word or two beside the figure in the clause ("rupees", "days",
-      "payment of") stands beside the same figure in the passage. A clause that
-      says "after 200 days" is not about a passage that says "200 rupees", and
-      the passage only shares a number with it.
+    - Only when the clause and the passage are about the same thing, and count
+      the same thing. A unit the clause states (the word right after the figure,
+      or the currency mark right before it) must be the passage's: "200 rupees"
+      and "Rs 200", not "200 days", nor "200 students" against "200 seats". And the
+      content words just before the figure must overlap ("the hostel fee is
+      42000" and "The hostel fee is 42000 per year", not "the exam fee is 4500
+      rupees" against a bus pass that costs 4500 rupees). A time or a range is
+      never repaired.
     - Never a table row, never for an answer that cites nothing valid, at most
       twice, and the result is checked again from scratch.
 
@@ -722,7 +727,7 @@ def repair_citations(report: GroundingReport, context):
         owner = owners[0]
         if owner.marker not in owner_words:
             owner_words[owner.marker] = _words(owner.text)
-        owner_counts = None
+        owner_reading = False  # not read yet; None is a kind it cannot read
 
         for begin, finish in spans:
             if text[begin:finish].count("|") >= 2:
@@ -732,9 +737,23 @@ def repair_citations(report: GroundingReport, context):
                 continue
             if len(_words(clause) & owner_words[owner.marker]) < MIN_SHARED_WORDS:
                 continue
-            if owner_counts is None:
-                owner_counts = _figure_context(owner.text, fact)
-            if not (_figure_context(clause, fact) & owner_counts):
+            # A date is told apart by the verb beside it ("closes on"), so two
+            # words each side; an amount by what it is the amount OF, which a
+            # passage may say further back ("a lost bus pass is replaced on
+            # payment of 200 rupees"): three in the clause against six in it.
+            is_date = fact.startswith("date:")
+            if owner_reading is False:
+                owner_reading = _figure_reading(owner.text, fact, 2 if is_date else 6)
+            clause_reading = _figure_reading(clause, fact, 2 if is_date else 3)
+            if clause_reading is None or owner_reading is None:
+                continue
+            clause_units, clause_subject = clause_reading
+            owner_units, owner_subject = owner_reading
+            # A unit the clause states must be the passage's; the clause and the
+            # passage must be about the same thing.
+            if clause_units and not (clause_units & owner_units):
+                continue
+            if not (clause_subject & owner_subject):
                 continue
             position = clause_begin + len(clause.rstrip(".!?;:, \t\n"))
             insertions.setdefault(position, set()).add(owner.marker)

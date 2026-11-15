@@ -431,6 +431,64 @@ class RepairMeaningTests(Base):
         self.assertEqual(repairs, [("200", 2)])
         self.assertTrue(grounding.validate(repaired, context).ok)
 
+    def test_the_same_unit_on_another_subject_is_not_repaired(self):
+        """Round two: 'the exam fee is 4500 rupees' was repaired onto a bus pass
+        that costs 4500 rupees, because both are rupees and the clause shared
+        words with the passage. What the figure is the amount OF must match."""
+        _, _, repairs = self.repair(
+            "A scholarship holder must maintain a minimum of 85 percent "
+            "attendance [1], and the exam fee is 4500 rupees per semester.",
+            SCHOLARSHIP,
+            "A bus pass costs 4500 rupees per semester and is issued on payment.",
+        )
+
+        self.assertEqual(repairs, [])
+
+    def test_a_different_thing_counted_is_not_repaired(self):
+        for claim, passage in (
+            ("the late fine is 500 days", "The late fine is 500 rupees per week."),
+            ("the hostel has 200 students", "The hostel has 200 seats."),
+            ("the library holds 500 rupees", "The library holds 500 books."),
+        ):
+            with self.subTest(claim=claim):
+                _, _, repairs = self.repair(
+                    "A scholarship holder must maintain a minimum of 85 percent "
+                    f"attendance [1], and {claim}.",
+                    SCHOLARSHIP,
+                    passage,
+                )
+                self.assertEqual(repairs, [])
+
+    def test_a_date_on_another_subject_is_not_repaired(self):
+        _, _, repairs = self.repair(
+            "A scholarship holder must maintain a minimum of 85 percent "
+            "attendance [1], and hostel registration closes on 15 August 2025.",
+            SCHOLARSHIP,
+            "A student must register with the cell before 15 August of the final year.",
+        )
+
+        self.assertEqual(repairs, [])
+
+    def test_a_time_or_a_range_is_never_repaired(self):
+        for claim, passage in (
+            ("the office opens at 9:30 am", "The office opens at 9:30 am daily."),
+            # A range written with a dash is one figure ("100-500"), and a
+            # passage that states it as "between 100 and 500" supports it as a
+            # range; it is never attributed by words.
+            (
+                "fines run 100-500 rupees",
+                "Fines run between 100 and 500 rupees.",
+            ),
+        ):
+            with self.subTest(claim=claim):
+                _, _, repairs = self.repair(
+                    "A scholarship holder must maintain a minimum of 85 percent "
+                    f"attendance [1], and {claim}.",
+                    SCHOLARSHIP,
+                    passage,
+                )
+                self.assertEqual(repairs, [])
+
     def test_a_date_is_repaired_only_beside_the_same_words(self):
         passage = "Registration for the placement cell closes on 15 August 2025."
         _, _, repairs = self.repair(
@@ -623,8 +681,15 @@ class UserFigureTests(Base):
             user_text="My family income is Rs 200000. Do I qualify?",
         )
 
-    def test_a_date_the_user_typed_may_be_echoed(self):
+    def test_a_date_the_user_gave_about_themselves_may_be_echoed(self):
         self.accepted(
+            "You joined on 15 August, and the first semester fee is due on 31 March [1].",
+            "The first semester fee is due on 31 March every year.",
+            user_text="I joined on 15 August 2025. When is my fee due?",
+        )
+
+    def test_a_date_the_user_only_heard_is_not_a_given(self):
+        self.rejected(
             "The hostel closes on 31 March, not on 15 August [1].",
             "The hostel closes on 31 March every year for the summer vacation.",
             user_text="I heard the hostel closes on 15 August 2025?",
@@ -1345,3 +1410,128 @@ class ReadableFailureTests(Base):
     def test_the_orchestrator_can_name_a_repaired_figure_the_same_way(self):
         self.assertEqual(grounding.readable("date:2025-03-31"), "31 March 2025")
         self.assertEqual(grounding.readable("200"), "200")
+
+
+class AClaimWithAPronounIsNotASituationTests(Base):
+    """Round two found that a pronoun and no ask-word was enough to make a
+    CLAIM count as the user's own situation: 'Can I borrow 10 books?' let an
+    answer agree that 10 books may be borrowed. A clause counts only when it
+    STATES a situation, and not when it asks, hedges or reports hearsay."""
+
+    LIBRARY = "An undergraduate student may borrow up to four books at one time."
+    ATTENDANCE_RULE = "A student must have a minimum of 75 percent attendance."
+
+    def test_questions_and_hearsay_with_a_pronoun_are_not_given(self):
+        for question in (
+            "Is 70 percent enough for me?",
+            "Can I get a 20 percent scholarship?",
+            "We heard the hostel closes on 15 August",
+            "My professor says 70 is the cut-off",
+            "I read that attendance is 70 percent, true?",
+            "Our department says the bus pass is 3000 rupees, right?",
+            "Am I allowed 70 percent leave?",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(facts.user_stated_text(question), "")
+
+    def test_an_answer_that_agrees_with_a_figure_in_such_a_question_is_rejected(self):
+        self.rejected(
+            "A student may borrow 10 books [1].",
+            self.LIBRARY,
+            figure="10",
+            user_text="Can I borrow 10 books?",
+        )
+        self.rejected(
+            "70 percent attendance is enough to sit the examination [1].",
+            self.ATTENDANCE_RULE,
+            figure="70",
+            user_text="Is 70 percent enough for me?",
+        )
+
+    def test_a_genuine_situation_survives_a_question_in_the_same_sentence(self):
+        """The first half of 'I have 70 percent attendance, what is the minimum
+        required?' is the situation; the ask-word was in the other half."""
+        for question in (
+            "I have 70 percent attendance, what is the minimum required?",
+            "I have 70 percent attendance, is that fine for the exam?",
+            "Our family income is Rs 2 lakh, what is the amount of aid I can get?",
+            "I joined in 2022 and my hostel fee was 55000. What is it now?",
+            "I was unwell and my presence is at 70 percent. Can I still sit the exam?",
+        ):
+            with self.subTest(question=question):
+                self.assertNotEqual(facts.user_stated_text(question), "")
+
+        self.accepted(
+            "At 70 percent you are below the 75 percent minimum [1].",
+            self.ATTENDANCE_RULE,
+            user_text="I have 70 percent attendance, what is the minimum required?",
+        )
+
+    def test_a_roman_numeral_or_an_abbreviation_is_not_a_pronoun(self):
+        for text in (
+            "clause (i) of 4.2 and 70 percent applies",
+            "Attendance, i.e. 70 percent, is the target",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(facts.user_stated_text(text), "")
+
+    def test_a_follow_up_cannot_join_a_pronoun_to_another_turns_figure(self):
+        """The engine hands over what the user typed THIS turn, not the retrieval
+        query (their words with terms borrowed from earlier turns appended, with
+        no sentence break). 'what about me?' beside borrowed 'attendance 70
+        percent enough' used to read as one sentence about the user."""
+        self.assertEqual(facts.user_stated_text("what about me?"), "")
+        self.rejected(
+            "The minimum is 70 percent [1].",
+            self.ATTENDANCE_RULE,
+            figure="70",
+            user_text="what about me?",
+        )
+
+
+class IdentifiersWithALetterSuffixStayWholeTests(Base):
+    """'16-A', '12/B' and '80-C' were read as the bare numbers 16, 12 and 80, so
+    a wrong form, section or room passed for the right one, and a passage's
+    'Section 80-C' supported '80 percent'. Only a unit word glues to a number."""
+
+    def test_a_different_suffix_is_a_different_identifier(self):
+        for answer, passage in (
+            ("Submit Form 16-B [1].", "Submit Form 16-A to the office."),
+            ("Section 12-B applies [1].", "Section 12-A applies to staff."),
+            ("See Rule 4/b [1].", "See Rule 4/a for the details."),
+            ("The exam is in Hall 3-B [1].", "The exam is held in Hall 3-A."),
+            ("Section 80-CCD applies [1].", "Section 80-C applies to every employee."),
+        ):
+            with self.subTest(answer=answer):
+                self.rejected(answer, passage)
+
+    def test_the_same_identifier_is_accepted(self):
+        self.accepted("Submit Form 16-A [1].", "Submit Form 16-A to the office.")
+
+    def test_an_identifier_never_stands_for_a_bare_number_either_way(self):
+        self.rejected(
+            "Submit Form 12-A [1].", "The result is published within 12 days."
+        )
+        self.rejected(
+            "Section 80-C applies [1].", "Attendance of 80 percent is required."
+        )
+        self.rejected(
+            "A student needs 80 percent attendance [1].",
+            "As set out in Section 80-C of the rules.",
+        )
+
+    def test_a_unit_word_still_glues_to_its_number(self):
+        for compound in (
+            "15-day",
+            "8-week",
+            "12-character",
+            "30-days",
+            "15-day-window",
+        ):
+            with self.subTest(compound=compound):
+                self.assertEqual(
+                    grounding._split_glued(compound), [compound.split("-")[0]]
+                )
+        self.assertEqual(grounding._split_glued("rs500/week"), ["500"])
+        # ...but a month is not a unit: "15-Sep" is a date.
+        self.assertEqual(grounding._split_glued("15-sep"), ["15-sep"])

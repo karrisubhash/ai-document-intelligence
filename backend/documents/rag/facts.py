@@ -772,3 +772,73 @@ def readable(fact: str) -> str:
     except (KeyError, ValueError):  # a shape nobody anticipated: say it as it is
         return fact
     return fact
+
+
+# --- What the user typed, as far as an answer may repeat it ---------------------
+#
+# A figure the user gives about THEIR OWN situation is a given: "I have 70
+# percent attendance", "my family earns two lakh", "a student with 60 percent".
+# An answer that works with it has to be able to say it back, and rejecting "at 70
+# percent you may apply for condonation" for containing 70 turned a correct
+# answer into "not found".
+#
+# A figure the user asks ABOUT, or only reports hearing, is a claim or a target,
+# not a given: "Is the minimum 70 percent?", "What does the bus pass cost for
+# 2023-24?", "Can I borrow 10 books?", "We heard the hostel closes on 15 August".
+# An answer that states one of those has to find it in the passages: echoing it
+# back is how an answer agrees with a wrong number or answers for a year the
+# documents do not cover.
+#
+# So only a CLAUSE that states the user's own situation counts: a first-person
+# subject with a verb of having, being, scoring, earning, paying or joining, or
+# "my/our X is ...", or "a student with ...". A clause with a question mark does
+# not (except "a student with 60 percent attendance, can she apply?"), and neither
+# does one that reports hearsay or doubt, or asks for a requirement. Clauses are
+# cut at sentence ends, commas, semicolons and "and"/"but", so "I have 70 percent
+# attendance, what is the minimum?" keeps its first half.
+_USER_CLAUSES = re.compile(
+    r"(?<=[.!?;])\s+|\n+|,\s+|\s+(?:and|but|so|because|while|although)\s+",
+    re.IGNORECASE,
+)
+_PEOPLE = r"(?:student|candidate|employee|member|applicant|resident|person|someone)"
+_OWN_STATE = re.compile(
+    r"\b(?:i|i'm|i've|i'd|we|we're|we've)\s+(?:\w+\s+){0,2}?"
+    r"(?:have|had|has|am|was|were|are|scored?|secured?|got|get|earn(?:s|ed)?"
+    r"|paid|pay|joined|enrolled|admitted|completed|passed|failed|attended|missed"
+    r"|owe|owed|graduated|born|started|began|entered|registered|applied|appeared"
+    r"|submitted|received|bought|purchased)\b"
+    r"|\b(?:my|our|mine)\s+(?:\w+\s+){0,3}?"
+    r"(?:is|was|are|were|has|have|had|earn(?:s|ed)?|stands?|comes?|came|totals?"
+    r"|scored?|secured?)\b"
+    r"|\b" + _PEOPLE + r"s?\s+(?:with|who\s+(?:has|have|had|scored?|secured?|got"
+    r"|earn(?:s|ed)?))\b",
+    re.IGNORECASE,
+)
+_THIRD_PERSON_WITH = re.compile(r"\b" + _PEOPLE + r"s?\s+with\b", re.IGNORECASE)
+_DOUBT = re.compile(
+    r"\b(?:heard|hear|read|told|tell|says?|said|think|thought|believe[ds]?"
+    r"|rumou?r\w*|supposed\w*|apparently|claims?|true|right|correct|sure"
+    r"|confirm\w*|enough|fine|okay|ok|allowed|permitted|eligible|need|needs"
+    r"|needed|require[sd]?|must|minimum|maximum|limit|cut-?off|deadline|ask\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def user_stated_clauses(user_text) -> list:
+    """The clauses of what the user typed that state THEIR OWN situation; see the
+    comment above for what counts."""
+    kept = []
+    for clause in _USER_CLAUSES.split(user_text or ""):
+        clause = clause.strip()
+        if not clause or not _OWN_STATE.search(clause) or _DOUBT.search(clause):
+            continue
+        if "?" in clause and not _THIRD_PERSON_WITH.search(clause):
+            continue
+        kept.append(clause)
+    return kept
+
+
+def user_stated_text(user_text) -> str:
+    """The clauses of what the user typed that state their own situation, joined.
+    Only figures in this text may be repeated by an answer."""
+    return " ".join(user_stated_clauses(user_text))
