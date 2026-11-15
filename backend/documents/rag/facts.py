@@ -325,6 +325,16 @@ _DIGIT_COMMAS = re.compile(r"(?<!\d)\d+(?:,\d+)+", re.ASCII)
 # 85,000 and 1,234,567; and the Indian grouping 1,00,000 and 1,47,500.
 _WELL_FORMED = re.compile(r"\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}", re.ASCII)
 
+# The spaces that are written ON PURPOSE between the groups of a number ("300 000"
+# with a narrow no-break space, the typographic thousands separator gpt-oss uses):
+# every space separator but the ordinary one, which in running text is only a space.
+_THOUSANDS_SPACES = "".join(
+    chr(code) for code in (0xA0, *range(0x2000, 0x200B), 0x202F, 0x205F)
+)
+_SPACED_THOUSANDS = re.compile(
+    r"(?<![\d.,])\d{1,3}(?:[" + _THOUSANDS_SPACES + r"]\d{3})+(?![\d,])"
+)
+
 
 def strip_format(text: str) -> str:
     """Text without its invisible format characters (Unicode category Cf).
@@ -355,6 +365,14 @@ def lookalikes(text: str) -> str:
     """
     if text.isascii():
         return text
+    # "300<NNBSP>000" is the number 300000, where "300 000" with an ordinary space
+    # stays two figures: a group of three digits after a space written on purpose.
+    text = _SPACED_THOUSANDS.sub(
+        lambda match: "".join(
+            ch for ch in match.group(0) if ch not in _THOUSANDS_SPACES
+        ),
+        text,
+    )
     out = []
     for char in text:
         if char < chr(128):

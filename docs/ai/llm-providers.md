@@ -201,7 +201,8 @@ not turn the rest off with it.
   number the passage states with its unit, a citation written "[1, 2]", "[1-2]", "[ 1 ]" or
   "[Source 1]", a list numbered "**1.**" or "(1)", the space and hyphen a model or a Word
   document actually types (a no-break or narrow no-break space in "15 August", a non-breaking
-  hyphen in "2024-25", a digit of another script; the reader's text is never altered) - and
+  hyphen in "2024-25", a narrow no-break space as the thousands separator in "300 000", a
+  digit of another script; the reader's text is never altered) - and
   a figure the **user** gave about their own situation ("I have 70 percent attendance",
   "I'm at 70%", "with 70 percent attendance" answered with "At 70 percent ..."), which is
   never a source and never cited. That is judged figure by figure, by what stands right before

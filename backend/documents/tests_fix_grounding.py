@@ -1641,6 +1641,34 @@ class LookalikeCharacterTests(Base):
                 report = self.accepted(answer % inner, REGISTER, CURFEW)
                 self.assertEqual(report.cited_markers, (1, 2))
 
+    def test_a_number_grouped_with_a_typographic_space_is_one_number(self):
+        """gpt-oss writes "300<NARROW NO-BREAK SPACE>000": the figures '300' and
+        '000' were refused as nobody's, and a correct answer was lost twice in a
+        real-model run."""
+        threshold = "Aid is for families with an income below Rs 3 lakh per year."
+        for name, space in SPACES:
+            with self.subTest(space=name):
+                self.accepted(f"The limit is 300{space}000 rupees [1].", threshold)
+                self.rejected(f"The limit is 300{space}001 rupees [1].", threshold)
+        self.accepted(
+            f"The fee is 1{NNBSP}200{NNBSP}000 rupees [1].",
+            "The fee is Rs 12 lakh per year.",
+        )
+
+    def test_an_ordinary_space_or_other_digits_do_not_make_a_number(self):
+        for text in (
+            "300 000",
+            f"15{NNBSP}2024",
+            f"2024{NNBSP}25",
+            f"3{NNBSP}00",
+            f"1{NNBSP}2345",
+        ):
+            with self.subTest(text=text):
+                # Still two figures: a space is left between them.
+                self.assertIn(" ", facts.lookalikes(text))
+        self.assertEqual(facts.lookalikes(f"300{NNBSP}000"), "300000")
+        self.assertEqual(facts.lookalikes(f"a 85{THIN_SPACE}000 b"), "a 85000 b")
+
     def test_what_a_reader_is_shown_is_not_altered(self):
         report = self.accepted(f"Register before 15{NNBSP}August [1].", REGISTER)
 
