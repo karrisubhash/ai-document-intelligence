@@ -1706,6 +1706,34 @@ class UserFigureLocalityTests(Base):
             with self.subTest(user_text=user_text):
                 self.rejected(self.ECHO, HOSTEL_FEE, user_text=user_text)
 
+    def test_a_fee_stated_with_an_ownership_cue_is_a_claim_about_the_fee(self):
+        """Nothing else in these says it is a claim: an ownership cue close before
+        the figure, no other figure, nothing that reports or checks, no tag. Only
+        the noun right before the figure ("fee") gives it away."""
+        for user_text in (
+            "As a student the hostel fee is 50000",
+            "We are residents with hostel fee 50000",
+            "I am a student and my fine is 500",
+        ):
+            with self.subTest(user_text=user_text):
+                self.rejected(self.ECHO, HOSTEL_FEE, user_text=user_text)
+
+    def test_a_close_part_of_their_own_figure_is_theirs_too(self):
+        """ "2021-25" is two figures to a pattern and one to the user: the second
+        stands past the first, and a cue owns only the figure of its own predicate."""
+        passage = "The tuition fee is the same for every batch of students."
+        for user_text in (
+            "I am in the 2021-25 batch. Is my fee different?",
+            "I was admitted on 15 August 2025. Is my fee different?",
+        ):
+            answer = (
+                "Your 2021-25 batch pays the same tuition fee [1]."
+                if "2021" in user_text
+                else "You were admitted on 15 August 2025 and pay the same tuition fee [1]."
+            )
+            with self.subTest(user_text=user_text):
+                self.accepted(answer, passage, user_text=user_text)
+
     def test_the_figure_that_is_not_theirs_is_masked_and_the_rest_stays(self):
         kept = facts.user_stated_text
         self.assertEqual(

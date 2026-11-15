@@ -869,7 +869,6 @@ def readable(fact: str) -> str:
 # - and not right after a noun that names what an institution CHARGES or REQUIRES
 #   ("fee", "fine", "minimum", "limit"...), unless the clause is in the past ("my
 #   hostel fee WAS 55000" is what they paid; "the hostel fee is 50000" is a claim);
-# - and not followed by a tag that asks for agreement ("isn't it", "right?");
 # - and in a clause that opens with a question word, only when "with"/"at" or an
 #   ownership cue that is not the question's own subject ("Can I get...") says so.
 #
@@ -982,8 +981,6 @@ _PERSONAL_NOUNS = frozenset(
     "backlog backlogs age".split()
 )
 _STATE_WORDS = frozenset("is was at of stands".split())
-# After a figure: a request to agree with it.
-_AGREEMENT_TAGS = frozenset("isnt isn't right correct true no na okay ok".split())
 # How close before a figure an ownership cue has to end, and how far from the
 # user's own figure the next one may stand and still be part of it ("15 August
 # 2025", "the 2021-25 batch", "4500 for my bus pass in 2023").
@@ -1033,9 +1030,8 @@ def _mask_clause(clause: str):
         policy = any(word in _POLICY_NOUNS for word in words[-3:]) and not any(
             word in _PAST_WORDS for word in words
         )
-        agreement = any(word in _AGREEMENT_TAGS for word in after)
 
-        if (owner or situational or personal) and not (reported or policy or agreement):
+        if (owner or situational or personal) and not (reported or policy):
             own += 1
             last_own_end = match.end()
             continue

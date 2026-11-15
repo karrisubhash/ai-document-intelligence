@@ -208,7 +208,7 @@ not turn the rest off with it.
   it: an ownership cue ("I have", "my X is", "a student with", "with"/"at"), nothing that only
   reports or checks it ("heard", "says", "whether", "checking", "regarding"), not right after
   what an institution charges or requires ("fee", "minimum", "limit") unless the sentence is in
-  the past ("my hostel fee WAS 55000"), and no request to agree after it ("isn't it"). A figure
+  the past ("my hostel fee WAS 55000"). A figure
   the user only ASKED about or reported ("Is the minimum 70 percent?", "I heard the hostel
   closes on 15 August") is not theirs to repeat: it must be in a cited passage, or the answer
   is rejected. No rule can tell the user's own past payment ("I paid 50000 as hostel fee last
