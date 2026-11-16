@@ -166,6 +166,11 @@ def dehyphenate(lines: list) -> list:
         head, tail = end.group(1), start.group(1)
         first, _, rest = following.lstrip().partition(" ")
         if _keeps_hyphen(head, tail):
+            if _rank(head + tail) is None and tail in FUNCTION_WORDS:
+                # "pre-" / "and post-processing": a hyphen left hanging on
+                # purpose. "where-" / "as" never gets here - whereas is a word.
+                index += 1
+                continue
             out[index] = line + first
         else:
             out[index] = line[:-1] + first

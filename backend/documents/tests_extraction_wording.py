@@ -52,6 +52,17 @@ class DehyphenationTests(SimpleTestCase):
 
         self.assertEqual(wording.dehyphenate(lines), lines)
 
+    def test_a_hyphen_left_hanging_on_purpose_stays_hanging(self):
+        lines = ["both pre-", "and post-processing steps"]
+
+        self.assertEqual(wording.dehyphenate(lines), lines)
+
+    def test_a_little_word_that_completes_a_word_is_still_joined(self):
+        self.assertEqual(
+            wording.dehyphenate(["the first, where-", "as the second"]),
+            ["the first, whereas", "the second"],
+        )
+
     def test_a_line_that_was_only_the_word_end_disappears(self):
         self.assertEqual(
             wording.dehyphenate(["the inspira-", "tion"]), ["the inspiration"]
