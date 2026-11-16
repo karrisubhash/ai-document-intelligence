@@ -312,7 +312,7 @@ class RuleExtractorTests(TestCase):
             document_content_id=7, document_type="CIRCULAR", pages=[(1, "")]
         )
         self.assertEqual(prediction.schema_name, "institutional")
-        self.assertEqual(prediction.schema_version, "1.0.1")
+        self.assertEqual(prediction.schema_version, "1.0.2")
         self.assertEqual(prediction.input_reference, "document_content:7")
 
     def test_document_type_without_a_schema_raises_no_schema(self):
@@ -430,6 +430,28 @@ class ShippedPackPatternTests(TestCase):
             NOT_FOUND,
         )
         self.assertEqual(shipped("SYLLABUS", "Credits: 3.5")["credits"].value, "3.5")
+
+    def test_credits_are_read_on_the_line_of_their_label(self):
+        """A table header ends in 'Credits' and the next row starts with a
+        course code: '23ME4119' was read as credits 23, and 'Credits' above an
+        S.No column as credits 1."""
+        for text in (
+            "Code | Periods | Total Marks | Credits\n23ME4119 | 2 | 100 | 3",
+            "Code | Course | Credits\n1 | Programming | 4",
+            "Credits\n23ME4119 Dynamics of Machinery",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(shipped("SYLLABUS", text)["credits"].status, NOT_FOUND)
+
+    def test_credits_on_the_same_line_as_their_label_are_still_read(self):
+        for text, value in (
+            ("Credits: 3", "3"),
+            ("Credits - 4", "4"),
+            ("Course | Credits | 4", "4"),
+            ("This course carries Credits 2.5 in the semester.", "2.5"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(shipped("SYLLABUS", text)["credits"].value, value)
 
     def test_a_date_inside_another_word_is_not_the_issue_date(self):
         match = shipped(

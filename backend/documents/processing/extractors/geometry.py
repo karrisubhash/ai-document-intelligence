@@ -604,14 +604,16 @@ def _lines_to_text(lines: list, height: float) -> str:
     """Lines as text, a blank line between paragraphs.
 
     A word hyphenated across two lines of one paragraph is joined
-    (`wording.dehyphenate`); across a paragraph break nothing is.
+    (`wording.dehyphenate`); across a paragraph break nothing is. A symbol-font
+    bullet that starts a line is written as a bullet (`wording.bullet_line`);
+    the same glyph anywhere else is a letter, an arrow or a tick, and stays.
     """
     paragraphs: list = [[]]
     previous = None
     for line in lines:
         if previous is not None and line.top - previous.bottom > PARAGRAPH_GAP * height:
             paragraphs.append([])
-        paragraphs[-1].append(line.text)
+        paragraphs[-1].append(wording.bullet_line(line.text))
         previous = line
     return "\n\n".join(
         "\n".join(wording.dehyphenate(paragraph)) for paragraph in paragraphs

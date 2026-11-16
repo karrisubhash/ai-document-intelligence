@@ -625,14 +625,7 @@ def _words(page, table_boxes, direction: str, votes: Counter) -> tuple:
         else:
             x0, x1, top, bottom = word["x0"], word["x1"], word["top"], word["bottom"]
         upright.append(
-            geometry.Word(
-                # A Wingdings bullet is a private-use glyph; written as one.
-                text=wording.bullet(word["text"]),
-                x0=x0,
-                x1=x1,
-                top=top,
-                bottom=bottom,
-            )
+            geometry.Word(text=word["text"], x0=x0, x1=x1, top=top, bottom=bottom)
         )
 
     odd = []

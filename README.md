@@ -633,14 +633,31 @@ written into every row it covers; a header split over two rows becomes one
 is read in its own direction; a box that holds a table of its own is left to the layout
 reader.
 
-**What the PDF itself gets wrong is put right** (`extractors/wording.py`): a word broken
-across lines by a hyphen is joined ("inspira-" / "tion"), keeping the hyphen only where
-the hyphenated form is the word ("AI-powered"); a page whose converter drew words with
-no space between them ("Adieselenginehasafuelinjectionsystem") has those runs split into
-common words — only on pages that show the fault, never names, codes, CamelCase or
-acronyms; a Wingdings bullet becomes "•"; contents lines with dot leaders stay lines
-instead of becoming tables. The word list is wordninja's (MIT); without it these repairs
-are skipped and nothing else changes.
+**What the PDF itself gets wrong is put right** (`extractors/wording.py`), and only where
+the repair cannot make a correct text worse:
+
+- A word broken across lines by a hyphen is joined ("inspira-" / "tion"), keeping the
+  hyphen where the hyphenated form is the word ("AI-powered"). Where a join could change
+  what is said — "vis-" / "a-vis", "go-" / "to", "short-" / "but" — the lines are left as
+  drawn.
+- A converter that dropped the spaces between words ("Adieselenginehasafuelinjectionsystem")
+  has those runs split into common words. Evidence comes first: a run of 20+ letters that
+  splits into four or five common words with a function word among them cannot be a real
+  word, and only a page that has one gets its shorter runs split, under stricter rules
+  (every content word common, at least four letters, a strong function word such as "the",
+  "of" or "and", no derivational suffix at the end). A page with no such run is left exactly
+  as drawn, whatever words on it the list lacks; names, codes, links, paths, identifiers and
+  CamelCase are never touched. The false-positive rate was measured on the 77,000 dictionary
+  words the list lacks (0.007%) and on names, places and terms, not assumed.
+- A symbol-font bullet (Wingdings, Symbol) at the start of a line is written as "•"; the
+  same glyphs elsewhere (Greek letters, arrows, ticks) stay.
+- Contents lines — a dot leader, then a page number — stay lines instead of becoming
+  tables, when most lines of a band are such entries; a table with one dotted total row
+  stays a table.
+
+The word list (126,000 English words by frequency) is wordninja's, MIT-licensed, and ships
+inside the repository (`extractors/data/`) with its licence: no package is fetched at image
+build time, and if the file is ever missing the repairs switch off and the miss is logged.
 
 Work is **bounded**: a spreadsheet stops at 200,000 filled cells (and says so in its last
 page), a blank-row run ends a sheet, pictures are OCR'd up to a per-file budget, and a
@@ -1909,7 +1926,7 @@ the last recorded results are in [docs/development/testing.md](docs/development/
 | Database | PostgreSQL 16 |
 | Cache / broker | Redis 7 |
 | Async jobs | Celery |
-| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow, wordninja's word list (hyphenation and glued-word repair) |
+| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow, a bundled word list (hyphenation and glued-word repair) |
 | Search | PostgreSQL full-text + pgvector (HNSW), reciprocal-rank fusion |
 | ML | scikit-learn (text classifier), sentence-transformers on CPU PyTorch (bge-small embeddings, bge-reranker-base cross-encoder), PyTorch on a remote GPU (vision training path) |
 | LLM providers (optional) | Anthropic API / Amazon Bedrock, any OpenAI-compatible endpoint |
