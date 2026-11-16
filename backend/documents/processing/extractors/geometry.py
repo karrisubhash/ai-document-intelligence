@@ -128,6 +128,9 @@ class Block:
     rows: list = field(default_factory=list)
     # Where the block came from, for the caller's own bookkeeping.
     source: str = ""
+    # For a table: True when its first row is known to be the header, or
+    # "auto" to let the writer judge (compose.PageBuilder.add_table).
+    header: object = "auto"
 
 
 @dataclass
@@ -359,6 +362,10 @@ def _is_number(cell: str) -> bool:
     text = _CURRENCY.sub("", cell.strip().lstrip("₹$€£¥+-−("))
     text = text.rstrip(")").strip()
     return bool(text) and bool(_NUMBER.match(text.replace(" ", "")))
+
+
+# Public: the ruled-table reader asks the same question of a cell's lines.
+is_number = _is_number
 
 
 def _word_count(cell: str) -> int:

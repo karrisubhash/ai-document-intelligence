@@ -84,6 +84,19 @@ class Page:
         )
         return self
 
+    def fill(self, x, y, width, height, rgb=(1, 1, 1)):
+        """A filled rectangle with no outline, top-left at (x, y).
+
+        White by default: what Word paints behind every table cell and every
+        paragraph in it when it saves a PDF.
+        """
+        r, g, b = rgb
+        self.ops.append(
+            f"q {r} {g} {b} rg {x} {PAGE_HEIGHT - y - height:.2f} "
+            f"{width} {height} re f Q"
+        )
+        return self
+
     def box(self, x, y, width, height):
         self.rule(x, y, x + width, y)
         self.rule(x, y + height, x + width, y + height)
