@@ -623,15 +623,27 @@ Pages are read in **reading order** — a two-column page is read one column aft
 and a numbered-clause list is left as the lines it is, never cut into cells.
 
 **Ruled PDF tables are read as drawn, not as encoded.** Word exports paint a rectangle
-behind every cell and every paragraph in it, in the cell's own colour; only a line or
-fill whose colour differs from what lies behind it counts as a ruling, so those
-backgrounds no longer turn a three-column table into seven columns or a wrapped
-description into one row per line. Two tables drawn touching are split where their
-columns conflict. A value merged down a group of rows ("Pool-I", its 4 credits) is
-written into every row it covers; a header split over two rows becomes one
-("Periods/Week L"); a full-width first row is the table's title; a cell printed sideways
-is read in its own direction; a box that holds a table of its own is left to the layout
-reader.
+behind every cell and every paragraph in it, in the cell's own colour; a filled rectangle
+in the colour already behind it is not a ruling (lines and stroked rectangles always are),
+so those backgrounds no longer turn a three-column table into seven columns or a wrapped
+description into one row per line. Each rule was narrowed until the case it gets wrong
+cannot occur, because an independent review found the first version reading ordinary
+layouts worse than the code it replaced:
+
+- Two tables drawn touching are split where their columns conflict, but borders a few
+  points off (a Word table edited row by row) are one table.
+- A table's title row ("IIIrd Year - Semester II") stays its first row, in the table
+  chunk beside its own table; the header is looked for under it, and taken only when that
+  row reads as a header (no value in it, the label of a column of figures).
+- A header split over two rows ("Periods/Week" over L, T, P) becomes one ("Periods/Week L")
+  only when it is laid out as a header: every cell below lies under a cell merged across.
+  A form's first rows (a photo merged down beside "Name") stay as drawn.
+- A label merged down a group of rows ("Pool-I") is written into each record it spans -
+  never a figure: a part's total marks or an elective slot's credits stays once, so a sum
+  over the column stays right.
+- A cell printed sideways is read in its own direction; a box that holds a table of its
+  own (a statement body, a precinct bulletin) is left to the layout reader, a bulleted
+  cell or two short lists in one cell are not.
 
 **What the PDF itself gets wrong is put right** (`extractors/wording.py`), and only where
 the repair cannot make a correct text worse:
