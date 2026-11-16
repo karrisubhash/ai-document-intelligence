@@ -9,6 +9,7 @@ pdfplumber
 openpyxl
 defusedxml
 python-pptx
+wordninja
 pytesseract
 pdf2image
 pillow

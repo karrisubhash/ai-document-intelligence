@@ -606,7 +606,7 @@ its pictures fails with `EMPTY_EXTRACTION`.
 
 | Format | Read with | A page is | Tables |
 |---|---|---|---|
-| PDF | pdfplumber; Tesseract for scanned pages | a PDF page | ruled grids cell by cell, blank and merged cells kept; borderless tables inferred from aligned text |
+| PDF | pdfplumber; Tesseract for scanned pages | a PDF page | ruled grids cell by cell as a reader sees them (invisible cell backgrounds are not rulings, touching tables are split, merged cells and two-row headers resolved); borderless tables inferred from aligned text |
 | Scan or photo — PNG, JPEG, TIFF, WebP, BMP | Tesseract, with word positions | an image, or one TIFF frame | inferred from word positions |
 | DOCX | python-docx, walking the XML | the author's page breaks | the document's own cells |
 | XLSX | openpyxl | a visible sheet, in 500-row parts with the header repeated | a table per run of non-blank rows |
@@ -622,13 +622,33 @@ wrong column. Every table is written into the page text as one `a | b | c` row p
 Pages are read in **reading order** — a two-column page is read one column after the other,
 and a numbered-clause list is left as the lines it is, never cut into cells.
 
+**Ruled PDF tables are read as drawn, not as encoded.** Word exports paint a rectangle
+behind every cell and every paragraph in it, in the cell's own colour; only a line or
+fill whose colour differs from what lies behind it counts as a ruling, so those
+backgrounds no longer turn a three-column table into seven columns or a wrapped
+description into one row per line. Two tables drawn touching are split where their
+columns conflict. A value merged down a group of rows ("Pool-I", its 4 credits) is
+written into every row it covers; a header split over two rows becomes one
+("Periods/Week L"); a full-width first row is the table's title; a cell printed sideways
+is read in its own direction; a box that holds a table of its own is left to the layout
+reader.
+
+**What the PDF itself gets wrong is put right** (`extractors/wording.py`): a word broken
+across lines by a hyphen is joined ("inspira-" / "tion"), keeping the hyphen only where
+the hyphenated form is the word ("AI-powered"); a page whose converter drew words with
+no space between them ("Adieselenginehasafuelinjectionsystem") has those runs split into
+common words — only on pages that show the fault, never names, codes, CamelCase or
+acronyms; a Wingdings bullet becomes "•"; contents lines with dot leaders stay lines
+instead of becoming tables. The word list is wordninja's (MIT); without it these repairs
+are skipped and nothing else changes.
+
 Work is **bounded**: a spreadsheet stops at 200,000 filled cells (and says so in its last
 page), a blank-row run ends a sheet, pictures are OCR'd up to a per-file budget, and a
 failure in the PDF engine on one page falls back to the previous engine for that page
 only. A `.docx`-named workbook is still read as a workbook: the bytes decide.
 
 **Re-extracting what is already uploaded.** Every extraction records the pipeline version
-that wrote it (`ingestion-v2` now). `python manage.py reprocess_documents --dry-run` lists
+that wrote it (`ingestion-v3` now). `python manage.py reprocess_documents --dry-run` lists
 the documents an older pipeline read; run it without `--dry-run`, in batches with
 `--limit`, to queue them. It uses the same path as the Reprocess button, so a run already
 in progress is never doubled, and the previous text stays live until the new extraction is
@@ -1889,7 +1909,7 @@ the last recorded results are in [docs/development/testing.md](docs/development/
 | Database | PostgreSQL 16 |
 | Cache / broker | Redis 7 |
 | Async jobs | Celery |
-| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow |
+| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow, wordninja's word list (hyphenation and glued-word repair) |
 | Search | PostgreSQL full-text + pgvector (HNSW), reciprocal-rank fusion |
 | ML | scikit-learn (text classifier), sentence-transformers on CPU PyTorch (bge-small embeddings, bge-reranker-base cross-encoder), PyTorch on a remote GPU (vision training path) |
 | LLM providers (optional) | Anthropic API / Amazon Bedrock, any OpenAI-compatible endpoint |

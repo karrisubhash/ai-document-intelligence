@@ -33,6 +33,7 @@ pypdf stays for what it is good at: counting pages for validation and
 reading the image dictionary for figure detection.
 """
 
+import dataclasses
 import math
 import re
 from collections import Counter
@@ -45,7 +46,7 @@ from pypdf import PdfReader
 from pypdf.errors import FileNotDecryptedError
 
 from documents.processing.errors import ErrorCode, StageError
-from documents.processing.extractors import compose, geometry, rulings
+from documents.processing.extractors import compose, geometry, rulings, wording
 
 EXTRACTOR = "pdfplumber"
 VERSION = pdfplumber.__version__
@@ -254,6 +255,13 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
             metadata={"ocr_reason": "scanned page: a picture with no text layer"},
         )
 
+    if _repair_glued(upright, ruled):
+        upright = [
+            dataclasses.replace(word, text=wording.split_glued(word.text))
+            for word in upright
+        ]
+        metadata["glued_words_split"] = True
+
     if region_ocr is not None and not turned:
         upright += _ocr_pictures(page, upright, region_ocr, budget, dpi, metadata)
 
@@ -310,6 +318,24 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
     if tables:
         metadata["tables"] = len(tables)
     return PdfPage(text=text, tables=tables, metadata=metadata)
+
+
+def _repair_glued(words, ruled) -> bool:
+    """Whether this page draws words without spaces, and if so, split its cells.
+
+    Decided on the page's own text, words and cells together: a page that
+    shows the fault (`wording.has_glued_words`) has its long unlisted runs
+    split; any other page is left exactly as drawn. The cells are repaired
+    here, the caller repairs the words.
+    """
+    texts = [word.text for word in words]
+    texts += [cell for _, grid in ruled for row in grid.rows for cell in row]
+    if not wording.has_glued_words(texts):
+        return False
+    for _, grid in ruled:
+        grid.rows = [[wording.repair_lines(cell) for cell in row] for row in grid.rows]
+        grid.caption = wording.split_glued(grid.caption)
+    return True
 
 
 def _ruled_tables(page, metadata) -> list:
@@ -599,7 +625,14 @@ def _words(page, table_boxes, direction: str, votes: Counter) -> tuple:
         else:
             x0, x1, top, bottom = word["x0"], word["x1"], word["top"], word["bottom"]
         upright.append(
-            geometry.Word(text=word["text"], x0=x0, x1=x1, top=top, bottom=bottom)
+            geometry.Word(
+                # A Wingdings bullet is a private-use glyph; written as one.
+                text=wording.bullet(word["text"]),
+                x0=x0,
+                x1=x1,
+                top=top,
+                bottom=bottom,
+            )
         )
 
     odd = []
