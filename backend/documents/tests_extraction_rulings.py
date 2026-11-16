@@ -199,7 +199,7 @@ def pools_table(title="LIST OF POOLS"):
         page.rule(x, 120, x, 180)
 
     page.text(76, 115, "Pool")
-    page.text(156, 115, "Code")
+    page.text(156, 115, "Course")
     page.text(236, 105, "Periods")
     page.text(236, 125, "L")
     page.text(276, 125, "T")
@@ -207,36 +207,51 @@ def pools_table(title="LIST OF POOLS"):
     page.text(356, 115, "Credits")
     page.text(76, 155, "Pool-I")
     page.text(356, 155, "4")
-    for y, cells in ((145, ["C1", "3", "1", "0"]), (165, ["C2", "2", "0", "2"])):
+    for y, cells in (
+        (145, ["Robotics", "3", "1", "0"]),
+        (165, ["Turbines", "2", "0", "2"]),
+    ):
         for x, cell in zip((156, 236, 276, 316), cells, strict=True):
             page.text(x, y, cell)
     return page
 
 
+HEADER = ["Pool", "Course", "Periods L", "Periods T", "Periods P", "Credits"]
+
+
 class MergedCellTests(SimpleTestCase):
-    def test_a_value_merged_down_belongs_to_every_row_it_spans(self):
+    def test_a_group_label_merged_down_belongs_to_every_record_it_spans(self):
         (page,) = run(pools_table())
 
         (table,) = page.tables
-        self.assertEqual(table.rows[1], ["Pool-I", "C1", "3", "1", "0", "4"])
-        self.assertEqual(table.rows[2], ["Pool-I", "C2", "2", "0", "2", "4"])
+        self.assertEqual(table.rows[2][:2], ["Pool-I", "Robotics"])
+        self.assertEqual(table.rows[3][:2], ["Pool-I", "Turbines"])
+
+    def test_a_merged_figure_stays_once_where_it_is_printed(self):
+        """The pool's 4 credits are one value: written into both courses, a
+        sum over the Credits column would count it twice."""
+        (page,) = run(pools_table())
+
+        (table,) = page.tables
+        self.assertEqual(table.rows[2], ["Pool-I", "Robotics", "3", "1", "0", "4"])
+        self.assertEqual(table.rows[3], ["Pool-I", "Turbines", "2", "0", "2", ""])
 
     def test_a_header_split_over_two_rows_is_one_header(self):
         (page,) = run(pools_table())
 
         (table,) = page.tables
-        expected = ["Pool", "Code", "Periods L", "Periods T", "Periods P", "Credits"]
-        self.assertEqual(table.rows[0], expected)
-        self.assertEqual(table.header, expected)
-        self.assertEqual(len(table.rows), 3)
+        self.assertEqual(table.rows[1], HEADER)
+        self.assertEqual(table.header, HEADER)
+        self.assertEqual(len(table.rows), 4)
 
-    def test_a_full_width_first_row_is_the_title_above_the_table(self):
+    def test_a_full_width_first_row_stays_the_tables_title(self):
         (page,) = run(pools_table())
 
         (table,) = page.tables
-        before = page.text[: table.character_start].strip()
-        self.assertEqual(before, "LIST OF POOLS")
-        self.assertNotIn("LIST OF POOLS", str(table.rows))
+        self.assertEqual(table.rows[0], ["LIST OF POOLS", "", "", "", "", ""])
+        self.assertEqual(page.text[: table.character_start].strip(), "")
+        span = page.text[table.character_start : table.character_end]
+        self.assertTrue(span.startswith("LIST OF POOLS"))
 
     def test_a_merged_paragraph_stays_in_its_first_row(self):
         self.assertTrue(rulings._is_short("Pool-I (III Year- I Sem)"))
@@ -246,21 +261,6 @@ class MergedCellTests(SimpleTestCase):
                 "analyze shear centers in open structures"
             )
         )
-
-    def test_a_title_over_a_single_row_is_kept_in_order(self):
-        page = fx.Page()
-        page.grid(
-            72,
-            100,
-            [100, 150, 150],
-            [["CROSS-CUTTING COURSES", "", ""], ["III-I", "Sociology", "NPTEL"]],
-            merge_right={(0, 0), (0, 1)},
-        )
-
-        (result,) = run(page)
-
-        lines = [line for line in result.text.splitlines() if line.strip()]
-        self.assertEqual(lines, ["CROSS-CUTTING COURSES", "III-I | Sociology | NPTEL"])
 
 
 # -- what is inside a cell -----------------------------------------------------

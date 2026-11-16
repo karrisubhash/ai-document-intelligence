@@ -23,7 +23,17 @@ FONTS = {
     "F1": "Helvetica",
     "F2": "Helvetica-Bold",
     "F3": "Times-Roman",
+    # Word's bullets: byte 0xB7 of Symbol is the bullet glyph.
+    "F4": "Symbol",
 }
+
+# A spot colour, as a print layout program writes one: a Separation colour
+# space whose single component is the tint, 1 being full ink. For
+# Page(resources=SPOT_COLOUR) and rule(..., colour="/CS0 CS 1 SCN").
+SPOT_COLOUR = (
+    "/ColorSpace << /CS0 [/Separation /PANTONE#20288#20C /DeviceCMYK "
+    "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 0.7 0 0.3] /N 1 >>] >>"
+)
 
 
 def _escape(text: str) -> str:
@@ -41,10 +51,17 @@ TURNS = {
 
 
 class Page:
-    def __init__(self, turn=None):
+    def __init__(self, turn=None, resources=""):
         self.turn = turn
+        # Extra page resources, written as they are: colour spaces, ExtGStates.
+        self.resources = resources
         self.ops: list[str] = []
         self.images: list[tuple] = []  # (name, width, height, rgb bytes)
+
+    def raw(self, op):
+        """A content-stream operator sequence, written as it is."""
+        self.ops.append(op)
+        return self
 
     # -- text ---------------------------------------------------------------
 
@@ -78,10 +95,13 @@ class Page:
 
     # -- rules --------------------------------------------------------------
 
-    def rule(self, x1, y1, x2, y2, width=0.8):
-        self.ops.append(
+    def rule(self, x1, y1, x2, y2, width=0.8, colour=None):
+        """A line. `colour` is a stroke colour operator ("0 0 1 RG", "1 G",
+        "/CS0 CS 1 SCN"); without one the line is black."""
+        line = (
             f"{width} w {x1} {PAGE_HEIGHT - y1:.2f} m {x2} {PAGE_HEIGHT - y2:.2f} l S"
         )
+        self.ops.append(f"q {colour} {line} Q" if colour else line)
         return self
 
     def fill(self, x, y, width, height, rgb=(1, 1, 1)):
@@ -94,6 +114,15 @@ class Page:
         self.ops.append(
             f"q {r} {g} {b} rg {x} {PAGE_HEIGHT - y - height:.2f} "
             f"{width} {height} re f Q"
+        )
+        return self
+
+    def rect(self, x, y, width, height, fill=(1, 1, 1), stroke=(0, 0, 0), line=0.8):
+        """A rectangle filled with `fill` and outlined in `stroke`."""
+        self.ops.append(
+            "q {} {} {} rg {} {} {} RG {} w {} {:.2f} {} {} re B Q".format(
+                *fill, *stroke, line, x, PAGE_HEIGHT - y - height, width, height
+            )
         )
         return self
 
@@ -114,13 +143,16 @@ class Page:
         row_height=20,
         size=10,
         merge_right=(),
+        merge_down=(),
         right_align=(),
     ):
         """A fully ruled table.
 
         `rows` is a list of lists of text. `merge_right` is a set of
         (row, column) positions whose cell spans into the next column - the
-        vertical rule between them is simply not drawn.
+        vertical rule between them is simply not drawn. `merge_down` is the
+        same for the cell below: the rule under (row, column) is not drawn,
+        and the merged cell's text is the one written in its first row.
         """
         width = sum(column_widths)
         edges = [x]
@@ -128,7 +160,16 @@ class Page:
             edges.append(edges[-1] + column_width)
 
         for index in range(len(rows) + 1):
-            self.rule(x, y + index * row_height, x + width, y + index * row_height)
+            top = y + index * row_height
+            if not any(
+                (index - 1, column) in merge_down
+                for column in range(len(column_widths))
+            ):
+                self.rule(x, top, x + width, top)
+                continue
+            for column in range(len(column_widths)):
+                if (index - 1, column) not in merge_down:
+                    self.rule(edges[column], top, edges[column + 1], top)
 
         for column in range(len(column_widths) + 1):
             for row in range(len(rows)):
@@ -209,12 +250,13 @@ def build(pages) -> bytes:
             f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
         )
         xobjects = f"/XObject << {' '.join(image_refs)} >>" if image_refs else ""
+        extra = f" {page.resources}" if page.resources else ""
         page_numbers.append(
             add(
                 (
                     f"<< /Type /Page /Parent {tree} 0 R "
                     f"/MediaBox [0 0 {PAGE_WIDTH} {PAGE_HEIGHT}] "
-                    f"/Resources << /Font << {font_dict} >> {xobjects} >> "
+                    f"/Resources << /Font << {font_dict} >> {xobjects}{extra} >> "
                     f"/Contents {content} 0 R >>"
                 ).encode()
             )
