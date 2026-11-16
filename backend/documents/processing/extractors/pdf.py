@@ -83,6 +83,8 @@ MAX_RULING_OBJECTS = 3000
 MULTILINE_CELL_LINES = 3
 MULTILINE_SHARE = 0.3
 BANDED_CELL_SHARE = 0.6
+# A tall cell whose lines are this share figures is a stack of separate values.
+FIGURE_STACK_SHARE = 0.8
 
 # A page is deferred to OCR when this share of its text is unreadable.
 GARBLED_SHARE = 0.2
@@ -265,26 +267,24 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
     if region_ocr is not None and not turned:
         upright += _ocr_pictures(page, upright, region_ocr, budget, dpi, metadata)
 
+    # A title drawn as the table's first, full-width row stays its first row:
+    # it is what tells two tables with the same columns apart (Semester I,
+    # Semester II), so it stays inside the table's span, beside its own
+    # table. The header is looked for under it. layout_page hands these
+    # blocks back as they are, so each finds its title rows by identity.
     extras = []
+    title_rows = {}
     for bbox, grid in ruled:
-        if grid.caption:
-            # A title drawn as the table's first, full-width row is read as
-            # the line above the table it names, not as a row of blanks.
-            extras.append(
-                geometry.Block(
-                    kind="text", top=bbox[1] - 0.01, bottom=bbox[1], text=grid.caption
-                )
-            )
-        extras.append(
-            geometry.Block(
-                kind="table",
-                top=bbox[1],
-                bottom=bbox[3],
-                rows=grid.rows,
-                source=SOURCE_RULED,
-                header=True if grid.header else "auto",
-            )
+        block = geometry.Block(
+            kind="table",
+            top=bbox[1],
+            bottom=bbox[3],
+            rows=grid.rows,
+            source=SOURCE_RULED,
+            header=True if grid.header else "auto",
         )
+        title_rows[id(block)] = grid.title_rows
+        extras.append(block)
     for group in odd:
         # On a turned page the odd ones out are in the other frame, where
         # this page has no place for them: they close it.
@@ -302,7 +302,10 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
     for block in geometry.layout_page(upright, extra_blocks=extras):
         if block.kind == "table":
             builder.add_table(
-                block.rows, source=block.source or SOURCE_LAYOUT, header=block.header
+                block.rows,
+                source=block.source or SOURCE_LAYOUT,
+                header=block.header,
+                title_rows=title_rows.get(id(block), 0),
             )
         else:
             builder.add_text(block.text)
@@ -334,7 +337,6 @@ def _repair_glued(words, ruled) -> bool:
         return False
     for _, grid in ruled:
         grid.rows = [[wording.repair_lines(cell) for cell in row] for row in grid.rows]
-        grid.caption = wording.split_glued(grid.caption)
     return True
 
 
@@ -371,18 +373,13 @@ def _is_table(grid) -> bool:
 
     A box around a paragraph, an underline, a page border: one row or one
     column is not a table, and claiming its words would take them out of the
-    normal reading flow. A titled box with one row of several cells is kept:
-    "CROSS-CUTTING COURSES" over "III-I | Sociology of Gender | NPTEL" is
-    written as the title and that row, in order.
+    normal reading flow. A titled box with one row of several cells is two
+    rows, the title and that row, and is kept.
     """
     rows = grid.rows
-    if not any(cell.strip() for row in rows for cell in row):
+    if len(rows) < 2 or max((len(row) for row in rows), default=0) < 2:
         return False
-    if max((len(row) for row in rows), default=0) < 2:
-        return False
-    if len(rows) >= 2:
-        return True
-    return bool(grid.caption) and sum(1 for cell in rows[0] if cell.strip()) >= 2
+    return any(cell.strip() for row in rows for cell in row)
 
 
 def _cell_text(chars) -> str:
@@ -408,8 +405,8 @@ def _rows_are_whole(rows: list) -> bool:
     "GRANT" beside four lines of explanation and four of syntax - and is a
     table. A band of rows the rulings never separated has them too, and
     something a wrapped description never has: a cell holding a stack of
-    separate figures, one per line, beside other cells of the same height.
-    A table with enough banded rows is not stored as a table.
+    separate figures, one per line, beside other tall cells. A table with
+    enough banded rows is not stored as a table.
     """
     banded = counted = 0
     for row in rows[1:]:
@@ -423,19 +420,22 @@ def _rows_are_whole(rows: list) -> bool:
 
 
 def _is_banded(filled: list) -> bool:
+    """Whether one ruled row holds several rows of the page.
+
+    Two or more of its filled cells are tall (MULTILINE_CELL_LINES lines or
+    more), they are most of its filled cells, and one of them is a stack of
+    figures. The tall cells need not be equally tall: in a band one name
+    wraps or one amount is blank, and the stacks no longer line up.
+    """
     stacks = [cell.split("\n") for cell in filled]
     tall = [lines for lines in stacks if len(lines) >= MULTILINE_CELL_LINES]
     if len(tall) < 2 or len(tall) < BANDED_CELL_SHARE * len(filled):
         return False
-    figures = [
-        lines
+    return any(
+        sum(1 for line in lines if geometry.is_number(line))
+        >= FIGURE_STACK_SHARE * len(lines)
         for lines in tall
-        if sum(1 for line in lines if geometry.is_number(line)) >= 0.8 * len(lines)
-    ]
-    if not figures:
-        return False
-    heights = Counter(len(lines) for lines in tall)
-    return heights.most_common(1)[0][1] >= 2
+    )
 
 
 def _outermost(tables: list) -> list:

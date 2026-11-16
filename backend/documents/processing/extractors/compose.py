@@ -63,6 +63,45 @@ _TRANSLATE = {
 _CONTROLS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _BLANK_RUNS = re.compile(r"\n{3,}")
 
+# A header cell names its column. Past this many words it is a sentence.
+HEADER_MAX_WORDS = 6
+# What a header cell never holds: a figure, even with its currency or sign
+# ("Rs. 45,000", "(1,200)", "12.5%"); "Name: Asha"; a date; an identifier.
+_FIGURE = re.compile(
+    r"^[(+\-−]?(?:rs\.?|inr|usd|eur|gbp|[$€£₹¥])?\d[\d,.:/%\-–]*\)?$", re.IGNORECASE
+)
+_LABEL_VALUE = re.compile(r"[^\W\d_]{2}[^:]*:\s*\S")
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
+_DATE = re.compile(
+    rf"\b\d{{1,2}}\s*{_MONTH}\b|\b{_MONTH}\.?\s+\d{{1,2}}\b"
+    r"|\b\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}\b",
+    re.IGNORECASE,
+)
+
+
+def _is_identifier(token: str) -> bool:
+    """A roll number or a code ("21A91A0501", "23ME4119"), or a phone."""
+    digits = sum(ch.isdigit() for ch in token)
+    return digits >= 7 or (digits >= 5 and any(ch.isalpha() for ch in token))
+
+
+def looks_like_value(text) -> bool:
+    """Whether a cell reads as a value rather than as a column's label.
+
+    A figure, a date, an identifier, "Label: value", an e-mail address, or
+    more than HEADER_MAX_WORDS words.
+    """
+    flat = clean_cell(text)
+    if not flat:
+        return False
+    if _FIGURE.match(flat.replace(" ", "")):
+        return True
+    if len(flat.split()) > HEADER_MAX_WORDS or "@" in flat:
+        return True
+    if _LABEL_VALUE.search(flat) or _DATE.search(flat):
+        return True
+    return any(_is_identifier(token) for token in re.findall(r"\w+", flat))
+
 
 def clean_text(text: str) -> str:
     """Normalize characters, never words: nothing here changes what is said."""
@@ -97,6 +136,39 @@ def _grid(rows) -> list:
 
 def _row_text(cells: list) -> str:
     return CELL_SEPARATOR.join(cells).strip()
+
+
+# A column is one of figures when this many of its cells are, and all of the
+# rest are blank or a dash.
+MIN_FIGURES_UNDER_LABEL = 2
+
+
+def _labels_figures(head, body) -> bool:
+    """Whether some cell of `head` names a column of figures in `body`."""
+    for column, label in enumerate(head):
+        if not label:
+            continue
+        values = [row[column] for row in body if row[column].strip(" -–—")]
+        if len(values) >= MIN_FIGURES_UNDER_LABEL and all(
+            detector.NUMERIC.match(value) for value in values
+        ):
+            return True
+    return False
+
+
+def _header_under_title(rows) -> list:
+    """The header of the rows under a table's title, or [].
+
+    The row right under the title is taken for the header only when it reads
+    as one: the detector's guess, no value in it ("Tuition Fee | Rs.
+    45,000"), and the label of a column of figures. A form's first line
+    ("Name | K. Asha") is neither - and data taken for the header drops out
+    of every figure computed over the table.
+    """
+    head = detector.guess_header(rows)
+    if any(map(looks_like_value, head)) or not _labels_figures(head, rows[1:]):
+        return []
+    return head
 
 
 class PageBuilder:
@@ -151,13 +223,21 @@ class PageBuilder:
         rows,
         *,
         header="auto",
+        title_rows: int = 0,
         source: str | None = None,
         source_version: str | None = None,
     ) -> bool:
         """Write a table and record where it landed.
 
         `header`: "auto" (the same narrow guess the text detector makes),
-        True (the first row is the header), or False (none).
+        True (the first row after the title rows is the header), or False
+        (none).
+
+        `title_rows`: how many of the first rows are the table's title (one
+        line of text across the table, "IIIrd Year - Semester II"). They
+        stay in the table - its first rows, in its span - and the header is
+        looked for under them; when nothing there reads as one, the guess
+        is made on the whole table, title included, as without a title.
 
         Returns whether it was stored as a table. A grid with one row or
         one column is not one - it is a label, or a list - so it is written
@@ -174,10 +254,14 @@ class PageBuilder:
         text = "\n".join(_row_text(row) for row in grid)
         start = self._push(text, is_table=True)
 
+        # The title rows still there: _grid drops a row of blanks.
+        lead = sum(1 for row in rows[:title_rows] if any(map(clean_cell, row)))
+        below = grid[lead:]
         if header == "auto":
-            head = detector.guess_header(grid)
+            head = _header_under_title(below) if lead else []
+            head = head or detector.guess_header(grid)
         elif header:
-            head = list(grid[0])
+            head = list(below[0]) if below else []
         else:
             head = []
 
