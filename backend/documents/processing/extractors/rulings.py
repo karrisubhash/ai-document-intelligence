@@ -595,21 +595,9 @@ def _cells_of(row) -> list:
     return out
 
 
-def _is_title(grid, start, span) -> bool:
-    """Whether the first row is a title: one cell of text, most of the
-    table wide, and nothing else."""
-    if len(grid) < 2:
-        return False
-    cells = _cells_of(grid[0])
-    texts = [cell for cell in cells if cell.text.strip()]
-    if len(texts) != 1:
-        return False
-    title = texts[0]
-    return (
-        title.row == start
-        and title.rowspan == 1
-        and title.bbox[2] - title.bbox[0] >= TITLE_SHARE * span
-    )
+def _is_title(grid, span) -> bool:
+    """Whether the first row of a grid with rows under it is a title."""
+    return len(grid) >= 2 and _is_title_row(_cells_of(grid[0]), span)
 
 
 def _header_depth(grid, first, start) -> int:
@@ -623,48 +611,35 @@ def _header_depth(grid, first, start) -> int:
     next row under nothing - are not. Neither is a grid with no row left
     under the header.
     """
-    height = len(grid)
-    if first >= height or any(cell is None for cell in grid[first]):
-        return 1
     top = _cells_of(grid[first])
     if any(cell.row - start != first for cell in top):
         return 1
     depth = max(cell.rowspan for cell in top)
-    if not 2 <= depth <= 3 or first + depth >= height:
+    if not 2 <= depth <= 3 or first + depth >= len(grid):
+        return 1
+    rows = grid[first : first + depth]
+    if any(cell is None for row in rows for cell in row):
         return 1
 
     below = []
-    for r in range(first + 1, first + depth):
-        if any(cell is None for cell in grid[r]):
-            return 1
-        for cell in _cells_of(grid[r]):
+    for r, row in enumerate(rows[1:], start=first + 1):
+        for cell in _cells_of(row):
             if cell.row - start == r and cell not in below:
                 below.append(cell)
 
-    parents = set()
     for cell in below:
         if cell.row - start + cell.rowspan > first + depth:
             return 1
-        parent = next(
-            (
-                p
-                for p in top
-                if p.colspan > 1
-                and p.rowspan <= cell.row - start - first
-                and p.col <= cell.col
-                and cell.col + cell.colspan <= p.col + p.colspan
-            ),
-            None,
-        )
-        if parent is None:
+        if not any(
+            parent.colspan > 1
+            and parent.col <= cell.col
+            and cell.col + cell.colspan <= parent.col + parent.colspan
+            for parent in top
+        ):
             return 1
-        parents.add(id(parent))
-
-    if not parents:
-        return 1
-    for cell in top:
-        if cell.rowspan != depth and id(cell) not in parents:
-            return 1
+    # Every grid position is covered and every cell starting below lies under
+    # a cell merged across, so each first-row cell either runs down the whole
+    # header or is merged across and subdivided below it.
     return depth
 
 
@@ -719,7 +694,7 @@ def _read_segment(cells, tops, start, end, table_bottom) -> Grid | None:
         return cell is not None and cell.row - start == r
 
     first = 0
-    if width >= 2 and _is_title(grid, start, right - left):
+    if _is_title(grid, right - left):
         result.title_rows = first = 1
 
     body_from = first

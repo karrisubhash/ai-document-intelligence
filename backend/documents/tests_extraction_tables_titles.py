@@ -265,6 +265,13 @@ class TitleRowsWriterTests(SimpleTestCase):
         )
         self.assertEqual(self.header(rows, header=True), ["Pools", "", ""])
 
+    def test_a_blank_first_row_is_no_title(self):
+        rows = [["", ""], ["Code", "Credits"], ["CS101", "4"], ["CS102", "3"]]
+
+        self.assertEqual(
+            self.header(rows, header=True, title_rows=1), ["Code", "Credits"]
+        )
+
     def test_a_column_of_figures_needs_two_of_them(self):
         one = [["Lab", ""], ["Code", "Credits"], ["23ME4216", "1.5"]]
         two = [*one, ["23ME4217", "2"]]
