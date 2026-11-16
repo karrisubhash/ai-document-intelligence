@@ -32,6 +32,7 @@ median word height, so neither is special.
 import re
 from bisect import bisect_right
 from dataclasses import dataclass, field
+from math import ceil
 from statistics import mean, median
 
 from documents.processing.extractors import wording
@@ -77,26 +78,37 @@ MAX_BAND_LINES = 400
 
 MIN_TABLE_ROWS = 3
 
-# A two-column band is a form only when this share of its rows has both a
-# label and a value.
-FORM_PAIRED = 0.6
-
-# A two-column band is a column of text with something alongside part of it
-# when one column has text on this share of its lines, at this many words a
-# line, and the other on no more than this share.
-SIDEBAR_MAIN = 0.7
-SIDEBAR_OTHER = 0.5
-SIDEBAR_WORDS = 3
-SIDEBAR_ENTRIES = 3
-
 # Dot leaders: ". . . . ." or "......" between a contents entry and its page.
 _LEADERS = re.compile(r"(?:\.\s){3,}\.|\.{6,}")
-# A contents line ends in one leader and a page number, arabic or roman.
-_PAGE_AFTER_LEADER = re.compile(r"(?:\.\s?|…)\s*[0-9ivxlcIVXLC]{1,6}\s*$")
+# What may stand after a contents line's leader: a page number, arabic (up to
+# three digits) or lowercase roman (front matter). A decimal ("8.25"), an
+# amount ("20000"), a word ("Civil"), a date, or an upper-case numeral (a year
+# of study, "III") is a value, not a page.
+_PAGE_NUMBER = re.compile(r"^(?:\d{1,3}|(?=[ivx])x{0,2}(?:ix|iv|v?i{0,3}))$")
+
+# A band is a table of contents when this share of its lines (and at least
+# two of them) are entries. One entry in a table is not a contents page: an
+# invoice has a "Total ........ 500" row and a two-column page has a blank to
+# fill in.
+CONTENTS_SHARE = 0.5
 
 
 def _is_contents_line(text: str) -> bool:
-    return len(_LEADERS.findall(text)) == 1 and bool(_PAGE_AFTER_LEADER.search(text))
+    """A leader, and directly after it nothing but a page number."""
+    leaders = list(_LEADERS.finditer(text))
+    # One leader: a line with several ("Name ..... Roll ..... 12") is a form
+    # to fill in, whatever stands at its end.
+    if len(leaders) != 1:
+        return False
+    return bool(_PAGE_NUMBER.match(text[leaders[-1].end() :].strip()))
+
+
+def _is_contents_band(raw_rows: list) -> bool:
+    """Whether most lines of a band are contents entries: leader after leader."""
+    lines = [" ".join(cell for cell in row if cell) for row in raw_rows]
+    lines = [line for line in lines if line.strip()]
+    entries = sum(1 for line in lines if _is_contents_line(line))
+    return entries >= max(2, ceil(CONTENTS_SHARE * len(lines)))
 
 
 # The largest number a page's line numbering is taken to reach.
@@ -499,9 +511,9 @@ def _classify(raw_rows: list, merged_rows: list) -> str | None:
 
     # Dot leaders run from an entry to its page number: a table of contents,
     # whose entries are lines. Read as a table, a sub-entry with nothing in
-    # the number column folds into the entry above it. (A cost table that
-    # pads every cell with dots has several leaders to a line, and stays.)
-    if any(_is_contents_line(" ".join(row)) for row in raw_rows):
+    # the number column folds into the entry above it. Only a band that is
+    # mostly such entries: one row with a leader is a table with a leader.
+    if _is_contents_band(raw_rows):
         return None
 
     body = merged_rows[1:] if len(merged_rows) > 1 else merged_rows
@@ -536,26 +548,19 @@ def _classify(raw_rows: list, merged_rows: list) -> str | None:
         # it looks like; a table's cells are short.
         return "table" if words <= 15 else None
 
-    # A column of text beside something that runs alongside only part of it
-    # - a running header in the margin, a box on a slide - is two blocks to
-    # read one after the other. Row by row, the margin's words would land in
-    # the middle of sentences.
-    if columns == 2 and len(raw_rows) >= MIN_COLUMN_LINES and _is_sidebar(raw_rows):
-        return "columns"
-
     # A label beside its value - "Name | Asha Rao" - is a form, and a form
     # is a table. One short column is what sets it apart from prose columns,
-    # whose cells are all a line of a sentence long. And a form has both, on
-    # most of its rows: a narrow column of text beside a box that starts
-    # halfway down it (a slide) has short lines and an empty other side.
+    # whose cells are all a line of a sentence long. (A label beside several
+    # lines of text - "UNIT I" beside its topics, "[10]" beside a question -
+    # is the same thing: the label belongs to the lines beside it, and must
+    # stay with them.)
     if rows >= MIN_TABLE_ROWS and columns == 2:
         counts = [
             mean(_word_count(row[index]) for row in merged_rows if row[index])
             for index in range(2)
             if any(row[index] for row in merged_rows)
         ]
-        paired = sum(1 for row in merged_rows if row[0] and row[1])
-        if len(counts) == 2 and min(counts) <= 3 and paired >= FORM_PAIRED * rows:
+        if len(counts) == 2 and min(counts) <= 3:
             return "table"
 
     # Every column a line of sentence, on nearly every line: page columns.
@@ -568,29 +573,6 @@ def _classify(raw_rows: list, merged_rows: list) -> str | None:
         return "table"
 
     return None
-
-
-def _is_sidebar(raw_rows: list) -> bool:
-    """One column of running text on most lines, the other on at most half.
-
-    The other column must be something of its own: at least three entries,
-    not mostly list markers ("A.", a bullet) - those belong beside their
-    text - and not two words a wide justified gap happened to push apart.
-    """
-    lines = len(raw_rows)
-    shares = [sum(1 for row in raw_rows if row[index]) / lines for index in (0, 1)]
-    main = 0 if shares[0] >= shares[1] else 1
-    if shares[main] < SIDEBAR_MAIN or shares[1 - main] > SIDEBAR_OTHER:
-        return False
-    beside = [row[1 - main] for row in raw_rows if row[1 - main]]
-    if len(beside) < SIDEBAR_ENTRIES:
-        return False
-    if sum(1 for cell in beside if len(cell) <= 3) >= 0.5 * len(beside):
-        return False
-    cells = [row[main] for row in raw_rows if row[main]]
-    if sum(map(_is_number, cells)) > 0.2 * len(cells):
-        return False
-    return mean(_word_count(cell) for cell in cells) >= SIDEBAR_WORDS
 
 
 def _prose_columns(raw_rows: list) -> bool:
@@ -629,9 +611,7 @@ def _lines_to_text(lines: list, height: float) -> str:
     for line in lines:
         if previous is not None and line.top - previous.bottom > PARAGRAPH_GAP * height:
             paragraphs.append([])
-        # A contents line's leader dots are drawn, not written: "eSim . . . . 4"
-        # is "eSim … 4" to anything that reads it.
-        paragraphs[-1].append(_LEADERS.sub("…", line.text))
+        paragraphs[-1].append(line.text)
         previous = line
     return "\n\n".join(
         "\n".join(wording.dehyphenate(paragraph)) for paragraph in paragraphs

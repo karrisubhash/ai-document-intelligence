@@ -27,12 +27,13 @@ layer as a private-use code point (U+F0A7, U+F0B7, U+F0D8...): a box
 glyph that means nothing to anything downstream. Standing alone, it is
 written as the bullet it is.
 
-The word list is wordninja's (MIT): 126,000 English words from Wikipedia by
-frequency. Without it installed nothing here changes any text.
+The word list is wordninja's (MIT, extractors/data/): 126,000 English words
+from Wikipedia by frequency. Without the file nothing here changes any text,
+and the miss is logged.
 """
 
 import gzip
-import importlib.util
+import logging
 import math
 import os
 import re
@@ -96,18 +97,27 @@ _PUNCT_GLUE = re.compile(r"(?<=[A-Za-z]{2})([,;:.])(?=[A-Za-z]{2})")
 _DIGIT_GLUE = re.compile(r"(?<=[A-Za-z]{2})(?=\d)|(?<=\d)(?=[A-Za-z]{2})")
 
 
+# The word list ships with the code (extractors/data/, MIT licence beside it):
+# an sdist-only dependency would be built from whatever build backend PyPI had
+# on the day of the image build, and a missing file would switch these repairs
+# off without a word.
+WORD_LIST = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "wordninja_words.txt.gz"
+)
+logger = logging.getLogger("adi.extraction")
+
+
 @lru_cache(maxsize=1)
 def _ranks() -> dict:
-    spec = importlib.util.find_spec("wordninja")
-    if spec is None or not spec.origin:
-        return {}
-    path = os.path.join(
-        os.path.dirname(spec.origin), "wordninja", "wordninja_words.txt.gz"
-    )
+    """word -> rank (0 = most frequent). Empty, and logged, if the file is gone."""
     try:
-        with gzip.open(path, "rt", encoding="utf-8") as handle:
+        with gzip.open(WORD_LIST, "rt", encoding="utf-8") as handle:
             words = handle.read().split()
     except OSError:
+        logger.error(
+            "extraction.word_list_missing",
+            extra={"path": WORD_LIST},
+        )
         return {}
     return {word: rank for rank, word in enumerate(words)}
 

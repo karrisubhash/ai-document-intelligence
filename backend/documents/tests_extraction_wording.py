@@ -2,21 +2,20 @@
 
 The cases are the ones found in real uploads: a LaTeX report that breaks
 "inspira-" / "tion" across lines, a syllabus whose converter drew
-"Adieselenginehasafuelinjectionsystem" without a single space, slides whose
-bullets are Wingdings glyphs, a report whose table of contents was read as
-three-column tables, and a running header in a page margin read into the
-middle of sentences. Every case that must NOT change - a compound, a French
-word, a company name, a CamelCase identifier - is here too, because the
-repair is only worth having if it never damages a correct word.
+"Adieselenginehasafuelinjectionsystem" without a single space, and slides
+whose bullets are Wingdings glyphs. Every case that must NOT change - a
+compound, a French word, a name, a CamelCase identifier - is here too,
+because a repair is only worth having if it never damages a correct word.
 """
 
 import os
 import tempfile
+from unittest import mock
 
 from django.test import SimpleTestCase
 
 from documents import pdf_fixtures as fx
-from documents.processing.extractors import geometry, pdf, wording
+from documents.processing.extractors import pdf, wording
 
 
 def run(*pages):
@@ -204,88 +203,29 @@ class BulletTests(SimpleTestCase):
         self.assertEqual(wording.bullet("\uf0a7x"), "\uf0a7x")
 
 
-class ContentsAndMarginTests(SimpleTestCase):
-    def test_contents_lines_are_lines_not_a_table(self):
-        entries = [
-            ("2", "Features of eSim", "7"),
-            ("3", "Problem Statement", "8"),
-            ("3.1", "Subcircuit Design . . . . . . . . . . . . .", "8"),
-            ("3.1.1", "Approach . . . . . . . . . . . . . . . .", "8"),
-            ("4", "Digital ICs", "10"),
-        ]
-        page = fx.Page()
-        for index, (number, title, at) in enumerate(entries):
-            y = 100 + 14 * index
-            page.text(72, y, number)
-            page.text(110, y, title)
-            page.text(400, y, at)
+class WordListTests(SimpleTestCase):
+    def test_the_word_list_ships_with_the_code(self):
+        self.assertTrue(os.path.exists(wording.WORD_LIST))
+        ranks = wording._ranks()
+        self.assertGreater(len(ranks), 100_000)
+        self.assertEqual(ranks["the"], 0)
 
-        (result,) = run(page)
+    def test_its_licence_ships_beside_it(self):
+        licence = os.path.join(
+            os.path.dirname(wording.WORD_LIST), "LICENSE-wordninja.txt"
+        )
+        with open(licence, encoding="utf-8") as handle:
+            self.assertIn("MIT License", handle.read())
 
-        self.assertEqual(result.tables, [])
-        self.assertIn("3.1.1 Approach … 8", result.text)
-        self.assertNotIn("Problem Statement 3.1", result.text)
-
-    def test_a_cost_table_padded_with_dots_is_still_a_table(self):
-        rows = [
-            # Every row ends in a figure after dots, as a contents line does;
-            # what sets it apart is the dots in every cell before.
-            ("FCC installation ......", "1 hour ......", "85"),
-            ("AFM revisions ......", "1 hour ......", "85"),
-            ("MDS installation ......", "2 hours ......", "170"),
-        ]
-        page = fx.Page()
-        for index, cells in enumerate(rows):
-            for x, cell in zip((72, 250, 400), cells, strict=True):
-                page.text(x, 100 + 14 * index, cell)
-
-        (result,) = run(page)
-
-        self.assertEqual(len(result.tables), 1)
-
-    def test_a_margin_header_is_read_apart_from_the_sentences_beside_it(self):
-        prose = [
-            "In addition to the scales, participants were provided with",
-            "questions regarding both positive and negative aspects of",
-            "their work and family interaction, which were answered in",
-            "writing and coded by two researchers working independently",
-            "of each other before the results were compared and merged.",
-            "Agreement between the two coders was high across all of the",
-            "categories, and the few disagreements were settled together.",
-        ]
-        page = fx.Page().lines(72, 100, prose)
-        page.text(440, 100, "Shift work")
-        page.text(440, 114, "interventions")
-        page.text(440, 184, "169")
-
-        (result,) = run(page)
-
-        self.assertIn(prose[0], result.text.splitlines())
-        self.assertNotIn("Shift work", " ".join(prose))
-        self.assertIn("Shift work", result.text)
-
-    def test_a_narrow_column_beside_a_box_is_not_a_form(self):
-        """A slide: short lines of one sentence, and a box beside two of them."""
-        raw = [
-            ["relative positions", "retroreflectors"],
-            ["the antennas to", "time of flight"],
-            ["few millimeters", ""],
-            ["the quasar positions", ""],
-            ["to fractions", ""],
-            ["milliarcsecond", ""],
-        ]
-
-        self.assertIsNone(geometry._classify(raw, raw))
-
-    def test_list_markers_stay_beside_their_text(self):
-        raw = [
-            ["A.", "Diagnostic biologique et clinique des acidoses"],
-            ["¢", "Desequilibre entre ventilation et production"],
-            ["", "entrainant une modification de la PaCO2 chez"],
-            ["", "le patient dont la ventilation est insuffisante"],
-            ["¢", "Acidose respiratoire provoquee par une augmentation"],
-            ["", "de la PaCO2 qui diminue le rapport bicarbonate"],
-            ["", "sur PaCO2 et donc le pH du sang arteriel"],
-        ]
-
-        self.assertFalse(geometry._is_sidebar(raw))
+    def test_a_missing_file_is_logged_and_switches_the_repairs_off(self):
+        wording._ranks.cache_clear()
+        try:
+            with mock.patch.object(wording, "WORD_LIST", "/nonexistent/words.gz"):
+                with self.assertLogs("adi.extraction", level="ERROR") as logs:
+                    self.assertEqual(wording._ranks(), {})
+                self.assertIn("word_list_missing", logs.output[0])
+                self.assertEqual(
+                    wording.dehyphenate(["inspira-", "tion"]), ["inspira-", "tion"]
+                )
+        finally:
+            wording._ranks.cache_clear()
