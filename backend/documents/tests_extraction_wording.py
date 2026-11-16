@@ -100,6 +100,16 @@ class GluedWordTests(SimpleTestCase):
             "Department of Mechanical Engineering, ANITS.",
         )
 
+    def test_long_words_drawn_together_at_their_capitals_are_split(self):
+        self.assertEqual(
+            wording.split_glued(
+                "Prerequisite:EngineeringMathematics,EngineeringMechanics,"
+                "BasicThermodynamics"
+            ),
+            "Prerequisite: Engineering Mathematics, Engineering Mechanics, "
+            "Basic Thermodynamics",
+        )
+
     def test_headings_in_capitals_are_split_into_long_words_only(self):
         self.assertEqual(
             wording.split_glued("APPLIEDTHERMODYNAMICS-II"), "APPLIED THERMODYNAMICS-II"
@@ -133,6 +143,8 @@ class GluedWordTests(SimpleTestCase):
             "Halliburton",
             # CamelCase: split exactly at its capitals, it is a name.
             "SalesForce",
+            # Capitals mark this run's boundaries; one elsewhere cuts a word.
+            "MakerchipApp",
             "karrisubhash643@gmail.com",
             "https://nptel.ac.in/courses/112104114",
             "www.mechanicalengineeringworld.com",

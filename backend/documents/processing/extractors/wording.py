@@ -58,6 +58,10 @@ LOOSE_RANK = 80_000
 PAIR_RANK = 3_000
 # Pieces longer than this are not looked for.
 MAX_WORD = 24
+# Split at its capitals, a run this long made of pieces this long is words
+# drawn together; anything shorter is a name like "SalesForce".
+CAMEL_RUN = 16
+CAMEL_PIECE = 5
 
 # Evidence that a page has glued words: a run at least this long that splits
 # into at least this many pieces, one of them a function word, every other
@@ -88,7 +92,7 @@ _RUN = re.compile(r"[A-Za-z]+")
 _NOT_PROSE = re.compile(r"@|://|www\.|\.(com|org|net|in|edu|gov)\b", re.IGNORECASE)
 _HYPHEN_END = re.compile(r"([A-Za-z]+)-$")
 _LOWER_START = re.compile(r"^([a-z]+)")
-_PUNCT_GLUE = re.compile(r"(?<=[A-Za-z]{2})([,;.])(?=[A-Za-z]{2})")
+_PUNCT_GLUE = re.compile(r"(?<=[A-Za-z]{2})([,;:.])(?=[A-Za-z]{2})")
 _DIGIT_GLUE = re.compile(r"(?<=[A-Za-z]{2})(?=\d)|(?<=\d)(?=[A-Za-z]{2})")
 
 
@@ -244,17 +248,31 @@ def _split_run(run: str, minimum: int):
             return None
     if capitals and any(len(piece) < 3 for piece in pieces):
         return None
+    # "JavaScript", "PowerPoint": split exactly at its capitals, a short run is
+    # a name, written that way on purpose. A long run of long words split at
+    # its capitals - "EngineeringMathematics" - is words drawn together; the
+    # capital marks the boundary better than any word list.
+    breaks, positions, at = _case_breaks(run), set(), 0
+    for left, right in zip(pieces, pieces[1:], strict=False):
+        at += len(left)
+        positions.add(at)
+        # A run that uses capitals marks its word boundaries with them; one
+        # between two content words that falls elsewhere cuts a word -
+        # "Maker chip App" - while "Department of Mechanical" only adds the
+        # little word the capitals could not mark.
+        if (
+            breaks
+            and at not in breaks
+            and left.lower() not in FUNCTION_WORDS
+            and right.lower() not in FUNCTION_WORDS
+        ):
+            return None
+    if breaks and positions <= breaks:
+        long_words = all(len(piece) >= CAMEL_PIECE for piece in pieces)
+        return pieces if len(run) >= CAMEL_RUN and long_words else None
     if len(pieces) == 2 and not little and not capitals:
         if any(len(piece) < 4 or _rank(piece) > PAIR_RANK for piece in lowered):
             return None
-    # "JavaScript", "PowerPoint": a split exactly at the capitals is how the
-    # name is meant to be written.
-    breaks, positions, at = _case_breaks(run), set(), 0
-    for piece in pieces[:-1]:
-        at += len(piece)
-        positions.add(at)
-    if breaks and positions <= breaks:
-        return None
     short = sum(1 for piece in pieces if len(piece) <= 2)
     if short > len(pieces) / 2 or len(run) / len(pieces) < 2.5:
         return None
