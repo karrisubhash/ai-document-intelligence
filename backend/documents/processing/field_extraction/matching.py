@@ -9,6 +9,7 @@ set with no database at all, and it keeps the rules that decide what a field
 from dataclasses import dataclass, field
 
 from documents.processing.normalize import matchable
+from documents.processing.tables.text_rows import field_view
 
 from .schemas import VALUE_GROUP, DocumentSchema, FieldRule
 
@@ -92,7 +93,12 @@ def find_field(rule: FieldRule, pages) -> FieldMatch:
         # Patterns run on a same-length view in which a table's cell pipes
         # are spaces, so a label beside its value is found in a table as
         # it is after a colon; the value is then read from the original.
-        view = matchable(text)
+        # The view also reads a table written as text ("Table 1, row 2:
+        # Credits: 4") as a form: the reference is blanked and each pair
+        # starts a line, and the rows of a table whose labels recur are
+        # blanked - no one of them is the document's own value
+        # (tables/text_rows.field_view).
+        view = field_view(matchable(text))
         for regex in rule.compiled:
             for match in regex.finditer(view):
                 raw = match.group(VALUE_GROUP)

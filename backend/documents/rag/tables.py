@@ -258,7 +258,10 @@ def _table_groups(passages) -> list:
     over two cited chunks of one table is checked against both.
 
     (rows, labelled) per table, each row a dict of cells keyed by column.
-    Labelled rows have no header row among them; " | " rows may.
+    A table is labelled when its rows carry labels; its rows then have no
+    header row among them. Rows without any (a table whose header was not
+    recognised, or a " | " table of an earlier pass) are keyed by position -
+    every cell in its place - and may start with a header row.
     """
     grouped = defaultdict(list)
     labelled = {}
@@ -272,7 +275,8 @@ def _table_groups(passages) -> list:
         )
         lines = text_rows.row_lines(chunk.text) if is_labelled(chunk) else []
         if lines:
-            labelled[key] = True
+            if any(label for line in lines for label, _ in line.pairs):
+                labelled[key] = True
             grouped[key].extend(labelled_row(line) for line in lines)
             continue
         header = [str(label) for label in (chunk.metadata.get("header") or ())]
@@ -281,6 +285,19 @@ def _table_groups(passages) -> list:
                 continue
             grouped[key].append(dict(enumerate(row)))
     return [(rows, labelled.get(key, False)) for key, rows in grouped.items()]
+
+
+# The column a form's values are put in: "Tuition Fee: 85000", "Exam Fee: 2000"
+# are one column of fees to add up, though each row names its own field.
+FORM_COLUMN = "#form"
+
+
+def _is_form_rows(rows) -> bool:
+    """Rows that are each one labelled value under a label of its own."""
+    if len(rows) < 2 or any(len(row) != 1 for row in rows):
+        return False
+    keys = [next(iter(row)) for row in rows]
+    return len(set(keys)) == len(keys) and not any(key.startswith("#") for key in keys)
 
 
 def derived_figures(passages) -> set:
@@ -297,6 +314,9 @@ def derived_figures(passages) -> set:
     for rows, labelled in _table_groups(passages):
         if not rows:
             continue
+
+        if labelled and _is_form_rows(rows):
+            rows = [{**row, FORM_COLUMN: next(iter(row.values()))} for row in rows]
 
         if not labelled:
             # A first row with no figure in it, above rows that have them, is

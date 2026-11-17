@@ -232,11 +232,10 @@ class NewFormatPipelineTests(AuthenticatedAPITestCase):
         self.assertIn("Notes: Remind them about the hall tickets.", first.text)
         self.assertNotIn("Notes:", second.text)
 
-        # One table per slide, numbered across the deck. A two-column table
-        # with one row under its first is read as labels and values: no value
-        # can be given another row's label that way.
-        self.assertIn("Table 1, row 2: Maths: 2024-05-03", first.text)
-        self.assertIn("Table 2, row 2: Maths: 2024-05-03", second.text)
+        # One table per slide, numbered across the deck; "Paper | Date" names
+        # its two columns, so its row is read under them.
+        self.assertIn("Table 1, row 1: Paper: Maths; Date: 2024-05-03", first.text)
+        self.assertIn("Table 2, row 1: Paper: Maths; Date: 2024-05-03", second.text)
 
     @override_settings(MAX_DOCUMENT_PAGES=2)
     def test_a_deck_over_the_page_limit_is_refused(self):

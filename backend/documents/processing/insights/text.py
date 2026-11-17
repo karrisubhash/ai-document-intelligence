@@ -17,6 +17,8 @@ included.
 import re
 from dataclasses import dataclass
 
+from documents.processing.tables.text_rows import ROW_PREFIX
+
 STOPWORDS = frozenset(
     """
     a about above after again against all also am an and any are aren't as at
@@ -91,8 +93,11 @@ def _is_heading_line(line: str) -> bool:
         return False
     if stripped[-1] in ".;,":
         return False
-    # A table row ("B.Tech CSE<tab>85000<tab>2500") is not a heading.
+    # A table row ("B.Tech CSE<tab>85000<tab>2500") is not a heading, nor is
+    # a line of a table written as text ("Table 2, row 3: Branch: CSE").
     if "\t" in stripped or "|" in stripped or "  " in stripped:
+        return False
+    if ROW_PREFIX.match(stripped):
         return False
     visible = [c for c in stripped if not c.isspace()]
     if sum(1 for c in visible if c.isdigit()) > 0.3 * len(visible):

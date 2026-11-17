@@ -83,46 +83,67 @@ _FIGURE = re.compile(
     re.IGNORECASE,
 )
 
-# Words that name a column or a form's field. A first row whose cells are all
-# words is taken as a header only if they are mostly words like these (or if
-# the row is plainly unlike the rows below it): "Asha Rao | Computer Science"
-# names nobody's column.
+# Words that name a column or a form's field. A first row is taken as a header
+# only if most of its cells hold words like these, or if it is unlike the rows
+# below it in ways measured below: "Asha Rao | Computer Science" names
+# nobody's column, and one wrong label is worse than none.
 _COLUMN_WORDS = frozenset(
     """
-    name names no nos num number numbers id code codes title titles description
-    descriptions desc details detail particulars remarks remark note notes
-    comments comment type types category categories status date dates day days
-    time timings timing year years semester sem month months period periods
-    duration hours hrs hour course courses subject subjects paper papers unit
-    units topic topics module modules chapter chapters credits credit marks mark
-    grade grades points score scores total amount amounts fee fees cost costs
-    price prices rate rates qty quantity count department dept branch programme
-    program class section designation position role qualification experience
-    email mail phone mobile contact address city state country place location
-    venue room block hall faculty staff teacher instructor student students
-    author authors publisher edition isbn book books reference references
-    command commands syntax function purpose example examples value values
-    parameter parameters item items activity activities event events outcome
-    outcomes objective objectives result results percentage percent gender age
-    father mother guardian dob birth roll reg registration admission ticket
-    attendance signature week weeks start end deadline due mode method level
-    size area capacity version step steps action actions owner responsibility
-    batch slot venue sl sno s.no serial sr balance debit credit particulars
-    vr voucher account head heads term terms rule rules clause clauses
+    name names no nos num number numbers id ids code codes title titles
+    description descriptions desc details detail particulars remarks remark
+    note notes comments comment type types category categories status date
+    dates day days time timings timing year years semester sem month months
+    period periods duration hours hrs hour course courses subject subjects
+    paper papers unit units topic topics module modules chapter chapters
+    credits credit marks mark grade grades point points score scores total
+    amount amounts fee fees cost costs price prices rate rates qty quantity
+    count department dept branch programme program programmes programs class
+    classes section sections designation position role qualification
+    experience email mail phone mobile contact address city state country
+    place location venue room block hall faculty staff teacher instructor
+    student students employee employees author authors publisher edition isbn
+    book books reference references command commands syntax function purpose
+    example examples value values parameter parameters item items activity
+    activities event events outcome outcomes objective objectives result
+    results percentage percent gender age father mother guardian dob birth
+    roll reg registration admission ticket attendance signature week weeks
+    start end deadline due mode method level size area capacity version step
+    steps action actions owner responsibility batch slot serial sr balance
+    debit voucher account head heads term terms rule rules clause clauses
     requirement requirements eligibility criteria minimum maximum min max
-    column columns col header heading headings field fields tête colonne
+    column columns col header heading headings field fields company
+    organisation organization institution college school university tuition
+    hostel transport library lab laboratory medium religion caste
+    nationality district mandal village pin pincode aadhaar aadhar bank
+    cheque receipt invoice vendor supplier uom sanctioned released
+    expenditure budget income expense expenses salary pay basic allowance
+    deduction deductions net gross cgpa sgpa gpa cie see ese cia internal
+    external practical theory tutorial co po pso intake strength seats
+    vacancies applied admitted enrolled passed failed appeared sessional exam
+    examination final mid assignment viva seminar elective electives stream
+    tête colonne
     """.split()
 )
 
+# A single letter that heads a column in a syllabus: Lecture, Tutorial,
+# Practical, Credits. Only when it is the whole cell: "S Reddy" is a name.
+_SINGLE_LETTER_COLUMNS = frozenset("l t p c s".split())
+
 # Words a section row inside a table is made of ("Practical", "Semester II").
+# Not "Total" or "Note": a row of those is a row.
 _SECTION_WORDS = frozenset(
     """
     semester sem year part section group unit module theory practical
     practicals lab labs laboratory elective electives core category stream
     track phase stage level term session batch audit project projects
-    mandatory optional total subtotal summary monday tuesday wednesday thursday
-    friday saturday sunday
+    mandatory optional monday tuesday wednesday thursday friday saturday
+    sunday department dept undergraduate postgraduate ug pg
     """.split()
+)
+
+# Words that make a capitalised lone row something other than a section.
+_NOT_SECTION = frozenset(
+    "total grand subtotal sub net note notes remark remarks signature date place".split()
 )
 
 
@@ -201,27 +222,69 @@ def _label(text: str) -> str:
     return text.replace(LABEL_SEPARATOR, ":").replace(PAIR_SEPARATOR, ";")
 
 
+_TOKEN = re.compile(r"[^\W\d_]+")
+
+
 def _words(text: str) -> list:
-    return [word for word in re.split(r"[^\w.]+", text.casefold()) if word]
+    """The letters-only words of `text`, lower-cased ("Sl.No" is "sl", "no")."""
+    return _TOKEN.findall(text.casefold())
+
+
+def _vocabulary_hit(word: str) -> bool:
+    if word in _COLUMN_WORDS:
+        return True
+    if len(word) > 3 and word.endswith("s") and word[:-1] in _COLUMN_WORDS:
+        return True
+    return len(word) > 4 and word.endswith("es") and word[:-2] in _COLUMN_WORDS
 
 
 def _names_a_column(cell: str) -> bool:
+    """Whether a cell is a column's name: a word that names a column in a
+    cell of at most five words, or one of the single letters of a syllabus."""
+    if cell.strip().casefold() in _SINGLE_LETTER_COLUMNS:
+        return True
     words = _words(cell)
-    return any(
-        word.strip(".") in _COLUMN_WORDS or word in _COLUMN_WORDS for word in words
-    )
+    return 0 < len(words) <= 5 and any(_vocabulary_hit(word) for word in words)
+
+
+_TITLE_TOKEN = re.compile(r"^(?:[A-Z][a-z]+|[A-Z])\.?$")
+
+
+def _name_like(cell: str) -> bool:
+    """A person's name (or a place's): two to four words in Title Case, none
+    of them a word that names a column, one of them a real word. "Ravi Kumar"
+    heads no column - it is a value, and a first row holding one is data."""
+    tokens = cell.split()
+    if not 2 <= len(tokens) <= 4:
+        return False
+    if not all(_TITLE_TOKEN.match(token) for token in tokens):
+        return False
+    words = [token.strip(".").casefold() for token in tokens]
+    for word in words:
+        if _vocabulary_hit(word) or word in _FUNCTION_WORDS or word in _SECTION_WORDS:
+            return False
+    return any(len(word) >= 3 for word in words)
 
 
 _NEUTRAL = re.compile(r"^(?:[^\w]*|[A-Za-z]{1,3}\.?)$")
+_ORDINAL = re.compile(r"^\d+(?:st|nd|rd|th)$", re.IGNORECASE)
+# One token of letters and digits with a capital among them: "23CS1L1",
+# "18CS42", "CO-2", "PSO1". Not "10cm/s", "20ns", "10-20m": those are measures.
+_CODE_TOKEN = re.compile(
+    r"^(?=[^\s]*[A-Z])(?=[^\s]*\d)[A-Za-z0-9][A-Za-z0-9./\-_]{2,23}$"
+)
 
 
 def _kind(cell: str) -> str:
     """ "figure", "date", "code" (a roll number, a course code) or "text"."""
     if _FIGURE.match(cell.replace(" ", "")):
         return "figure"
-    if len(cell.split()) <= 4 and _DATE.search(cell):
+    words = cell.split()
+    if len(words) <= 4 and _DATE.search(cell):
         return "date"
-    if len(cell.split()) == 1 and _is_identifier(cell):
+    if len(words) == 1 and (
+        _is_identifier(cell) or (_CODE_TOKEN.match(cell) and not _ORDINAL.match(cell))
+    ):
         return "code"
     return "text"
 
@@ -268,6 +331,63 @@ def _is_spanning_label(row, width: int) -> bool:
         and len(text.split()) <= MAX_SECTION_WORDS
         and not NUMERIC.match(text)
         and _clean_label(text)
+    )
+
+
+def _casing(cell: str) -> str:
+    """How a cell's words are written: "T" Title Case, "U" capitals, "l" lower
+    case - "B.Tech CSE" is "TU", "Ravi Kumar" "T", "CSE" "U"."""
+    marks = set()
+    for token in cell.split():
+        letters = [ch for ch in token if ch.isalpha()]
+        if not letters:
+            continue
+        if len(letters) >= 2 and all(ch.isupper() for ch in letters):
+            marks.add("U")
+        elif letters[0].isupper():
+            marks.add("T")
+        else:
+            marks.add("l")
+    return "".join(sorted(marks))
+
+
+def _belongs_to_column(cell: str, others) -> bool:
+    """Whether a lone first cell is a value of its column - "CS102" among
+    course codes, "B.Tech ECE" among programmes, "Ravi Kumar" among names - and
+    not a note, a total or a group heading in it. It must be of the kind of the
+    cells above and below it; and a cell of words must be written like them and
+    be no longer than they are. Then the row is a row with blanks, and its
+    label is right; if not, the cell is written as it is, under no label."""
+    others = [other for other in others if other]
+    kinds = _kinds(others)
+    if not kinds:
+        return False
+    dominant = max(set(kinds), key=kinds.count)
+    if _kind(cell) != dominant:
+        return False
+    if dominant != "text":
+        return True
+    if _SENTENCE.search(cell) or _BULLET.match(cell) or cell[:1] in _OPENING:
+        return False
+    if any(word in _NOT_SECTION for word in _words(cell)):
+        return False
+    typical = _median([len(other.split()) for other in others])
+    if len(cell.split()) > max(3.0, 1.5 * typical):
+        return False
+    styles = [_casing(other) for other in others]
+    common = max(set(styles), key=styles.count)
+    if styles.count(common) * 2 > len(styles) and _casing(cell) != common:
+        return False
+    return True
+
+
+def _is_title(row, width: int) -> bool:
+    """A spanning row at the top of a table that reads as its title: words,
+    not a code or a figure, and not a sentence that ends with a full stop."""
+    return (
+        _is_spanning_label(row, width)
+        and _kind(row[0]) == "text"
+        and not row[0].rstrip().endswith((".", "!", "?"))
     )
 
 
@@ -328,28 +448,6 @@ def _unlike_its_body(row, body) -> bool:
     return longer
 
 
-def _all_text_header(row, body) -> bool:
-    """A header over text columns, which the narrow figure-based guess cannot
-    see: three or more columns, every one named with a short label (at most
-    four words and thirty characters, no clause punctuation), and words that
-    name columns ("Command | Description | Syntax") or a row unlike the rows
-    under it. "Asha Rao | Computer Science | Placement Coordinator" is a row."""
-    if len(row) < 3 or not all(row) or not body:
-        return False
-    if not all(
-        len(cell.split()) <= 4 and len(cell) <= 30 and not _PROSE.search(cell)
-        for cell in row
-    ):
-        return False
-    naming = sum(_names_a_column(cell) for cell in row)
-    return (
-        naming * 2 >= len(row)
-        or _unlike_its_body(row, body)
-        or _digits_below(row, body)
-        or _capitals_above(row, body)
-    )
-
-
 def _signature(cell: str) -> str:
     """A cell's shape: "Room 101" and "Room 102" are both "Aaaa 999"."""
     shape = re.sub(r"[0-9]", "9", cell)
@@ -378,7 +476,9 @@ def _has_digit(text: str) -> bool:
 def _digits_below(row, body) -> bool:
     """Labels over columns of figures ("GLONASS" over "10-20m", "Course
     Outcomes" over "CO-1", "2018 年 1-3 月" over amounts): of the columns
-    whose first cell is words, at least half have digits in most cells below."""
+    whose first cell is words, at least half have digits in most cells below,
+    and the one cell that is data in a row of names ("AB" over marks) does
+    not count."""
     eligible = contrast = 0
     for index, cell in enumerate(row):
         below = [
@@ -386,7 +486,7 @@ def _digits_below(row, body) -> bool:
             for other in body
             if other[index] and not _NEUTRAL.match(other[index])
         ]
-        if not below or _kind(cell) != "text":
+        if not cell or _NEUTRAL.match(cell) or not below or _kind(cell) != "text":
             continue
         eligible += 1
         if sum(map(_has_digit, below)) * 2 > len(below):
@@ -397,21 +497,58 @@ def _digits_below(row, body) -> bool:
 def _capitals_above(row, body) -> bool:
     """A row in capitals over rows that are not ("PROFESSIONAL ELECTIVE |
     STREAM-1" over "Advanced Mechanics of Solids")."""
-    if not all(cell.isupper() for cell in row):
+    cells = [cell for cell in row if cell]
+    if not cells or not all(cell.isupper() for cell in cells):
         return False
-    cells = [cell for other in body for cell in other if cell]
-    return bool(cells) and sum(cell.isupper() for cell in cells) * 2 <= len(cells)
+    below = [cell for other in body for cell in other if cell]
+    return bool(below) and sum(cell.isupper() for cell in below) * 2 <= len(below)
+
+
+def _header_evidence(row, body) -> bool:
+    """Positive evidence that a first row names the columns below it.
+
+    A guess is not enough: the first row of a form ("Student | Ravi Kumar")
+    or of a list ("Asha Rao | AB | AB") passes for a header on its shape alone,
+    and one wrong label is worse than none. So a header must show one of:
+
+    - words that name columns in at least two thirds of its cells (two cells
+      must both): "Programme | Fee", "Command | Description | Syntax";
+    - three or more short cells, half of them naming columns, over rows that
+      have numbers where it has none (the detector's own rule);
+    - three or more short cells in capitals over plain ones, or without digits
+      over cells with digits, or short over sentences.
+    """
+    cells = [cell for cell in row if cell]
+    named = sum(map(_names_a_column, cells))
+    if named >= 2 and named * 3 >= len(cells) * 2:
+        return True
+    if len(cells) < 3:
+        return False
+    short = all(
+        len(cell.split()) <= 4 and len(cell) <= 30 and not _PROSE.search(cell)
+        for cell in cells
+    )
+    if not short:
+        return False
+    if named >= 2 and named * 2 >= len(cells) and guess_header([row, *body]):
+        return True
+    return (
+        _capitals_above(row, body)
+        or _digits_below(row, body)
+        or _unlike_its_body(row, body)
+    )
 
 
 def _reads_as_header(row, body, *, strict: bool = False) -> bool:
     """Whether a guessed first row really names the columns below it.
 
-    Column names are not values or clauses, are nearly all different, and do
-    not turn up again in their own column: "Professor" in the first row of a
-    staff list that has more professors below it is a row of data. Under real
-    column names each column holds one kind of thing; a column of two names
-    and a roll number is a form whose first row was guessed as its header
-    ("Certified that | KARRI SUBHASH").
+    Column names are not values, names of people or clauses, are nearly all
+    different, and do not turn up again in their own column: "Professor" in
+    the first row of a staff list that has more professors below it is a row
+    of data. Under real column names each column holds one kind of thing; a
+    column of two names and a roll number is a form whose first row was
+    guessed as its header ("Certified that | KARRI SUBHASH"). And it must
+    show positive evidence (`_header_evidence`).
 
     `strict` is for a table read from layout alone (no ruling, no markup):
     every column with values in it must be named, other than the first.
@@ -420,6 +557,8 @@ def _reads_as_header(row, body, *, strict: bool = False) -> bool:
     if len(labels) < 2:
         return False
     if any(looks_like_value(cell) or _SENTENCE.search(cell) for cell in labels):
+        return False
+    if any(_name_like(cell) for cell in labels):
         return False
     distinct = len({cell.casefold() for cell in labels})
     if (len(labels) - distinct) * 3 > len(labels):
@@ -445,7 +584,7 @@ def _reads_as_header(row, body, *, strict: bool = False) -> bool:
         return False
     if strict and not all(_clean_label(cell) for cell in labels):
         return False
-    return bool(guess_header([row, *body])) or _all_text_header(row, body)
+    return _header_evidence(row, body)
 
 
 def _one_column_of_values(cells) -> bool:
@@ -504,6 +643,24 @@ def _colons(rows) -> bool:
     return bool(keys) and sum(key.endswith(":") for key in keys) * 2 > len(keys)
 
 
+def _form_keys_name_fields(rows) -> bool:
+    """At least half of the first cells are names of fields ("Tuition Fee",
+    "Date of Birth", "Roll No")."""
+    keys = [row[0] for row in rows if row[0]]
+    return bool(keys) and sum(map(_names_a_column, keys)) * 2 >= len(keys)
+
+
+def _form_evidence(rows) -> bool:
+    """Positive evidence that two columns are a form - labels with their
+    values beside them - and not two columns of a table: the first cells read
+    as labels AND they end with colons, or name fields, or the values beside
+    them are of different kinds (names and a roll number and a date). Without
+    it the rows are written as they are: "Year; Intake" claims nothing."""
+    return _is_form(rows) and (
+        _colons(rows) or _form_values(rows) or _form_keys_name_fields(rows)
+    )
+
+
 def _field_label(cell: str) -> bool:
     return _label_like(cell) and (cell.rstrip().endswith(":") or _names_a_column(cell))
 
@@ -533,23 +690,13 @@ class _Plan:
     header_row: list | None = None
 
 
-def _similar(one: str, other: str) -> bool:
-    """Two spanning rows of the same kind ("Monday", "Tuesday")."""
-    a, b = len(one.split()), len(other.split())
-    return a <= 3 and b <= 3 and abs(a - b) <= 1
-
-
 def _plan(grid, header, header_declared: bool, strict: bool) -> _Plan:
     width = len(grid[0])
 
     # Titles: spanning rows at the very top, above at least one more row.
     title = []
     top = 0
-    while (
-        top < MAX_TITLE_ROWS
-        and len(grid) - top >= 2
-        and _is_spanning_label(grid[top], width)
-    ):
+    while top < MAX_TITLE_ROWS and len(grid) - top >= 2 and _is_title(grid[top], width):
         title.append(grid[top][0])
         top += 1
     rows = grid[top:]
@@ -571,17 +718,11 @@ def _plan(grid, header, header_declared: bool, strict: bool) -> _Plan:
             return labelled()
 
     if width == 2:
-        # A label and its value, unless the second column is one kind of
-        # value under a header that names it ("Programme | Fee"). Written as
-        # a form, no value can be given the wrong label: each line pairs the
-        # two cells of its own row.
-        if (
-            body
-            and _reads_as_header(first, body, strict=strict)
-            and _one_column_of_values(r[1] for r in body)
-        ):
+        # A header over two columns, or a form of labels and values. Only
+        # evidence picks either; otherwise the rows are written as they are.
+        if body and _reads_as_header(first, body, strict=strict):
             return labelled()
-        return plan(FORM if _is_form(rows) else PLAIN, body_rows=rows)
+        return plan(FORM if _form_evidence(rows) else PLAIN, body_rows=rows)
 
     # Forms before headers: "Name | KARRI SUBHASH | Father's Name | ..." has
     # a first row that would pass for column names.
@@ -599,13 +740,15 @@ def _plan(grid, header, header_declared: bool, strict: bool) -> _Plan:
 
 
 def _demote_titles(chosen: _Plan, title_rows: list, width: int) -> _Plan:
-    """A title is a title only if nothing below it is the same kind of row: in
-    a day-wise timetable "Monday" at the top is the first section, and as a
-    title it would stamp Monday on Tuesday's rows."""
+    """A title is a title only if nothing below it is a section of its own
+    kind: in a day-wise timetable "Monday" at the top is the first section,
+    and as a title it would stamp Monday on Tuesday's rows. "Semester I" over
+    a table with a later "Practical" stays a title: they are not alike."""
     if not title_rows:
         return chosen
-    later = [row[0] for row in chosen.body if _is_spanning_label(row, width)]
-    if not any(_similar(title_rows[-1][0], text) for text in later):
+    kind = _family(title_rows[-1][0])
+    later = [row[0] for row in chosen.body if _is_section(row, width)]
+    if not any(_family(text) == kind for text in later):
         return chosen
     # The rows above are then the first section (or, in a table without
     # labels, rows), in their place before the rest.
@@ -654,29 +797,36 @@ def _next_sections(sections: list, label: str, after_data: bool) -> list:
     return [label]
 
 
-def _is_section(row, width: int, labels, body_column_0) -> bool:
-    """A spanning row of a labelled table that names the rows under it.
+def _is_section(row, width: int) -> bool:
+    """A lone-cell row of a labelled table that names the rows under it.
 
-    It reads as one when the first column's values are of another kind
-    (course codes, and "Practical"), or when it is set apart: in capitals,
-    ending with a colon, or made of words sections are made of ("Semester
-    II", "Theory", "Monday"). A row of a name list with its other cells blank
-    is a row, written with its label.
+    Only on evidence that it is one: words that sections are made of
+    ("Semester II", "Theory", "Monday", "Undergraduate"), words in capitals
+    (not "TOTAL"), or a colon at its end. A lone code, a figure, a note, a
+    "Total" is a row: stamped on the rows after it as their section, it would
+    be a wrong statement about each of them.
     """
-    if not _is_spanning_label(row, width):
+    if width < 2 or _filled(row) != [0]:
         return False
     text = row[0]
-    kinds = _kinds(body_column_0)
-    if kinds and kinds.count("text") * 2 < len(kinds):
-        return True
+    if (
+        not re.search(r"[^\W\d_]", text)
+        or len(text.split()) > MAX_SECTION_WORDS
+        or NUMERIC.match(text)
+        or not _clean_label(text)
+    ):
+        return False
+    if _kind(text) != "text":
+        return False
+    words = _words(text)
     if text.rstrip().endswith((":", "：")):
         return True
-    # In capitals, and a word rather than a code: "PRACTICAL" is a section,
-    # "CO-2" with its other cells blank is a row.
+    if any(word in _NOT_SECTION for word in words):
+        return False
     letters = sum(ch.isalpha() for ch in text)
     if text.isupper() and letters >= 4 and not _has_digit(text):
         return True
-    return any(word.strip(".:") in _SECTION_WORDS for word in _words(text))
+    return any(word in _SECTION_WORDS for word in words)
 
 
 # -- writing ----------------------------------------------------------------
@@ -728,6 +878,19 @@ def _render(pairs) -> str:
     )
 
 
+def _placed(grid, ids, all_ids) -> list:
+    """`grid` with every cell at the position of its column among `all_ids`,
+    so a value keeps its column from one page of a table to the next."""
+    where = {column: position for position, column in enumerate(all_ids)}
+    placed = []
+    for row in grid:
+        cells = [""] * len(all_ids)
+        for index, cell in enumerate(row):
+            cells[where[ids[index]]] = cell
+        placed.append(cells)
+    return placed
+
+
 def write(
     number: int,
     rows,
@@ -747,12 +910,14 @@ def write(
     guessed. `strict` asks more of a guessed header, for a table read from
     layout alone. `carry` is the layout of the page before, for the rest of a
     table that runs on (a long sheet): nothing is guessed again, its labels go
-    to the columns `column_ids` names. `plain` writes values only.
+    to the columns `column_ids` names, and values of a table without labels
+    are placed at their column's position. `plain` writes values only.
 
     No cell is lost. Empty cells are left out of a labelled row (the label
     says where a value belongs); a row that only repeats the header is not a
     row; a title or section is in the reference of every row it covers; a
-    spanning row nothing follows (a legend, a note) is a row.
+    spanning row that is not a section (a note, a total, a legend, a lone
+    value) is a row, written without a label.
     """
     grid = _cells(rows)
     if not grid:
@@ -765,14 +930,17 @@ def write(
     if carry is not None:
         by_id = dict(carry.labels)
         mode = carry.mode
-        if mode == LABELS:
-            labels = [by_id.get(column, "") for column in ids]
-            if not any(labels):
-                mode = PLAIN
-        else:
+        labels = [by_id.get(column, "") for column in ids]
+        if mode != LABELS or not any(labels):
+            mode = PLAIN
+        printed = dict(carry.header)
+        if mode == PLAIN:
+            everything = sorted(set(by_id) | set(ids))
+            grid = _placed(grid, ids, everything)
+            ids = everything
+            width = len(ids)
             labels = [""] * width
         # The header printed again at the top of this page is not a row.
-        printed = dict(carry.header)
         header_row = [printed.get(column, "") for column in ids] if printed else None
         chosen = _Plan(mode, list(carry.title), labels, grid, header_row)
         sections = list(carry.sections)
@@ -784,7 +952,13 @@ def write(
         sections = []
 
     body = chosen.body
-    column_0 = [row[0] for row in body if not _is_spanning_label(row, width)]
+    # In a table most of whose rows are one cell wide (and not sections)
+    # there are no sections: it is a list down its first column.
+    lone_rows = sum(
+        1 for row in body if _filled(row) == [0] and not _is_section(row, width)
+    )
+    sections_allowed = chosen.mode == LABELS and lone_rows * 2 <= len(body)
+    column_0 = [row[0] for row in body if _filled(row) != [0]]
     lines = []
     count = 0
     columns = []
@@ -794,21 +968,28 @@ def write(
         if chosen.header_row is not None and row == chosen.header_row:
             # The header printed again, on a continuation page.
             continue
-        if chosen.mode == LABELS and _is_section(row, width, chosen.labels, column_0):
-            rest = body[index + 1 :]
-            if any(not _is_spanning_label(other, width) for other in rest):
-                sections = _next_sections(sections, row[0], after_data)
-                after_data = False
-                continue
-            # Nothing follows it: a legend or a note under the table ("L -
-            # Lecture, T - Tutorial"). It is a row, and not a value of the
-            # first column.
-            pairs = [("", row[0])]
-        else:
-            pairs = _pairs(chosen.mode, row, chosen.labels)
+        lone = chosen.mode == LABELS and _filled(row) == [0]
+        if (
+            lone
+            and sections_allowed
+            and _is_section(row, width)
+            and any(_filled(other) != [0] for other in body[index + 1 :])
+        ):
+            sections = _next_sections(sections, row[0], after_data)
+            after_data = False
+            continue
+        # A row with only its first cell filled that is not a section: a
+        # value with blanks beside it, or a note, a total, a legend. Under the
+        # first column's label only if it is a value of that column; a note
+        # would otherwise be a programme.
+        note = lone and not _belongs_to_column(row[0], column_0)
+        pairs = [("", row[0])] if note else _pairs(chosen.mode, row, chosen.labels)
         if not any(value for _, value in pairs):
             continue
         after_data = True
+        # A note at the end of the table is about all of it, not about the
+        # section it happens to follow.
+        closing = note and not any(_filled(other) != [0] for other in body[index + 1 :])
 
         for label, _ in pairs:
             if label and label not in columns:
@@ -816,7 +997,7 @@ def write(
 
         number_in_table = first_row + count
         count += 1
-        context = [*chosen.title, *sections]
+        context = [*chosen.title] if closing else [*chosen.title, *sections]
         lines.append(_prefix(number, context, number_in_table) + _render(pairs))
 
     layout = Layout(
@@ -942,15 +1123,44 @@ def _blank(text: str) -> str:
     return re.sub(r"[^\n]", " ", text)
 
 
-def field_view(text: str) -> str:
-    """`text` as a field extractor may read it, offsets unchanged.
+def _field_region(part: str) -> str:
+    """One table's lines as a field matcher may read them.
 
-    A field is one value of the whole document. In a table of many rows, a
-    label recurs on every row ("Course Code: 23CS101" in row 1 of twelve), so
-    those rows are blanked: no row of them is THE course code. A form's rows
-    each name a different field ("Course Code: CS101", "Credits: 4"), so they
-    stay, with only the reference ("Table 1, row 2: ") and the separators
-    blanked - as the " | " between a label and its value was before.
+    A line any of whose labels recurs in the table is blanked: in a table of
+    many rows "Course Code: 23CS101" is one row's value, not the document's.
+    The lines of a form name different fields and stay, with the reference
+    ("Table 1, row 2: ") blanked and each "; " that parts two pairs turned
+    into a line break of the same length, so a value ends where its cell
+    ends and the next pair starts a line of its own.
+    """
+    lines = part.split("\n")
+    parsed = [parse_line(line) for line in lines]
+    counts = {}
+    for row in parsed:
+        if row is None:
+            continue
+        for label in {label for label, _ in row.pairs if label}:
+            counts[label] = counts.get(label, 0) + 1
+
+    out = []
+    for line, row in zip(lines, parsed, strict=True):
+        if row is None:
+            out.append(line)
+        elif any(counts.get(label, 0) > 1 for label, _ in row.pairs if label):
+            out.append(_blank(line))
+        else:
+            head = ROW_PREFIX.match(line).end()
+            out.append(_blank(line[:head]) + line[head:].replace(PAIR_SEPARATOR, "\n "))
+    return "\n".join(out)
+
+
+def field_view(text: str) -> str:
+    """`text` as a field matcher may read it, offsets unchanged.
+
+    The same length as `text`, character for character, like the view that
+    turns cell pipes into spaces (normalize.matchable): a match in it is a
+    span of the stored text, and what a match says is read from the stored
+    text. See `_field_region` for what is blanked and what is kept.
     """
     spans = regions(text)
     if not spans:
@@ -959,23 +1169,7 @@ def field_view(text: str) -> str:
     cursor = 0
     for region in spans:
         out.append(text[cursor : region.start])
-        part = text[region.start : region.end]
-        lines = part.split("\n")
-        seen = {}
-        for line in row_lines(part):
-            for label, _ in line.pairs:
-                if label:
-                    seen[label] = seen.get(label, 0) + 1
-        if any(times > 1 for times in seen.values()):
-            out.append(_blank(part))
-        else:
-            kept = []
-            for line in lines:
-                match = ROW_PREFIX.match(line)
-                rest = line[match.end() :] if match else line
-                head = _blank(line[: match.end()]) if match else ""
-                kept.append(head + rest.replace(PAIR_SEPARATOR, "  "))
-            out.append("\n".join(kept))
+        out.append(_field_region(text[region.start : region.end]))
         cursor = region.end
     out.append(text[cursor:])
     return "".join(out)
@@ -1004,11 +1198,20 @@ def without_references(text: str) -> str:
     return ROW_PREFIX.sub(lambda match: f"{match.group('context') or ''}: ", text)
 
 
-# A table/row reference in an answer ("Table 2, row 3", "rows 4-6", "row 7").
+# A table/row reference in an answer: "Table 2", "Table 2, row 3", "Table 3
+# (Semester II), rows 4-6", "row 7", "rows 1 and 2", "rows 1, 3 and 5". Only
+# the reference goes: what follows it ("row 2, 75 seats", "Table 2 (Rs. 95,000)")
+# is the answer's, and its figures are checked. A list of rows is allowed a
+# comma only when it ends with "and N", so "rows 1 and 2, 90 and 75" stops at 2.
+_N = r"\d{1,4}"
+_ROWS = (
+    rf"(?:rows\s+(?:{_N}\s*(?:-|\u2013|\u2014|to)\s*{_N}"
+    rf"|{_N}(?:\s*,\s*{_N})*\s+and\s+{_N}|{_N})|row\s+{_N})"
+)
 _ANSWER_REFERENCE = re.compile(
-    r"\bTable\s+\d+(?:\s*\([^)\n]*\))?"
-    r"(?:\s*,?\s*rows?\s+\d+(?:\s*(?:-|–|to|and|,)\s*\d+)*)?"
-    r"|\brows?\s+\d+(?:\s*(?:-|–|to|and|,)\s*\d+)*",
+    rf"\bTable\s+\d{{1,5}}(?:\s*\([^)\n]{{0,200}}\))?\s*,?\s*{_ROWS}"
+    rf"|\bTable\s+\d{{1,5}}"
+    rf"|\b{_ROWS}",
     re.IGNORECASE,
 )
 

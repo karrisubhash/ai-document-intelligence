@@ -66,6 +66,10 @@ DETECTOR_VERSION = "v2"
 # row from a data row.
 NUMERIC = re.compile(r"^[^A-Za-z]*\d[^A-Za-z]*$")
 
+# The line under the header of a Markdown (or plain-text) table: "---", ":--",
+# "--:". It draws a rule; it is not a row of the table.
+_RULE_CELL = re.compile(r"^:?-{2,}:?$")
+
 
 @dataclass(frozen=True)
 class DetectedTable:
@@ -289,6 +293,22 @@ def _runs(lines: list, name: str, pattern) -> list:
     return found
 
 
+def _without_rule(rows: list) -> tuple:
+    """(rows, whether a rule line made the first row a header).
+
+    A pipe table written as Markdown has a rule under its header: that rule
+    is dropped, and the header it underlines is no guess - the writer of the
+    table said so.
+    """
+    if (
+        len(rows) >= 2
+        and any(rows[1])
+        and all(_RULE_CELL.match(c) for c in rows[1] if c)
+    ):
+        return [rows[0], *rows[2:]], True
+    return rows, False
+
+
 def detect_tables(page_number: int, text: str) -> list:
     """Every table on one page, in reading order.
 
@@ -324,6 +344,9 @@ def detect_tables(page_number: int, text: str) -> list:
             for run in _runs([line for _, line in block], name, pattern):
                 rows = [_split(line.text, pattern, name == "PIPE") for line in run]
                 start, end = run[0].start, run[-1].end
+                declared = False
+                if name == "PIPE":
+                    rows, declared = _without_rule(rows)
                 detected.append(
                     DetectedTable(
                         page_number=page_number,
@@ -332,7 +355,8 @@ def detect_tables(page_number: int, text: str) -> list:
                         character_end=end,
                         rows=rows,
                         separator=name,
-                        header=_guess_header(rows),
+                        header=list(rows[0]) if declared else _guess_header(rows),
+                        header_declared=declared,
                     )
                 )
                 for index, line in block:
@@ -350,6 +374,7 @@ def detect_tables(page_number: int, text: str) -> list:
             rows=table.rows,
             separator=table.separator,
             header=table.header,
+            header_declared=table.header_declared,
         )
         for order, table in enumerate(detected)
     ]
