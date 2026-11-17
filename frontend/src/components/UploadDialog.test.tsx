@@ -95,7 +95,7 @@ describe("UploadDialog, one file", () => {
   it("says why a file cannot be uploaded, and does not send it", async () => {
     const upload = vi.spyOn(api, "upload");
     renderDialog();
-    const dialog = await choose([file("budget.xls")], { applyAccept: false });
+    const dialog = await choose([file("budget.xlsm")], { applyAccept: false });
     expect(within(dialog).getByText(/Unsupported file type/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
     expect(upload).not.toHaveBeenCalled();
