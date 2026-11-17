@@ -44,7 +44,7 @@ def page_with(draw):
 
 def bars(page):
     for index, height in enumerate((80, 120, 160, 140)):
-        page.fill(100 + index * 50, 400 - height, 30, height)
+        page.solid(100 + index * 50, 400 - height, 30, height)
     page.rule(90, 400, 320, 400)
     page.rule(90, 400, 90, 230)
 
@@ -71,7 +71,7 @@ def shaded_table(page):
     for row in range(8):
         for column in range(4):
             if (row + column) % 2 == 0:
-                page.fill(100 + column * 90, 200 + row * 22, 90, 22, (0.9, 0.9, 0.9))
+                page.solid(100 + column * 90, 200 + row * 22, 90, 22, (0.9, 0.9, 0.9))
 
 
 def bordered_paragraph(page):
@@ -88,7 +88,7 @@ def frame(page):
 
 
 def logo(page):
-    page.fill(500, 40, 30, 30)
+    page.solid(500, 40, 30, 30)
     page.circle(515, 55, 12)
 
 
@@ -170,7 +170,7 @@ class FigureRegionTests(SimpleTestCase):
         def draw(page):
             bars(page)
             for index, height in enumerate((70, 130, 100)):
-                page.fill(400 + index * 50, 700 - height, 30, height)
+                page.solid(400 + index * 50, 700 - height, 30, height)
             page.rule(390, 700, 560, 700)
             page.rule(390, 700, 390, 560)
 
