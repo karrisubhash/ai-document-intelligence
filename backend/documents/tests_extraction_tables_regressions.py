@@ -38,18 +38,18 @@ def ruled(result):
 # -- lists ruled only around their columns --------------------------------------
 
 FACULTY = [
-    ("Dr. K. Srinivasa Rao", "Professor & HOD", "Ph.D"),
-    ("Dr. P. Lakshmi", "Professor", "Ph.D"),
-    ("Mr. A. Ravi Kumar", "Associate Professor", "M.Tech"),
-    ("Mrs. S. Anitha", "Assistant Professor", "M.Tech"),
+    ("Dr. K. Srinivasa Rao", "Professor & HOD", "Ph.D", "Computer Science"),
+    ("Dr. P. Lakshmi", "Professor", "Ph.D", "Electronics"),
+    ("Mr. A. Ravi Kumar", "Associate Professor", "M.Tech", "Mechanical"),
+    ("Mrs. S. Anitha", "Assistant Professor", "M.Tech", "Civil"),
 ]
-FACULTY_HEADER = ["Name", "Designation", "Qualification"]
+FACULTY_HEADER = ["Name", "Designation", "Qualification", "Department"]
 
 
 def faculty_page():
     """A header ruled off and a box round the rest: no rule between people."""
     page = fx.Page()
-    edges = [60, 220, 380, 480]
+    edges = [60, 190, 310, 380, 500]
     bottom = 120 + len(FACULTY) * 16 + 6
     for y in (100, 120, bottom):
         page.rule(edges[0], y, edges[-1], y)
@@ -78,19 +78,64 @@ class StackedListTests(SimpleTestCase):
                 "Dr. K. Rao\nDr. P. Lakshmi\nMr. A. Kumar",
                 "Professor\nProfessor\nAssociate Professor",
                 "Ph.D\nPh.D\nM.Tech",
+                "Computer Science\nElectronics\nMechanical",
             ],
         ]
 
         self.assertFalse(pdf._rows_are_whole(rows))
 
+    def test_a_column_of_lower_case_items_is_still_a_stack(self):
+        rows = [
+            ["Name", "Designation", "Email", "Result"],
+            [
+                "K. Rao\nP. Lakshmi\nA. Kumar\nS. Anitha",
+                "Professor\nProfessor\nAssociate Professor\nLecturer",
+                "krao@college.edu\nplakshmi@college.edu\nakumar@college.edu\n"
+                "sanitha@college.edu",
+                "pass\nfail\nabsent\npass",
+            ],
+        ]
+
+        self.assertFalse(pdf._rows_are_whole(rows))
+
+    def test_a_designation_that_wraps_in_every_band_is_still_a_band(self):
+        rows = [
+            ["Name", "Designation", "Qualification", "Department"],
+            [
+                "K. Rao\nP. Lakshmi\nA. Kumar\nS. Anitha",
+                "Professor and Head of\nthe Department\nProfessor\nAssociate\n"
+                "Professor\nLecturer",
+                "Ph.D\nPh.D\nM.Tech\nM.Tech",
+                "CSE\nECE\nMECH\nCIVIL",
+            ],
+        ]
+
+        self.assertFalse(pdf._rows_are_whole(rows))
+
+    def test_one_record_with_a_list_in_each_cell_is_a_row(self):
+        """Unit | Topics | Outcomes with a single unit: three cells are one
+        record, not a band - the code before this one trusted it too."""
+        rows = [
+            ["Unit", "Topics", "Outcomes"],
+            [
+                "II",
+                "SQL basics\nJoins\nSubqueries\nViews",
+                "Write queries\nJoin tables\nNest queries\nDefine views",
+            ],
+        ]
+
+        self.assertTrue(pdf._rows_are_whole(rows))
+
     def test_columns_about_as_long_as_one_another_are_stacks_but_unequal_ones_wait(
         self,
     ):
         names = "Asha Rao\nRavi Kumar\nSita Devi\nMohan Das"
-        rows = [["Name", "Branch"], [names, "CSE\nECE\nMECH\nCIVIL"]]
+        rolls = "21A501\n21A502\n21A503\n21A504"
+        header = ["Name", "Branch", "Roll", "Section"]
+        rows = [header, [names, "CSE\nECE\nMECH\nCIVIL", rolls, "A\nA\nB\nB"]]
         lopsided = [
-            ["Name", "Branch"],
-            [names, "CSE\nECE\nMECH\nCIVIL\nEEE\nIT\nAI\nDS"],
+            header,
+            [names, "CSE\nECE\nMECH\nCIVIL\nEEE\nIT\nAI\nDS", rolls, "A\nA\nB\nB"],
         ]
 
         self.assertFalse(pdf._rows_are_whole(rows))
@@ -111,6 +156,7 @@ class StackedListTests(SimpleTestCase):
     def test_item_stacks_start_every_line_with_a_capital_or_a_digit(self):
         self.assertTrue(pdf._is_item_stack(["Asha Rao", "Ravi Kumar", "21A501"]))
         self.assertTrue(pdf._is_item_stack(["(a) Define", "(b) Explain", "(c) List"]))
+        self.assertTrue(pdf._is_item_stack(["a@x.edu", "b@y.edu", "pass", "fail"]))
         self.assertFalse(pdf._is_item_stack(["Gives rights", "to a user", "on data"]))
         self.assertFalse(
             pdf._is_item_stack(
@@ -149,6 +195,21 @@ class QuestionPaperTests(SimpleTestCase):
         parts = ["1", "a) One.\nb) Two.\nc) Three.", "2\n4\n4"]
         whole = ["2", "Explain normalization.", "10"]
         rows = [header, parts, whole, parts, whole, parts]
+
+        self.assertFalse(pdf._rows_are_whole(rows))
+
+    def test_a_report_ruled_every_third_month_is_a_band(self):
+        """Three bands of three months in a body of eight rows: more than a
+        question paper's few questions in parts, and not a table."""
+        header = ["Month", "Pax", "RPK", "ASK"]
+        band = [
+            "Apr-2015\nMay-2015\nJun-2015",
+            "653,278\n686,908\n667,181",
+            "2,958,643\n3,201,403\n3,198,199",
+            "3,951,483\n4,118,309\n3,938,037",
+        ]
+        total = ["FY15 1st Q TTL", "2,007,367", "9,358,245", "12,008,829"]
+        rows = [header, band, total, band, total, band, total, total, total]
 
         self.assertFalse(pdf._rows_are_whole(rows))
 
@@ -281,6 +342,20 @@ class MergedMeasureTests(SimpleTestCase):
             "Rs. 500",
             "(2 Hrs)",
             "3.5 Credits",
+            "Rs. 5,000/-",
+            "INR 5,000/-",
+            "Rs.5000/-",
+            "10 Marks each",
+            "2 Hours 30 Min",
+            "3 credits each",
+            "Max. 100",
+            "Total: 30",
+            "40 to 60",
+            "12 Periods/Week",
+            "3-0-0 (L-T-P)",
+            "2 1/2 Hrs",
+            "30 Marks (Internal)",
+            "3 Hours Theory",
         ):
             with self.subTest(measure=measure):
                 self.assertFalse(rulings._is_label(measure))
@@ -295,6 +370,16 @@ class MergedMeasureTests(SimpleTestCase):
             "2nd",
             "3rd",
             "4th",
+            "1 Year",
+            "3 Sem",
+            "8 Std",
+            "10 Class",
+            "1 PUC",
+            "3A",
+            "10A",
+            "9B",
+            "Module 3",
+            "Total",
         ):
             with self.subTest(label=label):
                 self.assertTrue(rulings._is_label(label))

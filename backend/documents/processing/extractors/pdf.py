@@ -81,6 +81,9 @@ MAX_RULING_OBJECTS = 3000
 # may be right and its rows are not; it is not stored as a table, and its
 # words are read by the layout pass, which finds the rows from the text.
 MULTILINE_CELL_LINES = 3
+# A body of fewer filled cells than this is one record or one list, not a band
+# of rows: the code before this one trusted it, whatever it holds.
+MIN_BODY_CELLS = 4
 # A table is distrusted when this share of the cells of its body are tall
 # cells of banded rows. Counted in cells, not rows: a monthly report ruled
 # every third month has a band whose every cell is a stack of three, a
@@ -421,21 +424,22 @@ def _rows_are_whole(rows: list) -> bool:
             banded += sum(
                 1 for cell in filled if cell.count("\n") + 1 >= MULTILINE_CELL_LINES
             )
-    return not counted or banded < MULTILINE_SHARE * counted
+    return counted < MIN_BODY_CELLS or banded < MULTILINE_SHARE * counted
 
 
 def _is_item_stack(lines: list) -> bool:
     """Whether the lines of a cell are separate items, not a wrapped sentence.
 
     A list of names, designations or sections has a capital (or a digit) at
-    the start of every line. A description wrapped over four lines starts
-    most of them in lower case.
+    the start of every line, or is a list of single words (addresses, "pass",
+    "absent"). A description wrapped over four lines continues most of them in
+    lower case, in several words.
     """
-    starts = [line.lstrip()[:1] for line in lines[1:] if line.strip()]
-    if not starts:
+    rest = [line.strip() for line in lines[1:] if line.strip()]
+    if not rest:
         return False
-    lower = sum(1 for start in starts if start.islower())
-    return lower <= ITEM_CONTINUATION_SHARE * len(starts)
+    continued = sum(1 for line in rest if line[:1].islower() and " " in line)
+    return continued <= ITEM_CONTINUATION_SHARE * len(rest)
 
 
 def _is_banded(filled: list) -> bool:
@@ -460,7 +464,10 @@ def _is_banded(filled: list) -> bool:
     ):
         return True
     heights = [len(lines) for lines in tall]
-    return max(heights) - min(heights) <= 1 and all(map(_is_item_stack, tall))
+    # One designation that wraps in every band makes its stack longer by a
+    # line for each; a band of four people is not six lines tall by accident.
+    close = max(heights) - min(heights) <= max(1, min(heights) // 2)
+    return close and all(map(_is_item_stack, tall))
 
 
 def _outermost(tables: list) -> list:

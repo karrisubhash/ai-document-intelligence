@@ -174,7 +174,7 @@ class StackedTableTests(SimpleTestCase):
 # -- merged cells ------------------------------------------------------------
 
 
-def pools_table(title="LIST OF POOLS"):
+def pools_table(title="LIST OF POOLS", figures=True):
     """A titled table with a two-row header and values merged down.
 
     "Pool" and "Credits" are merged down across both header rows,
@@ -206,10 +206,10 @@ def pools_table(title="LIST OF POOLS"):
     page.text(316, 125, "P")
     page.text(356, 115, "Credits")
     page.text(76, 155, "Pool-I")
-    page.text(356, 155, "4")
+    page.text(356, 155, "4" if figures else "core")
     for y, cells in (
-        (145, ["Robotics", "3", "1", "0"]),
-        (165, ["Turbines", "2", "0", "2"]),
+        (145, ["Robotics", "3", "1", "0"] if figures else ["Robotics", "a", "b", "c"]),
+        (165, ["Turbines", "2", "0", "2"] if figures else ["Turbines", "d", "e", "f"]),
     ):
         for x, cell in zip((156, 236, 276, 316), cells, strict=True):
             page.text(x, y, cell)
@@ -244,6 +244,17 @@ class MergedCellTests(SimpleTestCase):
         # The header of a stored table is its first row - here the title.
         self.assertEqual(table.header, table.rows[0])
         self.assertEqual(len(table.rows), 4)
+
+    def test_a_title_over_a_header_with_no_figure_under_it_is_no_header(self):
+        """Only a first row built as a header is known to be one: under a
+        title, the first row is the title, and it is not guessed to be a header
+        of a body that says nothing."""
+        (page,) = run(pools_table(figures=False))
+
+        (table,) = page.tables
+        self.assertEqual(table.rows[0][0], "LIST OF POOLS")
+        self.assertEqual(table.rows[1], HEADER)
+        self.assertEqual(table.header, [])
 
     def test_a_full_width_first_row_stays_the_tables_title(self):
         (page,) = run(pools_table())
