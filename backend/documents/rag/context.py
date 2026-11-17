@@ -18,6 +18,8 @@ was found inside a document, not a directive from the operator.
 import re
 from dataclasses import dataclass, field
 
+from documents.processing import figure_markers as markers
+
 # Characters, not tokens. A tokenizer is model-specific and this project has
 # no model wired up; roughly 4 characters per token is the usual English
 # approximation, so the default is a conservative stand-in for ~2k tokens.
@@ -352,12 +354,32 @@ def render(context: BuiltContext, question: str) -> str:
             # rows where they would read as part of the quoted text.
             notes.append("table columns: " + " | ".join(passage.table_header))
         metadata = getattr(passage.chunk, "metadata", None) or {}
-        if metadata.get("parts"):
+        if metadata.get("parts") and metadata.get("kind") != "FIGURE":
             # A count, total or highest value over only these rows is not the
             # table's. Said here, where the model reads the rows.
             notes.append(
                 f"part {metadata.get('part')} of {metadata['parts']} of this "
                 f"table; its other rows are in other passages, if at all"
+            )
+        if markers.contains(passage.text):
+            # A reading of a picture by a vision model, marked in the text as
+            # such. It is evidence of what the figure shows, and a number read
+            # off a chart's axis ("about") is an estimate: said here, where the
+            # model reads it, so an answer does not state it as the document's
+            # own printed figure.
+            notes.append(
+                "contains a machine-written description of a figure; a value "
+                "marked 'about' was read off an axis and is approximate"
+            )
+        if metadata.get("kind") == "FIGURE" and metadata.get("parts"):
+            notes.append(
+                f"part {metadata.get('part')} of {metadata['parts']} of this "
+                f"figure's description"
+                + (
+                    f" ({metadata['figure_title']})"
+                    if metadata.get("figure_title")
+                    else ""
+                )
             )
         if passage.adjacent_marker and passage.side in ("before", "after"):
             notes.append(

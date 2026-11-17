@@ -12,6 +12,7 @@ from documents.processing.extractors import (
     spreadsheet,
 )
 from documents.processing.extractors import ocr as ocr_extractor
+from documents.processing.figures import vision
 from documents.processing.normalize import strip_nul
 
 
@@ -22,6 +23,10 @@ def run(context) -> StageResult:
     are picked up by the OCR stage - keeping the two paths separately
     measurable rather than hidden behind one fallback.
     """
+    # Made once, here, so every stage after this one spends the same budget.
+    if context.figure_describer is None:
+        context.figure_describer = vision.for_document()
+
     if context.file_type == FileType.TXT:
         return _extract_plain_text(context)
 
@@ -45,7 +50,169 @@ def run(context) -> StageResult:
     if context.file_type == FileType.PPTX:
         return _extract_slides(context)
 
+    if context.file_type in (FileType.DOC, FileType.XLS, FileType.PPT):
+        return _extract_legacy(context)
+
+    if context.file_type in _OTHER_FORMATS:
+        return _extract_other(context)
+
     return _defer_image_to_ocr(context)
+
+
+# Formats read into the same pages-and-tables shape by their own extractors.
+_OTHER_FORMATS = frozenset(
+    {
+        FileType.HTML,
+        FileType.RTF,
+        FileType.ODT,
+        FileType.ODS,
+        FileType.ODP,
+        FileType.JSON,
+        FileType.XML,
+    }
+)
+
+
+def _extract_legacy(context) -> StageResult:
+    """An old-format Office file: converted, then read as its modern form.
+
+    The converted file goes through the very extractor a .docx, .xlsx or
+    .pptx does, so its tables, charts and pictures are read the same way. The
+    original stays the stored file; the conversion is a temporary.
+    """
+    from documents.processing.extractors import legacy
+
+    kind = context.file_type
+    original = context.file_path
+    with legacy.converted(original, kind) as modern:
+        context.file_path = modern
+        try:
+            if kind == FileType.DOC:
+                result = _extract_docx_text(context)
+            elif kind == FileType.XLS:
+                result = _extract_sheets(context, *spreadsheet.extract_xlsx(modern))
+            else:
+                result = _extract_slides(context)
+        finally:
+            context.file_path = original
+
+    context.metadata["converted_from"] = kind
+    result.metadata["converted_from"] = kind
+    result.message = f"Converted from an old-format file. {result.message}"
+    return result
+
+
+def _extract_other(context) -> StageResult:
+    """Web pages, Rich Text, OpenDocument, JSON and XML.
+
+    Each reads into pages whose text and tables are written through the shared
+    builder, so a table's span re-slices out of its page exactly as it does
+    for a Word or Excel file. Which stored kind of page they are: a document
+    (DOCX_TEXT: structured, with author-declared page breaks at best), a sheet
+    or a slide - the kinds that already exist, so nothing downstream needs to
+    know a new one.
+    """
+    from documents.processing.extractors import (
+        opendocument,
+        rtf,
+        structured,
+        webpage,
+    )
+
+    kind = context.file_type
+    pictures = settings.OCR_EMBEDDED_IMAGES and settings.OCR_EMBEDDED_IMAGES_MAX > 0
+    picture_options = {
+        "image_ocr": ocr_extractor.read_page if pictures else None,
+        "max_images": _picture_budget(context, pictures),
+        "describe": _describer(context),
+    }
+
+    if kind == FileType.HTML:
+        page, metadata = webpage.extract_page(context.file_path)
+        pages, method = [page], PageContent.ExtractionMethod.DOCX_TEXT
+    elif kind == FileType.RTF:
+        page, metadata = rtf.extract_page(context.file_path)
+        pages, method = [page], PageContent.ExtractionMethod.DOCX_TEXT
+    elif kind == FileType.ODT:
+        pages, metadata = opendocument.extract_text(
+            context.file_path, **picture_options
+        )
+        method = PageContent.ExtractionMethod.DOCX_TEXT
+    elif kind == FileType.ODS:
+        return _extract_sheets(context, *opendocument.extract_sheets(context.file_path))
+    elif kind == FileType.ODP:
+        pages, metadata = opendocument.extract_slides(
+            context.file_path, **picture_options
+        )
+        method = PageContent.ExtractionMethod.PRESENTATION
+    elif kind == FileType.JSON:
+        name = context.document_version.file_name.lower()
+        lines = name.endswith((".jsonl", ".ndjson"))
+        pages, metadata = structured.extract_json(context.file_path, lines=lines)
+        return _extract_sheets(context, pages, _as_sheet_metadata(pages, metadata))
+    else:
+        pages, metadata = structured.extract_xml(context.file_path)
+        return _extract_sheets(context, pages, _as_sheet_metadata(pages, metadata))
+
+    _note_figures(context)
+    for number, page in enumerate(pages, start=1):
+        context.pages.append(
+            ExtractedPage(
+                page_number=number,
+                text=page.text,
+                tables=page.tables,
+                extraction_method=method,
+                metadata={
+                    "extractor": metadata["extractor"],
+                    "extractor_version": metadata["extractor_version"],
+                    **{
+                        key: value
+                        for key, value in getattr(page, "metadata", {}).items()
+                        if key not in ("extractor", "extractor_version")
+                    },
+                },
+            )
+        )
+
+    context.metadata.update(_document_level(metadata))
+    characters = sum(len(page.text) for page in context.pages)
+    return StageResult(
+        message=(
+            f"Read {characters} characters from {len(context.pages)} page(s) "
+            f"of a {kind} file ({len(sum((p.tables for p in pages), []))} table(s))."
+        ),
+        metadata={"pages": len(context.pages), "characters": characters, **metadata},
+    )
+
+
+def _as_sheet_metadata(pages, metadata: dict) -> dict:
+    """What `_extract_sheets` reports on: rows and whether the file was cut."""
+    return {
+        **metadata,
+        "rows": sum(page.text.count("\n") + 1 for page in pages if page.text),
+        "truncated": bool(metadata.get("truncated", False)),
+    }
+
+
+def _describer(context):
+    """`describe(image) -> str` for the extractors, or None without a model."""
+    describer = context.figure_describer
+    return describer.block_for if describer is not None else None
+
+
+def _picture_budget(context, pictures: bool) -> int:
+    """How many pictures an Office file may read: OCR's budget, or - when a
+    model describes them - that or the model's, whichever is larger."""
+    ocr = settings.OCR_EMBEDDED_IMAGES_MAX if pictures else 0
+    if context.figure_describer is None:
+        return ocr
+    return max(ocr, settings.FIGURE_DESCRIBE_MAX)
+
+
+def _note_figures(context) -> None:
+    describer = context.figure_describer
+    if describer is not None:
+        context.metadata.update(describer.metadata())
 
 
 def _extract_plain_text(context) -> StageResult:
@@ -76,7 +243,10 @@ def _extract_pdf_text(context) -> StageResult:
         region_ocr=ocr_extractor.read_words if pictures else None,
         max_regions=settings.OCR_EMBEDDED_IMAGES_MAX if pictures else 0,
         dpi=settings.OCR_DPI,
+        describe=_describer(context),
+        figure_dpi=settings.FIGURE_RENDER_DPI,
     )
+    _note_figures(context)
 
     for index, result in enumerate(results, start=1):
         # Decided on the text that will be stored: a text layer of nothing
@@ -146,10 +316,11 @@ def _extract_docx_text(context) -> StageResult:
         # A scanned form pasted into a Word file is the content; reading it
         # is what stops such a document failing as empty.
         image_ocr=ocr_extractor.read_page if pictures else None,
-        max_images=settings.OCR_EMBEDDED_IMAGES_MAX if pictures else 0,
+        max_images=_picture_budget(context, pictures),
+        describe=_describer(context),
     )
+    _note_figures(context)
     page_texts = [page.text for page in pages]
-
     for index, page in enumerate(pages, start=1):
         text = page.text
         context.pages.append(
@@ -249,8 +420,10 @@ def _extract_slides(context) -> StageResult:
     pages, metadata = presentation.extract_slides(
         context.file_path,
         image_ocr=ocr_extractor.read_page if pictures else None,
-        max_images=settings.OCR_EMBEDDED_IMAGES_MAX if pictures else 0,
+        max_images=_picture_budget(context, pictures),
+        describe=_describer(context),
     )
+    _note_figures(context)
 
     for index, page in enumerate(pages, start=1):
         context.pages.append(

@@ -20,6 +20,8 @@ rather than merely quoted.
 import re
 from dataclasses import dataclass, field
 
+from documents.processing import figure_markers as markers
+
 # Roughly 1000 characters is a few hundred tokens - large enough to carry a
 # self-contained clause or paragraph, small enough that a retrieved chunk is
 # mostly relevant rather than mostly padding.
@@ -152,25 +154,37 @@ def _split_table(text: str, region_start: int, region_end: int, chunk_size: int)
     return spans
 
 
+FIGURE = "FIGURE"
+
+# A figure's description is kept whole when it can be: cut in the middle, the
+# half with the numbers has lost the half that says which chart they are from.
+FIGURE_CHUNK_SIZE = 1800
+
+
 def _regions(text: str, tables) -> list:
-    """The page as alternating prose and table regions, in order.
+    """The page as alternating prose, table and figure regions, in order.
 
     A table whose span is invalid, or overlaps one already taken, is
     dropped rather than trusted - the chunker is downstream of detection
-    and is not the place to adjudicate a bad span.
+    and is not the place to adjudicate a bad span. A figure reading (the
+    text between the figure markers, written by a vision model) is a region
+    of its own, unless it falls inside a table.
     """
     regions = []
     cursor = 0
 
-    for table in sorted(tables, key=lambda item: item.character_start):
-        start = max(0, min(table.character_start, len(text)))
-        end = max(0, min(table.character_end, len(text)))
+    spans = [(table.character_start, table.character_end, table) for table in tables]
+    spans += [(start, end, FIGURE) for start, end in markers.spans(text)]
+
+    for start, end, owner in sorted(spans, key=lambda item: item[0]):
+        start = max(0, min(start, len(text)))
+        end = max(0, min(end, len(text)))
         if end <= start or start < cursor:
             continue
 
         if start > cursor:
             regions.append((cursor, start, None))
-        regions.append((start, end, table))
+        regions.append((start, end, owner))
         cursor = end
 
     if cursor < len(text):
@@ -220,6 +234,20 @@ def split_page(
         if table is None:
             spans = _split_prose(text, region_start, region_end, chunk_size, overlap)
             metadata_for = lambda part, parts: {}  # noqa: E731
+        elif table is FIGURE:
+            spans = _split_table(
+                text, region_start, region_end, max(chunk_size, FIGURE_CHUNK_SIZE)
+            )
+            title = markers.title(text[region_start:region_end])
+
+            def metadata_for(part, parts, title=title):
+                metadata = {"kind": FIGURE}
+                if title:
+                    metadata["figure_title"] = title
+                if parts > 1:
+                    metadata["part"] = part
+                    metadata["parts"] = parts
+                return metadata
         else:
             spans = _split_table(text, region_start, region_end, chunk_size)
 

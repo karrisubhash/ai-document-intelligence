@@ -23,6 +23,8 @@ unavailable without costing the document the other, and the stage is only
 SKIPPED when neither ran.
 """
 
+from dataclasses import replace
+
 from documents.processing.context import StageResult
 from documents.processing.figures.exceptions import (
     FigureDetectionError,
@@ -196,6 +198,39 @@ def _structured_tables(context):
     return found, rejected
 
 
+READ_BY_MODEL = "Read by a vision model; the reading is part of the page text."
+
+
+def _mark_described(context, figures) -> list:
+    """Figures on a page a vision model read are recorded as read.
+
+    The reading itself is in the page text, where search finds it; the row
+    only says so, which is what keeps chat from telling a reader there is a
+    figure here that nobody has read. A figure on any other page stays
+    undescribed, exactly as before.
+    """
+    describer = context.figure_describer
+    sources = sorted(describer.sources) if describer is not None else []
+    if not sources:
+        return figures
+
+    read_pages = {
+        page.page_number
+        for page in context.pages
+        if page.metadata.get("figures_described")
+        or page.metadata.get("figure_described")
+    }
+    # An Office file has no pages a figure could be pinned to; its pictures
+    # are not recorded at all (see the figure detector).
+    source = ", ".join(sources)[:100]
+    return [
+        replace(figure, description=READ_BY_MODEL, description_source=source)
+        if figure.page_number in read_pages
+        else figure
+        for figure in figures
+    ]
+
+
 def _overlaps(table, spans) -> bool:
     return any(
         table.character_start < end and start < table.character_end
@@ -222,6 +257,7 @@ def _run_figures(context):
         # image dictionary nobody asked about.
         return f"Figure detection failed: {exc}", {"figures_failed": True}
 
+    figures = _mark_described(context, figures)
     context.figures = figures
 
     metadata = {

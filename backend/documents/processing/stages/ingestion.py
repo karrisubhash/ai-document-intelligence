@@ -5,7 +5,7 @@ from django.conf import settings
 
 from documents.processing.context import FileType, StageResult
 from documents.processing.errors import ErrorCode, StageError
-from documents.processing.extractors import ooxml
+from documents.processing.extractors import legacy, ooxml, opendocument
 
 # Content sniffing beats the extension: the uploaded name is client-supplied
 # and a mislabelled file would otherwise be handed to the wrong extractor.
@@ -16,6 +16,8 @@ MAGIC_SIGNATURES = [
     # TIFF, little- and big-endian. Often multi-page: a scanned document.
     (b"II*\x00", FileType.IMAGE),
     (b"MM\x00*", FileType.IMAGE),
+    # Rich Text is the one text format with a signature of its own.
+    (b"{\\rtf", FileType.RTF),
 ]
 
 # Signatures that need more than a prefix to be sure of. Two bytes ("BM") is
@@ -67,7 +69,42 @@ EXTENSION_TYPES = {
     ".pptx": FileType.PPTX,
     ".csv": FileType.CSV,
     ".tsv": FileType.CSV,
+    ".rtf": FileType.RTF,
+    ".odt": FileType.ODT,
+    ".ods": FileType.ODS,
+    ".odp": FileType.ODP,
+    ".html": FileType.HTML,
+    ".htm": FileType.HTML,
+    ".xhtml": FileType.HTML,
+    ".json": FileType.JSON,
+    ".jsonl": FileType.JSON,
+    ".ndjson": FileType.JSON,
+    ".xml": FileType.XML,
+    ".doc": FileType.DOC,
+    ".xls": FileType.XLS,
+    ".ppt": FileType.PPT,
+    # Text by another name. Read as text, in whatever encoding Windows or an
+    # editor wrote them.
+    ".md": FileType.TXT,
+    ".markdown": FileType.TXT,
+    ".rst": FileType.TXT,
+    ".log": FileType.TXT,
+    ".text": FileType.TXT,
+    ".yaml": FileType.TXT,
+    ".yml": FileType.TXT,
+    ".ini": FileType.TXT,
+    ".cfg": FileType.TXT,
+    ".conf": FileType.TXT,
+    ".toml": FileType.TXT,
+    ".tex": FileType.TXT,
+    ".srt": FileType.TXT,
+    ".vtt": FileType.TXT,
+    ".sql": FileType.TXT,
 }
+
+# Declared types that are read as text, so a binary file renamed to one of
+# them is refused rather than "read" into rows of noise.
+TEXT_FORMATS = frozenset({FileType.CSV, FileType.HTML, FileType.JSON, FileType.XML})
 
 
 def _is_text(sample: bytes) -> bool:
@@ -88,22 +125,48 @@ def detect_file_type(file_path: str) -> str | None:
     if _is_webp(header) or _is_bmp(header):
         return FileType.IMAGE
 
+    # Office's binary formats share one container signature; the extension
+    # says which of the three it is. (A .doc that is really Rich Text matched
+    # its own signature above, and one that is plain text or a saved web page
+    # is handled with the text formats below.)
+    if header.startswith(legacy.OLE_SIGNATURE):
+        return legacy.EXTENSIONS.get(os.path.splitext(file_path)[1].lower())
+
     if header.startswith(ZIP_SIGNATURES):
         # The type is whichever main part the archive holds. A plain .zip, or
         # an .odt, holds none of them and comes back unrecognised rather than
         # being handed to an extractor that cannot read it.
         part = ooxml.first_part(file_path, OOXML_MAIN_PARTS)
-        return OOXML_MAIN_PARTS.get(part)
+        if part is not None:
+            return OOXML_MAIN_PARTS[part]
+        # OpenDocument names its type in a `mimetype` entry instead.
+        return {
+            "ODT": FileType.ODT,
+            "ODS": FileType.ODS,
+            "ODP": FileType.ODP,
+        }.get(opendocument.kind_of(file_path))
 
     # No signature matched. Only text formats may fall back to the
     # extension, since they have no magic bytes.
     declared = EXTENSION_TYPES.get(os.path.splitext(file_path)[1].lower())
     if declared == FileType.TXT:
         return FileType.TXT
-    # A delimited file is only believed to be one if it is text: a binary
-    # blob renamed .csv would otherwise be "parsed" into rows of noise.
-    if declared == FileType.CSV and _is_text(header):
-        return FileType.CSV
+    # A delimited, web, JSON or XML file is only believed to be one if it is
+    # text: a binary blob renamed .csv would otherwise be "parsed" into rows
+    # of noise.
+    if declared in TEXT_FORMATS and _is_text(header):
+        return declared
+
+    # An old-format name on a file that is not an OLE container. Excel writes
+    # "web pages" and tab-separated exports under .xls, and Word saves HTML or
+    # plain text under .doc; what they are is read off the bytes.
+    if declared in legacy.TARGETS and _is_text(header):
+        lowered = header[:2048].lstrip().lower()
+        if lowered.startswith((b"<!doctype html", b"<html", b"<table", b"<?xml")) or (
+            b"<html" in lowered or b"<table" in lowered
+        ):
+            return FileType.HTML
+        return FileType.CSV if declared == FileType.XLS else FileType.TXT
 
     return None
 

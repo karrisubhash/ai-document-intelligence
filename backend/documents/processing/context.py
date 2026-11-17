@@ -11,6 +11,20 @@ class FileType:
     XLSX = "XLSX"
     CSV = "CSV"
     PPTX = "PPTX"
+    # Web pages, Rich Text, OpenDocument and data files: see the extractors of
+    # the same names. Each reads into the same page-and-table shape as the
+    # formats above, so nothing after text extraction knows the difference.
+    HTML = "HTML"
+    RTF = "RTF"
+    ODT = "ODT"
+    ODS = "ODS"
+    ODP = "ODP"
+    JSON = "JSON"
+    XML = "XML"
+    # Office's binary formats, converted to the modern ones and read as those.
+    DOC = "DOC"
+    XLS = "XLS"
+    PPT = "PPT"
 
 
 @dataclass(frozen=True)
@@ -70,6 +84,10 @@ class IngestionContext:
     # Images the document embeds, recorded so an answer can point at
     # content this pipeline cannot read rather than pretend it is absent.
     figures: list = field(default_factory=list)
+    # Reads the figures of THIS document within its budget (figures/vision.py),
+    # made once by TEXT_EXTRACTION and shared by the stages after it. None when
+    # no vision model is configured.
+    figure_describer: object | None = None
     metadata: dict = field(default_factory=dict)
     # The persisted DocumentContent, set once the content stages finish.
     # Analysis stages read this instead of reopening the original file.

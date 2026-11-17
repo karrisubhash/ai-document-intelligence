@@ -39,7 +39,7 @@ import re
 from dataclasses import dataclass, field
 
 from documents.processing.errors import ErrorCode, StageError
-from documents.processing.extractors import compose, ooxml
+from documents.processing.extractors import charts, compose, ooxml
 from documents.processing.extractors.listmarks import format_number
 from documents.processing.extractors.ooxml import local
 from documents.processing.extractors.pictures import PictureReader
@@ -59,6 +59,7 @@ W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+CHART = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 V = "urn:schemas-microsoft-com:vml"
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 
@@ -277,17 +278,22 @@ class _Picture:
 
 
 @dataclass
+class _Chart:
+    rid: str
+
+
+@dataclass
 class DocxPage:
     text: str = ""
     tables: list = field(default_factory=list)
 
 
 class _Extractor:
-    def __init__(self, document, file_path, image_ocr, max_images):
+    def __init__(self, document, file_path, image_ocr, max_images, describe=None):
         self.document = document
         self.file_path = file_path
         self.numbering = _Numbering(document)
-        self.pictures = PictureReader(image_ocr, max_images)
+        self.pictures = PictureReader(image_ocr, max_images, describe)
 
         self.pages: list = []
         self.builder = None
@@ -298,6 +304,7 @@ class _Extractor:
         self.depth = 0
         self.paragraphs = 0
         self.tables = 0
+        self.charts = 0
         self.text_boxes = 0
         self.footnote_numbers: dict = {}
         self.endnote_numbers: dict = {}
@@ -415,6 +422,10 @@ class _Extractor:
     def _graphic(self, element, out) -> None:
         for box in element.iter(_w("txbxContent")):
             out.append(_TextBox(box))
+        for chart in element.iter(f"{{{CHART}}}chart"):
+            rid = chart.get(f"{{{R}}}id")
+            if rid:
+                out.append(_Chart(rid))
         for blip in element.iter(f"{{{A}}}blip"):
             rid = blip.get(f"{{{R}}}embed")
             if rid:
@@ -489,6 +500,8 @@ class _Extractor:
         for item in trailing:
             if isinstance(item, _TextBox):
                 self._text_box(item.element)
+            elif isinstance(item, _Chart):
+                self._chart(item.rid)
             else:
                 self._picture(item.rid)
 
@@ -502,6 +515,30 @@ class _Extractor:
             self.run_body(element, allow_breaks=False)
         finally:
             self.depth -= 1
+
+    # -- charts --------------------------------------------------------
+
+    def _chart(self, rid) -> None:
+        """A chart as the table of numbers it was drawn from.
+
+        Exact, and no model: the data is in the file (extractors/charts.py).
+        """
+        try:
+            blob = self.document.part.related_parts[rid].blob
+        except Exception:
+            return
+        chart = charts.read(blob)
+        if not chart:
+            return
+        self.charts += 1
+        heading = f"{chart['kind'].capitalize()}" + (
+            f": {chart['title']}" if chart["title"] else ""
+        )
+        self._emit_text(heading)
+        self.builder.add_table(chart["rows"], header=True, source=charts.SOURCE)
+        self.has_body = True
+        if chart["truncated"]:
+            self._emit_text("(the chart has more points than are listed here)")
 
     # -- pictures ------------------------------------------------------
 
@@ -670,11 +707,14 @@ class _Extractor:
                     numbers[note.get(_w("id"))] = len(numbers) + 1
 
 
-def extract_page_results(file_path: str, *, image_ocr=None, max_images: int = 0):
+def extract_page_results(
+    file_path: str, *, image_ocr=None, max_images: int = 0, describe=None
+):
     """(pages, metadata): `DocxPage`s with their tables as structure.
 
     `image_ocr(PIL.Image) -> OcrPage` reads a picture embedded in the body;
-    `max_images` caps how many one document may spend on it.
+    `max_images` caps how many one document may spend on it. `describe(image)
+    -> str` is a vision model's reading of a figure, tried before OCR.
 
     Page boundaries are the author's explicit breaks. See the module
     docstring for why that is the most this format honestly supports.
@@ -690,7 +730,7 @@ def extract_page_results(file_path: str, *, image_ocr=None, max_images: int = 0)
             code=ErrorCode.CORRUPT_DOCUMENT,
         ) from exc
 
-    walker = _Extractor(document, file_path, image_ocr, max_images)
+    walker = _Extractor(document, file_path, image_ocr, max_images, describe)
 
     try:
         walker.number_notes()
@@ -729,11 +769,13 @@ def extract_page_results(file_path: str, *, image_ocr=None, max_images: int = 0)
         "extractor_version": VERSION,
         "paragraphs": walker.paragraphs,
         "tables": walker.tables,
+        "charts": walker.charts,
         "pagination": "explicit_breaks" if len(pages) > 1 else "none",
         "text_boxes": walker.text_boxes,
         "headers_footers": len(headers) + len(footers),
         "notes": len(notes),
         "pictures_ocred": walker.pictures.read,
+        "pictures_described": walker.pictures.described,
         **expansion,
     }
     return pages, metadata

@@ -174,12 +174,18 @@ def extract_page_results(
     region_ocr=None,
     max_regions: int = 0,
     dpi: int = 250,
+    describe=None,
+    figure_dpi: int = 150,
 ) -> list:
     """Every page as a `PdfPage`: text, tables, which extractor read it.
 
     `region_ocr(image) -> list[geometry.Word]` reads a picture; the words it
     returns are in the picture's own pixel space and are mapped onto the page
     here. `max_regions` caps how many pictures one document may spend on it.
+
+    `describe(image) -> str` reads a figure - a picture, or a diagram drawn
+    with the page's own shapes - and returns the text to place in the page
+    after it, or "" (see figures/vision.py). Its own budget bounds it.
     """
     try:
         document = pdfplumber.open(file_path)
@@ -189,11 +195,12 @@ def extract_page_results(
     results: list = []
     budget = _Budget(max_regions if region_ocr else 0)
     fallback = None
+    figures = _Figures(describe, figure_dpi) if describe is not None else None
 
     with document:
         for index, page in enumerate(document.pages):
             try:
-                results.append(_extract_page(page, region_ocr, budget, dpi))
+                results.append(_extract_page(page, region_ocr, budget, dpi, figures))
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
@@ -226,7 +233,7 @@ class _Budget:
         return True
 
 
-def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
+def _extract_page(page, region_ocr, budget, dpi, figures=None) -> PdfPage:
     metadata: dict = {}
 
     # A landscape table drawn sideways has its text running down or up the
@@ -253,8 +260,17 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
             metadata={"ocr_reason": "scanned page: a picture with no text layer"},
         )
 
+    # Figures first: a picture a model has described is not OCR'd as well,
+    # since its description already carries every label in it.
+    described: list = []
+    figure_blocks: list = []
+    if figures is not None and not turned:
+        figure_blocks, described = figures.read(page, upright, boxes, metadata)
+
     if region_ocr is not None and not turned:
-        upright += _ocr_pictures(page, upright, region_ocr, budget, dpi, metadata)
+        upright += _ocr_pictures(
+            page, upright, region_ocr, budget, dpi, metadata, skip=described
+        )
 
     extras = [
         geometry.Block(
@@ -265,7 +281,7 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
             source=SOURCE_RULED,
         )
         for bbox, rows in ruled
-    ]
+    ] + figure_blocks
     for group in odd:
         # On a turned page the odd ones out are in the other frame, where
         # this page has no place for them: they close it.
@@ -605,7 +621,48 @@ def _words_over(words, box) -> int:
     )
 
 
-def _ocr_pictures(page, words, region_ocr, budget, dpi, metadata) -> list:
+class _Figures:
+    """Describes the figures of a document's pages through `describe`."""
+
+    def __init__(self, describe, dpi: int):
+        self.describe = describe
+        self.dpi = dpi
+
+    def read(self, page, words, table_boxes, metadata) -> tuple:
+        """([Block], [box of each PICTURE that was described]) for a page."""
+        from documents.processing.extractors import figure_regions
+
+        blocks: list = []
+        done: list = []
+        read = 0
+        for region in figure_regions.find(page, words, table_boxes):
+            box = figure_regions.padded(region, page)
+            try:
+                image = page.crop(box).to_image(resolution=self.dpi).original
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception:
+                continue
+            text = self.describe(image)
+            if not text:
+                continue
+            read += 1
+            if region.origin == "picture":
+                done.append(region.box)
+            blocks.append(
+                geometry.Block(
+                    kind="text",
+                    top=region.top,
+                    bottom=region.bottom,
+                    text=text,
+                )
+            )
+        if read:
+            metadata["figures_described"] = read
+        return blocks, done
+
+
+def _ocr_pictures(page, words, region_ocr, budget, dpi, metadata, skip=()) -> list:
     """Words read out of large pictures that have no text over them."""
     page_area = float(page.width * page.height)
     read = []
@@ -613,6 +670,8 @@ def _ocr_pictures(page, words, region_ocr, budget, dpi, metadata) -> list:
 
     for picture in _pictures(page, page_area):
         box = (picture["x0"], picture["top"], picture["x1"], picture["bottom"])
+        if any(_overlap(box, other) for other in skip):
+            continue
         if _words_over(words, box) > MAX_WORDS_OVER_IMAGE:
             continue
         if not budget.take():

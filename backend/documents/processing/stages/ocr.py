@@ -6,6 +6,7 @@ from documents.models import PageContent
 from documents.processing.context import FileType, StageResult
 from documents.processing.errors import ErrorCode, StageError
 from documents.processing.extractors import ocr as ocr_extractor
+from documents.processing.figures import vision
 
 # The resolutions a PDF page is rendered at, best first. Cost falls roughly
 # with the square of the resolution.
@@ -55,6 +56,10 @@ def run(context) -> StageResult:
 
         page.text = result.text
         page.tables = result.tables
+        if context.file_type == FileType.IMAGE:
+            page.text, described = _with_figure_reading(context, page, result)
+        else:
+            described = False
         page.extraction_method = PageContent.ExtractionMethod.OCR
         page.metadata = {
             "extractor": "tesseract",
@@ -62,6 +67,7 @@ def run(context) -> StageResult:
             "dpi": dpi if context.file_type == FileType.PDF else None,
             **result.metadata,
             **({"ocr_reason": reason} if reason else {}),
+            **({"figure_described": True} if described else {}),
         }
 
         # If the pages still to read, at the pace this resolution has kept,
@@ -109,8 +115,41 @@ def run(context) -> StageResult:
             # worth comparing across documents.
             "ocr_seconds": round(duration, 3),
             "characters": sum(len(page.text) for page in pending),
+            **(
+                context.figure_describer.metadata()
+                if context.figure_describer is not None
+                and context.file_type == FileType.IMAGE
+                else {}
+            ),
         },
     )
+
+
+def _with_figure_reading(context, page, result) -> tuple:
+    """(text, whether a model described the picture) for an image file.
+
+    A photographed page of print has a lot of words and OCR reads it whole;
+    a chart, a flowchart or a diagram has a handful of labels, and the labels
+    are all OCR can give of it. The picture is shown to a vision model when
+    OCR found few words. Its reading goes AFTER the OCR text, so a table's
+    span still indexes the text it was found in.
+    """
+    describer = context.figure_describer
+    text = result.text
+    if describer is None or not describer.active:
+        return text, False
+    if result.words >= vision.MAX_WORDS_FOR_FIGURE:
+        return text, False
+
+    image = ocr_extractor.open_frame(context.file_path, page.page_number - 1)
+    if image is None:
+        return text, False
+    block = describer.block_for(image)
+    if not block:
+        return text, False
+    if not text.strip():
+        return block, True
+    return text.rstrip() + "\n\n" + block, True
 
 
 def _require_some_text(context) -> None:

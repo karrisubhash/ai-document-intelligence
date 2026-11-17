@@ -185,6 +185,19 @@ describe("upload checks", () => {
       "scan.TIF",
       "photo.webp",
       "photo.bmp",
+      "old.doc",
+      "old.xls",
+      "old.PPT",
+      "letter.odt",
+      "marks.ods",
+      "talk.odp",
+      "memo.rtf",
+      "notice.html",
+      "notice.HTM",
+      "data.json",
+      "feed.xml",
+      "README.md",
+      "app.log",
     ];
     for (const name of accepted) {
       expect(validateFile(file(name, 10))).toBeNull();
@@ -195,9 +208,9 @@ describe("upload checks", () => {
     expect(validateFile(file("a.pdf", 0))).toMatch(/empty/);
     expect(validateFile(file("a.pdf", 51 * 1024 * 1024))).toMatch(/50 MB/);
     expect(validateFile(file("macro.docm", 10))).toMatch(/Unsupported/);
-    // Legacy binary Office formats are not read; their modern forms are.
-    expect(validateFile(file("old.xls", 10))).toMatch(/Unsupported/);
-    expect(validateFile(file("old.ppt", 10))).toMatch(/Unsupported/);
+    // Macro-enabled and template Office files are not read.
+    expect(validateFile(file("macros.xlsm", 10))).toMatch(/Unsupported/);
+    expect(validateFile(file("old.pptm", 10))).toMatch(/Unsupported/);
     expect(validateFile(file("macro.xlsm", 10))).toMatch(/Unsupported/);
     expect(validateFile(null)).toMatch(/Choose/);
   });

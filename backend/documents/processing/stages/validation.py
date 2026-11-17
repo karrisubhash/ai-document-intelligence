@@ -2,7 +2,13 @@ from django.conf import settings
 
 from documents.processing.context import FileType, StageResult
 from documents.processing.errors import ErrorCode, StageError
-from documents.processing.extractors import docx, ooxml, pdf, presentation
+from documents.processing.extractors import (
+    docx,
+    ooxml,
+    opendocument,
+    pdf,
+    presentation,
+)
 from documents.processing.extractors import ocr as ocr_extractor
 
 SUPPORTED_TYPES = {
@@ -13,6 +19,16 @@ SUPPORTED_TYPES = {
     FileType.XLSX,
     FileType.CSV,
     FileType.PPTX,
+    FileType.HTML,
+    FileType.RTF,
+    FileType.ODT,
+    FileType.ODS,
+    FileType.ODP,
+    FileType.JSON,
+    FileType.XML,
+    FileType.DOC,
+    FileType.XLS,
+    FileType.PPT,
 }
 
 
@@ -20,8 +36,10 @@ def run(context) -> StageResult:
     if context.file_type not in SUPPORTED_TYPES:
         raise StageError(
             f"Unsupported file type for '{context.document_version.file_name}'. "
-            f"Supported: PDF, DOCX, XLSX, PPTX, CSV, TXT, PNG, JPG, TIFF, "
-            f"WebP, BMP.",
+            f"Supported: PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), "
+            f"old Word, Excel and PowerPoint (DOC, XLS, PPT), "
+            f"OpenDocument (ODT, ODS, ODP), RTF, HTML, CSV, TSV, TXT, "
+            f"Markdown, JSON, XML, and images (PNG, JPG, TIFF, WebP, BMP).",
             code=ErrorCode.UNSUPPORTED_FILE_TYPE,
         )
 
@@ -66,6 +84,24 @@ def run(context) -> StageResult:
         # Cells are capped as they are read; this bounds the expansion that
         # happens before the first one is.
         metadata.update(ooxml.check_expansion(context.file_path, "XLSX"))
+
+    if context.file_type in (FileType.ODT, FileType.ODS, FileType.ODP):
+        # The same archive guard, before anything is parsed.
+        metadata.update(ooxml.check_expansion(context.file_path, "OpenDocument"))
+        if context.file_type == FileType.ODP:
+            count = opendocument.slide_count(context.file_path)
+            if count == 0:
+                raise StageError(
+                    "Presentation contains no slides.",
+                    code=ErrorCode.CORRUPT_DOCUMENT,
+                )
+            if count > settings.MAX_DOCUMENT_PAGES:
+                raise StageError(
+                    f"Presentation has {count} slides, over the "
+                    f"{settings.MAX_DOCUMENT_PAGES} page limit.",
+                    code=ErrorCode.TOO_MANY_PAGES,
+                )
+            metadata["page_count"] = count
 
     if context.file_type == FileType.PPTX:
         metadata.update(ooxml.check_expansion(context.file_path, "PPTX"))

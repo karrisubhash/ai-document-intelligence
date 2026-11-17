@@ -28,7 +28,7 @@ for** and **what is actually built today**, and never conflates the two.
 | Document upload, versioning, metadata | 5, 10 | ✅ Built — row-locked versioning, archival, per-version download, 404 (not 403) to non-readers |
 | Async processing (queue + worker) | 17 | ✅ Built (Celery + Redis) — time limits, stalled-run recovery, duplicate-run refusal |
 | Validation, ingestion, integrity checks | 5, 10 | ✅ Built |
-| PDF/DOCX/XLSX/PPTX/CSV/TXT/image parsing + OCR, tables kept as tables | 11.3 | ✅ Built (pdfplumber, python-docx, openpyxl, python-pptx, pdf2image, Tesseract) |
+| PDF/DOCX/XLSX/PPTX/ODF/RTF/HTML/CSV/JSON/XML/TXT/image parsing + OCR, old .doc/.xls/.ppt, tables kept as tables, charts and diagrams read | 11.3 | ✅ Built (pdfplumber, python-docx, openpyxl, python-pptx, lxml, LibreOffice for the old formats, pdf2image, Tesseract, an optional vision model for figures) |
 | Per-page normalized content store | 15 | ✅ Built (`DocumentContent` / `PageContent`) |
 | Classification pipeline stage + contract | 11.1 | ✅ Built — pluggable |
 | Trained document classifier + inference adapter | 11.1 | ✅ Built — text baseline, 71.9% test accuracy ([results](ai/classification/README.md#results)) |
@@ -612,7 +612,25 @@ its pictures fails with `EMPTY_EXTRACTION`.
 | XLSX | openpyxl | a visible sheet, in 500-row parts with the header repeated | a table per run of non-blank rows |
 | CSV, TSV | `csv`, encoding and delimiter detected | the file, in 500-row parts | the whole file |
 | PPTX | python-pptx | a slide | slide tables; a chart becomes a table of its categories and series |
-| TXT | built in | the file | whitespace layout detector |
+| DOC, XLS, PPT (old Office) | LibreOffice converts to DOCX / XLSX / PPTX, then read as those | as the modern form | as the modern form |
+| ODT, ODS, ODP (OpenDocument) | `content.xml` walked as XML | the file (ODT), a sheet (ODS), a slide (ODP) | the document's own cells; a chart becomes a table of the numbers stored beside it |
+| RTF | built-in reader (groups, code pages, Unicode escapes) | the file | the format's own table rows |
+| HTML, XHTML | lxml (broken markup is read, not refused) | the file | `<table>`, with colspan and rowspan expanded |
+| JSON, JSON Lines, XML | built in | the file, or a sheet | a list of alike records is a table; anything else is `path: value` lines |
+| TXT, Markdown, log, YAML, INI... | built in; UTF-8, UTF-16, UTF-32 and Windows ANSI detected | the file | whitespace layout detector |
+
+**Figures - charts, flowcharts, diagrams.** What a picture *shows* is not in its words: which
+bar a number belongs to, where an arrow goes. Three layers read it, cheapest first.
+A chart in a Word, PowerPoint or OpenDocument file is read **exactly**, as the table of
+numbers stored beside it - no model, no key. A picture (pasted, embedded in a PDF, or an
+image file with few words in it) and a diagram drawn with a PDF page's own shapes (an Excel
+chart, a Word flowchart) are shown to a **vision model**, which writes down every label,
+data point and arrow; its reading goes into the page text between `[Figure: ...]` and
+`[End of figure]` markers, where search and chat find it and where it is plainly marked as
+machine-written. It runs on its own chain of vision models (`FIGURE_DESCRIBER_CHAIN`), never
+spending chat's allowance, with a per-document budget of figures and seconds; a figure past
+it stays recorded as an unread figure, as before. Switched off (`FIGURE_DESCRIPTIONS=False`)
+or with no key set, nothing changes and no picture leaves the server.
 
 The same reasoning runs through all of them. **Extractors that can see real cells hand
 them over as structure** instead of flattening them to text for a detector to rediscover:

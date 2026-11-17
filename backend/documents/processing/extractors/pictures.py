@@ -35,11 +35,16 @@ MIN_CONFIDENCE = 50.0
 class PictureReader:
     """Reads the pictures of one document, within a budget."""
 
-    def __init__(self, image_ocr=None, budget: int = 0):
+    def __init__(self, image_ocr=None, budget: int = 0, describe=None):
         self.image_ocr = image_ocr
-        self.budget = budget if image_ocr else 0
+        # `describe(PIL.Image) -> str`: a vision model's reading of a figure
+        # (chart, diagram), as text for the page, or "". Tried first; OCR is
+        # what a picture gets when no model read it.
+        self.describe = describe
+        self.budget = budget if (image_ocr or describe) else 0
         self.seen: set = set()
         self.read = 0
+        self.described = 0
 
     def text(self, blob: bytes) -> str:
         """The text of a picture, or "" when it is not worth keeping."""
@@ -62,6 +67,13 @@ class PictureReader:
             return ""  # EMF/WMF and the like: not something Pillow reads here
 
         self.budget -= 1
+        if self.describe is not None:
+            described = self.describe(picture)
+            if described:
+                self.described += 1
+                return described
+        if self.image_ocr is None:
+            return ""
         page = self.image_ocr(picture)
         if page.words < MIN_WORDS:
             return ""

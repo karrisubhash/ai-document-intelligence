@@ -501,6 +501,39 @@ OCR_DETECT_ROTATION = os.getenv("OCR_DETECT_ROTATION", "True").lower() == "true"
 OCR_EMBEDDED_IMAGES = os.getenv("OCR_EMBEDDED_IMAGES", "True").lower() == "true"
 OCR_EMBEDDED_IMAGES_MAX = int(os.getenv("OCR_EMBEDDED_IMAGES_MAX", "20"))
 
+# Old-format Office files (.doc, .xls, .ppt) are converted to the modern
+# formats by LibreOffice and read as those (extractors/legacy.py). Empty means
+# whichever of soffice / libreoffice is on the PATH; a file of those types fails
+# with a message saying so when neither is installed.
+LIBREOFFICE_PATH = os.getenv("LIBREOFFICE_PATH", "")
+# Seconds one conversion may take before it is stopped. Under the task soft
+# limit (900) with room for what follows.
+LEGACY_CONVERT_TIMEOUT = int(os.getenv("LEGACY_CONVERT_TIMEOUT", "150"))
+
+# Figures - charts, flowcharts, diagrams, photographs of either - are read by
+# a vision model while a document is processed, and what it reads goes into
+# the page text between "[Figure: ...]" and "[End of figure]" markers, where
+# search and chat find it (documents.processing.figures.vision). On only when
+# a model in FIGURE_DESCRIBER_CHAIN has its key set (GROQ_API_KEY,
+# GEMINI_API_KEY...). The pictures are SENT to that provider: Groq does not
+# train on what it is sent; Gemini's and OpenRouter's free tiers may.
+FIGURE_DESCRIPTIONS = os.getenv("FIGURE_DESCRIPTIONS", "True").lower() == "true"
+# provider:model, in order of preference; vision models chat does not use, so
+# describing figures never spends chat's daily allowance.
+FIGURE_DESCRIBER_CHAIN = os.getenv(
+    "FIGURE_DESCRIBER_CHAIN",
+    "groq:qwen/qwen3.8-27b,gemini:gemini-3.5-flash-lite",
+)
+# Per document: at most this many figures, within this many seconds (waiting
+# out a free tier's per-minute limit included). A figure past either is kept
+# undescribed, as before. Well under CELERY_TASK_SOFT_TIME_LIMIT (900).
+FIGURE_DESCRIBE_MAX = int(os.getenv("FIGURE_DESCRIBE_MAX", "20"))
+FIGURE_DESCRIBE_DEADLINE = float(os.getenv("FIGURE_DESCRIBE_DEADLINE", "240"))
+FIGURE_DESCRIBE_TIMEOUT = float(os.getenv("FIGURE_DESCRIBE_TIMEOUT", "45"))
+FIGURE_DESCRIBE_MAX_TOKENS = int(os.getenv("FIGURE_DESCRIBE_MAX_TOKENS", "700"))
+# Resolution a PDF figure is rendered at before it is sent.
+FIGURE_RENDER_DPI = int(os.getenv("FIGURE_RENDER_DPI", "150"))
+
 # Seconds the OCR of one document may take before later pages are read at a
 # lower resolution (300 -> 200 -> 150 -> 100 DPI) rather than the whole
 # document timing out. Set under CELERY_TASK_SOFT_TIME_LIMIT (900) with room
@@ -1184,6 +1217,10 @@ if RUNNING_TESTS:
     # enforced; the budget tests set their own limits with override_settings.
     RAG_ANSWERER_CHAIN = ""
     LLM_DAILY_LIMITS = "*=0"
+    # Off for the same reason as the answerer: a key in the environment would
+    # otherwise send the suite's pictures to a provider. The figure tests
+    # switch it on with a stubbed client.
+    FIGURE_DESCRIPTIONS = False
 
 
 # --- Analytics (documents.operations.analytics) -----------------------------

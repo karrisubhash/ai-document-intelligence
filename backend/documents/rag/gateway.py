@@ -43,7 +43,9 @@ tried after the ready ones rather than not at all). Everything else waits its
 turn: `brief` (document summaries on demand), `grid` (multi-document
 extraction) and `other` may spend only while the calls left today exceed
 LLM_CHAT_RESERVE times 1, 2 and 3 respectively, never on a link that is
-cooling down, so chat always keeps the last calls of the day.
+cooling down, so chat always keeps the last calls of the day. `figures`
+(pictures described while a document is processed) runs on a gateway of its
+own, over vision models chat does not use, and so reserves nothing.
 
 STREAMING. With `on_delta`, text is handed over as the provider sends it.
 What a link streamed before failing is withdrawn with `on_reset` before the
@@ -81,10 +83,15 @@ CHAT = "chat"
 BRIEF = "brief"
 GRID = "grid"
 OTHER = "other"
+# Describing pictures while a document is processed
+# (documents.processing.figures.vision). It runs on its own chain of vision
+# models that chat does not use, so it holds nothing back for chat; like
+# every purpose but chat it never tries a link that is cooling down.
+FIGURES = "figures"
 
 # How many chat reserves each purpose must leave untouched. Chat leaves
 # none: it is the reason the reserve exists.
-PURPOSE_RESERVE_MULTIPLIER = {CHAT: 0, BRIEF: 1, GRID: 2, OTHER: 3}
+PURPOSE_RESERVE_MULTIPLIER = {CHAT: 0, BRIEF: 1, GRID: 2, OTHER: 3, FIGURES: 0}
 PURPOSES = tuple(PURPOSE_RESERVE_MULTIPLIER)
 
 # Link states, as status() reports them.
@@ -673,7 +680,15 @@ class Gateway:
 
     name = NAME
 
-    def __init__(self, links=(), *, broker=None):
+    def __init__(
+        self,
+        links=(),
+        *,
+        broker=None,
+        timeout: float | None = None,
+        retries: int | None = None,
+        deadline: float | None = None,
+    ):
         self.links = tuple(links)
         self.broker = broker or budget.broker
         # Every request-extra key any link sends, so a request built for one
@@ -686,11 +701,25 @@ class Gateway:
         # One client standing in for every link: how the tests drive the
         # chain without a network, as `answerer._client = stub` always has.
         self.client_override = None
-        self._timeout = float(getattr(settings, "RAG_ANSWERER_TIMEOUT", 60.0) or 60.0)
-        self._retries = int(getattr(settings, "RAG_ANSWERER_RETRIES", 2) or 0)
+        # The answerer's settings unless the caller has its own: a gateway
+        # that is not chat's (figure descriptions) waits differently.
+        self._timeout = (
+            float(timeout)
+            if timeout is not None
+            else float(getattr(settings, "RAG_ANSWERER_TIMEOUT", 60.0) or 60.0)
+        )
+        self._retries = (
+            int(retries)
+            if retries is not None
+            else int(getattr(settings, "RAG_ANSWERER_RETRIES", 2) or 0)
+        )
         # Seconds ONE walk of the chain may take, 0 for no limit. See
         # _attempt_options.
-        self._deadline = _walk_budget(getattr(settings, "RAG_ANSWERER_DEADLINE", 0.0))
+        self._deadline = _walk_budget(
+            deadline
+            if deadline is not None
+            else getattr(settings, "RAG_ANSWERER_DEADLINE", 0.0)
+        )
 
     def _time_left(self, started: float) -> float | None:
         """What is left of this walk's budget, None when there is no budget."""

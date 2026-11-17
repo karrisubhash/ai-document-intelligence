@@ -446,6 +446,17 @@ def image_frame_count(file_path: str) -> int:
         return 1
 
 
+def open_frame(file_path: str, frame: int = 0):
+    """One frame of an image file as a PIL image, or None when unreadable."""
+    try:
+        with Image.open(file_path) as image:
+            if frame:
+                image.seek(frame)
+            return image.copy()
+    except Exception:
+        return None
+
+
 def ocr_image_file(file_path: str, frame: int = 0) -> OcrPage:
     try:
         with Image.open(file_path) as image:

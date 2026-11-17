@@ -272,11 +272,14 @@ class _Slides:
         return SlidePage(text=text, tables=tables, metadata=metadata)
 
 
-def extract_slides(file_path: str, *, image_ocr=None, max_images: int = 0) -> tuple:
+def extract_slides(
+    file_path: str, *, image_ocr=None, max_images: int = 0, describe=None
+) -> tuple:
     """(pages, metadata): one `SlidePage` per slide, in order.
 
     `image_ocr(PIL.Image) -> OcrPage` reads a picture on a slide;
-    `max_images` caps how many one deck may spend on it.
+    `max_images` caps how many one deck may spend on it. `describe(image) ->
+    str` is a vision model's reading of a figure, tried before OCR.
     """
     expansion = ooxml.check_expansion(file_path, "PPTX")
 
@@ -291,7 +294,7 @@ def extract_slides(file_path: str, *, image_ocr=None, max_images: int = 0) -> tu
         ) from exc
 
     version = getattr(pptx, "__version__", "")
-    pictures = PictureReader(image_ocr, max_images)
+    pictures = PictureReader(image_ocr, max_images, describe)
     reader = _Slides(pictures)
 
     try:
@@ -316,5 +319,6 @@ def extract_slides(file_path: str, *, image_ocr=None, max_images: int = 0) -> tu
         "charts": reader.charts,
         "notes": reader.notes,
         "pictures_ocred": pictures.read,
+        "pictures_described": pictures.described,
         **expansion,
     }

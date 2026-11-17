@@ -139,6 +139,35 @@ class Page:
                 self.text(cell_x, y + row_index * row_height + 5, cell, size=size)
         return self
 
+    # -- filled shapes ------------------------------------------------------
+
+    def fill(self, x, y, width, height, rgb=(0.27, 0.45, 0.77)):
+        """A filled rectangle with its top-left at (x, y): a bar, a cell shade."""
+        red, green, blue = rgb
+        self.ops.append(
+            f"{red} {green} {blue} rg "
+            f"{x} {PAGE_HEIGHT - y - height:.2f} {width} {height} re f"
+        )
+        return self
+
+    def circle(self, cx, cy, radius, rgb=None):
+        """A circle (four Bezier curves), outlined, or filled when `rgb` is given."""
+        k = 0.5523 * radius
+        top = PAGE_HEIGHT - cy
+        path = (
+            f"{cx + radius} {top:.2f} m "
+            f"{cx + radius} {top + k:.2f} {cx + k} {top + radius:.2f} {cx} {top + radius:.2f} c "
+            f"{cx - k} {top + radius:.2f} {cx - radius} {top + k:.2f} {cx - radius} {top:.2f} c "
+            f"{cx - radius} {top - k:.2f} {cx - k} {top - radius:.2f} {cx} {top - radius:.2f} c "
+            f"{cx + k} {top - radius:.2f} {cx + radius} {top - k:.2f} {cx + radius} {top:.2f} c "
+        )
+        if rgb:
+            red, green, blue = rgb
+            self.ops.append(f"{red} {green} {blue} rg {path} f")
+        else:
+            self.ops.append(f"{path} S")
+        return self
+
     # -- images -------------------------------------------------------------
 
     def image(self, x, y, width, height, picture):
