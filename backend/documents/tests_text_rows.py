@@ -656,6 +656,100 @@ class ReviewFindingsTests(SimpleTestCase):
         self.assertNotIn("23CS101", view)
 
 
+class RealHeaderShapesTests(SimpleTestCase):
+    """Headers from real documents that a narrower rule lost, and data rows
+    that a looser one would take for headers."""
+
+    def labelled(self, rows, **options):
+        return text_rows.write(1, rows, rows[0], **options)
+
+    def test_names_over_figures_with_units(self):
+        """A GNSS comparison: "GLONASS" over "10cm/s" and "20ns"."""
+        written = self.labelled(
+            [
+                ["Parameter", "NAVSTAR GPS", "GLONASS", "Galileo", "Beidou1/2"],
+                ["Position", "10-20m", "10-20m", "~10-20m", "~10-20m"],
+                ["Velocity", "10cm/s", "10cm/s", "20cm/s", "20/40cm/s"],
+                ["Time", "0.1 µs (15ns)", "20ns", "20ns", "20/50ns"],
+            ]
+        )
+        self.assertIn(
+            "Table 1, row 2: Parameter: Velocity; NAVSTAR GPS: 10cm/s", written.text
+        )
+
+    def test_a_header_in_capitals(self):
+        written = self.labelled(
+            [
+                ["OPEN ELECTIVE", "SOFTWARE", "EMERGING COURSE"],
+                ["OE-1", "DBMS", "Introduction to Artificial Intelligence"],
+                [
+                    "OE-2",
+                    "Data Structures through Python",
+                    "Introduction to Machine Learning",
+                ],
+            ]
+        )
+        self.assertIn("OPEN ELECTIVE: OE-1; SOFTWARE: DBMS", written.text)
+
+    def test_outcome_codes_under_their_name_with_dashes_beside(self):
+        written = self.labelled(
+            [
+                ["Course Outcomes", "PSO1", "PSO2", "PSO3"],
+                ["CO-1", "-", "-", "-"],
+                ["CO-2", "2", "-", "-"],
+                ["CO-3", "-", "1", "-"],
+            ]
+        )
+        self.assertIn("Table 1, row 2: Course Outcomes: CO-2; PSO1: 2", written.text)
+
+    def test_an_abbreviation_is_not_the_end_of_a_sentence(self):
+        written = self.labelled(
+            [
+                ["Notice Date", "Company", "City", "No. Of"],
+                ["06/22/2015", "Maxim Integrated Product", "San Jose", "150"],
+                ["06/30/2015", "McGraw-Hill Education", "Monterey", "137"],
+            ]
+        )
+        self.assertIn("No. Of: 150", written.text)
+
+    def test_period_names_over_amounts(self):
+        written = self.labelled(
+            [
+                ["项 目", "2018 年 1-3 月", "2017 年 1-3 月", "增减%"],
+                ["管理费用", "7,764,789.98", "15,753,158.14", "-50.71%"],
+                ["财务费用", "7,667.69", "403,265.89", "-98.10%"],
+            ]
+        )
+        self.assertIn("2018 年 1-3 月: 7,764,789.98", written.text)
+
+    def test_a_first_row_shaped_like_the_rows_below_is_data(self):
+        written = self.labelled(
+            [
+                ["Room 101", "Lab 1", "Ground"],
+                ["Room 102", "Lab 2", "First"],
+                ["Room 103", "Lab 3", "Second"],
+            ]
+        )
+        self.assertFalse(written.labelled)
+        self.assertEqual(_lines(written)[0], "Table 1, row 1: Room 101; Lab 1; Ground")
+
+    def test_a_code_alone_in_its_row_is_a_row_not_a_section(self):
+        header = ["Course Outcomes", "PSO1", "PSO2", "PSO3"]
+        written = text_rows.write(
+            1,
+            [
+                header,
+                ["CO-1", "", "", "1"],
+                ["CO-2", "", "", ""],
+                ["CO-3", "", "", "2"],
+            ],
+            header,
+            header_declared=True,
+        )
+        self.assertIn("Table 1, row 2: Course Outcomes: CO-2", written.text)
+        self.assertNotIn("(CO-2)", written.text)
+
+
 class SheetContinuationTests(SimpleTestCase):
     """A long sheet through the real builder and the real layout stage."""
 

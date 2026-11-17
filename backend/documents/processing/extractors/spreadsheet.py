@@ -185,8 +185,13 @@ def build_pages(
     source: str,
     source_version: str,
     metadata: dict,
+    header_row: bool = False,
 ) -> list:
-    """One sheet's rows as pages: tables as structure, the sheet named."""
+    """One sheet's rows as pages: tables as structure, the sheet named.
+
+    `header_row`: the first row is the column names, known rather than
+    guessed - a list of records whose keys they are.
+    """
     paged = len(rows) > ROWS_PER_PAGE
     pages: list = []
     # Whether the previous page ended inside a table: its last block was
@@ -218,6 +223,8 @@ def build_pages(
             if joined:
                 # Its first row is data, whatever it looks like.
                 stored = builder.add_table(block, header=False, continues=True)
+            elif header_row and start == 0 and position == 0:
+                stored = builder.add_table(block, header=True, header_declared=True)
             else:
                 choice = _header_choice(block)
                 # A sheet's first row taken for its header is a guess, and is

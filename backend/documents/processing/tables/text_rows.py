@@ -110,6 +110,7 @@ _COLUMN_WORDS = frozenset(
     batch slot venue sl sno s.no serial sr balance debit credit particulars
     vr voucher account head heads term terms rule rules clause clauses
     requirement requirements eligibility criteria minimum maximum min max
+    column columns col header heading headings field fields tête colonne
     """.split()
 )
 
@@ -273,10 +274,12 @@ def _is_spanning_label(row, width: int) -> bool:
 # -- what kind of table ------------------------------------------------------
 
 # Punctuation that ends or joins clauses: a cell with it is a piece of prose.
-_PROSE = re.compile(r"[,;，。；、]|[.!?](?:\s|$)")
+# A full stop ends a sentence after a word of three letters or more: "No. Of"
+# and "Dr. Rao" are abbreviations.
+_PROSE = re.compile(r"[,;，。；、]|(?<=[^\W\d_]{3})[.!?](?:\s|$)")
 # The same, in any guessed column name: a sentence's full stop or a CJK
 # clause mark, or a comma or semicolon at its end ("而网站，", "students,").
-_SENTENCE = re.compile(r"[，。；]|[,;]$|[.!?]\s")
+_SENTENCE = re.compile(r"[，。；]|[,;]$|(?<=[^\W\d_]{3})[.!?]\s")
 
 
 def _mixed_column(row, body, *, share: int = 3) -> bool:
@@ -339,7 +342,65 @@ def _all_text_header(row, body) -> bool:
     ):
         return False
     naming = sum(_names_a_column(cell) for cell in row)
-    return naming * 2 >= len(row) or _unlike_its_body(row, body)
+    return (
+        naming * 2 >= len(row)
+        or _unlike_its_body(row, body)
+        or _digits_below(row, body)
+        or _capitals_above(row, body)
+    )
+
+
+def _signature(cell: str) -> str:
+    """A cell's shape: "Room 101" and "Room 102" are both "Aaaa 999"."""
+    shape = re.sub(r"[0-9]", "9", cell)
+    shape = re.sub(r"[A-Z]", "A", shape)
+    return re.sub(r"[a-z]", "a", shape)
+
+
+def _shaped_like_its_column(row, body) -> bool:
+    """A first row whose cell with a number in it has the very shape of the
+    cells below it ("Room 101" over "Room 102", "Lab 1" over "Lab 2") is the
+    first row of data, not the name of the column."""
+    for index, cell in enumerate(row):
+        if not cell or not _has_digit(cell):
+            continue
+        below = [other[index] for other in body if other[index]]
+        same = sum(_signature(other) == _signature(cell) for other in below)
+        if below and same * 2 >= len(below):
+            return True
+    return False
+
+
+def _has_digit(text: str) -> bool:
+    return any(ch.isdigit() for ch in text)
+
+
+def _digits_below(row, body) -> bool:
+    """Labels over columns of figures ("GLONASS" over "10-20m", "Course
+    Outcomes" over "CO-1", "2018 年 1-3 月" over amounts): of the columns
+    whose first cell is words, at least half have digits in most cells below."""
+    eligible = contrast = 0
+    for index, cell in enumerate(row):
+        below = [
+            other[index]
+            for other in body
+            if other[index] and not _NEUTRAL.match(other[index])
+        ]
+        if not below or _kind(cell) != "text":
+            continue
+        eligible += 1
+        if sum(map(_has_digit, below)) * 2 > len(below):
+            contrast += 1
+    return contrast >= 1 and contrast * 2 >= eligible
+
+
+def _capitals_above(row, body) -> bool:
+    """A row in capitals over rows that are not ("PROFESSIONAL ELECTIVE |
+    STREAM-1" over "Advanced Mechanics of Solids")."""
+    if not all(cell.isupper() for cell in row):
+        return False
+    cells = [cell for other in body for cell in other if cell]
+    return bool(cells) and sum(cell.isupper() for cell in cells) * 2 <= len(cells)
 
 
 def _reads_as_header(row, body, *, strict: bool = False) -> bool:
@@ -374,6 +435,8 @@ def _reads_as_header(row, body, *, strict: bool = False) -> bool:
             if index < len(other) and other[index].casefold() == wanted:
                 return False
     if _mixed_column(row, body):
+        return False
+    if _shaped_like_its_column(row, body):
         return False
     if strict and any(
         not row[index] and any(other[index] for other in body)
@@ -606,7 +669,12 @@ def _is_section(row, width: int, labels, body_column_0) -> bool:
     kinds = _kinds(body_column_0)
     if kinds and kinds.count("text") * 2 < len(kinds):
         return True
-    if text.isupper() or text.rstrip().endswith(":"):
+    if text.rstrip().endswith((":", "：")):
+        return True
+    # In capitals, and a word rather than a code: "PRACTICAL" is a section,
+    # "CO-2" with its other cells blank is a row.
+    letters = sum(ch.isalpha() for ch in text)
+    if text.isupper() and letters >= 4 and not _has_digit(text):
         return True
     return any(word.strip(".:") in _SECTION_WORDS for word in _words(text))
 

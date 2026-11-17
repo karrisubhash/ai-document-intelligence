@@ -117,6 +117,8 @@ def _pages_for(value, name: str, source: str) -> list:
                 source=source,
                 source_version=VERSION,
                 metadata={"extractor": "structured"},
+                # The records' keys: the columns' names, not a guess.
+                header_row=True,
             )
 
     leaves: list = []
