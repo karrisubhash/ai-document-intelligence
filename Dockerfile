@@ -45,29 +45,6 @@ RUN if [ -n "$TESSERACT_LANGS" ]; then \
         echo "No extra OCR languages (TESSERACT_LANGS is empty)"; \
     fi
 
-# Old-format Office files (.doc, .xls, .ppt) are converted to the modern
-# formats by LibreOffice and read as those (documents/processing/extractors/
-# legacy.py). Only the three headless components are installed - Writer, Calc
-# and Impress without their GUI - not the office suite: roughly 170 packages
-# and no Java. It is the largest single layer in the image; build with
-#
-#   docker compose build --build-arg LEGACY_OFFICE=0
-#
-# to leave it out, and a .doc, .xls or .ppt then fails with a message telling
-# the person to save it in the modern format and upload that.
-ARG LEGACY_OFFICE=1
-
-RUN if [ "$LEGACY_OFFICE" = "1" ]; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends \
-            libreoffice-writer-nogui \
-            libreoffice-calc-nogui \
-            libreoffice-impress-nogui \
-        && rm -rf /var/lib/apt/lists/*; \
-    else \
-        echo "No legacy Office converter (LEGACY_OFFICE=$LEGACY_OFFICE)"; \
-    fi
-
 # An unprivileged user for everything the container runs. Created before
 # the dependency layers so the uid is stable across rebuilds; the writable
 # paths are created and handed to it at the end of this file.
@@ -172,6 +149,33 @@ RUN if [ "$INSTALL_OTEL" = "true" ]; then         pip install --no-cache-dir -r 
 # reads the final filesystem. Upgraded after the dependency layers so the
 # pinned installs above stay cached; nothing at runtime runs pip.
 RUN pip install --no-cache-dir "pip==26.2.1"
+
+# Old-format Office files (.doc, .xls, .ppt) are converted to the modern
+# formats by LibreOffice and read as those (documents/processing/extractors/
+# legacy.py). Only the three headless components are installed - Writer, Calc
+# and Impress without their GUI - not the office suite: roughly 170 packages
+# and no Java. It is the largest single layer in the image; build with
+#
+#   docker compose build --build-arg LEGACY_OFFICE=0
+#
+# to leave it out, and a .doc, .xls or .ppt then fails with a message telling
+# the person to save it in the modern format and upload that.
+#
+# Placed AFTER the pip layers on purpose: a layer's cache is lost when any
+# layer before it changes, and these two slow ones (packages, then the Python
+# dependencies and local models) should not be rebuilt because of each other.
+ARG LEGACY_OFFICE=1
+
+RUN if [ "$LEGACY_OFFICE" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            libreoffice-writer-nogui \
+            libreoffice-calc-nogui \
+            libreoffice-impress-nogui \
+        && rm -rf /var/lib/apt/lists/*; \
+    else \
+        echo "No legacy Office converter (LEGACY_OFFICE=$LEGACY_OFFICE)"; \
+    fi
 
 # Where sentence-transformers caches downloaded weights. Named explicitly
 # so it can be a mounted volume: without one, every rebuilt container
