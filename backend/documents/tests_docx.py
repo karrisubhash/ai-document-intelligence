@@ -72,15 +72,25 @@ class DocxDetectionTests(TestCase):
         self.assertIsNone(detect_file_type(path))
 
     def test_a_zip_named_docx_is_still_not_a_docx(self):
-        """The extension is client-supplied and must not decide. An
-        OpenDocument file is a ZIP too, and is none of the formats read."""
+        """The extension is client-supplied and must not decide. A plain ZIP
+        holds none of the formats read, whatever it is called."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("notes.txt", "not a document")
+        path = write(self.tmp, "letter.docx", buffer.getvalue())
+
+        self.assertIsNone(detect_file_type(path))
+
+    def test_an_opendocument_file_named_docx_is_an_opendocument_file(self):
+        """The bytes decide, in the other direction too: an .odt that was
+        renamed .docx is still read, as the OpenDocument file it is."""
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
             archive.writestr("mimetype", "application/vnd.oasis.opendocument.text")
             archive.writestr("content.xml", "<office:document-content/>")
         path = write(self.tmp, "letter.docx", buffer.getvalue())
 
-        self.assertIsNone(detect_file_type(path))
+        self.assertEqual(detect_file_type(path), FileType.ODT)
 
     def test_the_main_part_decides_the_type_not_the_extension(self):
         for part, expected in (
@@ -293,8 +303,7 @@ class DocxPipelineTests(AuthenticatedAPITestCase):
     def test_a_zip_pretending_to_be_a_docx_is_rejected(self):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr("mimetype", "application/vnd.oasis.opendocument.text")
-            archive.writestr("content.xml", "<office:document-content/>")
+            archive.writestr("notes.txt", "not a document")
 
         document_id = self.upload_expecting_failure("fake.docx", buffer.getvalue())
         document = Document.objects.get(id=document_id)
