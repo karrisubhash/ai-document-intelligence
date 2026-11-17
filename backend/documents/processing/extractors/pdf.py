@@ -33,6 +33,7 @@ pypdf stays for what it is good at: counting pages for validation and
 reading the image dictionary for figure detection.
 """
 
+import dataclasses
 import math
 import re
 from collections import Counter
@@ -45,7 +46,7 @@ from pypdf import PdfReader
 from pypdf.errors import FileNotDecryptedError
 
 from documents.processing.errors import ErrorCode, StageError
-from documents.processing.extractors import compose, geometry
+from documents.processing.extractors import compose, geometry, rulings, wording
 
 EXTRACTOR = "pdfplumber"
 VERSION = pdfplumber.__version__
@@ -73,14 +74,25 @@ RULED_SETTINGS = {
 # table page, and finding tables in it is slow.
 MAX_RULING_OBJECTS = 3000
 
-# A ruled table whose cells hold this many lines of text, in this share of its
-# body, has rows the rulings did not separate - a report shaded or ruled in
-# bands of five rows has a rule every fifth row, so every cell holds five
-# rows' worth of text. Its columns may be right and its rows are not; it is
-# not stored as a table, and its words are read by the layout pass, which
-# finds the rows from the text itself.
+# A ruled table whose rows hold this many lines in their key cell and in most
+# of their other cells, in this share of its body, has rows the rulings did
+# not separate - a report shaded or ruled in bands of five rows has a rule
+# every fifth row, so every cell holds five rows' worth of text. Its columns
+# may be right and its rows are not; it is not stored as a table, and its
+# words are read by the layout pass, which finds the rows from the text.
 MULTILINE_CELL_LINES = 3
+# A table is distrusted when this share of the cells of its body are tall
+# cells of banded rows. Counted in cells, not rows: a monthly report ruled
+# every third month has a band whose every cell is a stack of three, a
+# question paper with a few questions in parts has bands whose marks and
+# outcomes are stacked beside a question number that is not.
 MULTILINE_SHARE = 0.3
+BANDED_CELL_SHARE = 0.6
+# A tall cell whose lines are this share figures is a stack of separate values.
+FIGURE_STACK_SHARE = 0.8
+# A tall cell whose lines are items - each starting a new one - has at most
+# this share of lines that start in lower case, as a wrapped sentence's do.
+ITEM_CONTINUATION_SHARE = 0.2
 
 # A page is deferred to OCR when this share of its text is unreadable.
 GARBLED_SHARE = 0.2
@@ -260,8 +272,16 @@ def _extract_page(page, region_ocr, budget, dpi, figures=None) -> PdfPage:
             metadata={"ocr_reason": "scanned page: a picture with no text layer"},
         )
 
-    # Figures first: a picture a model has described is not OCR'd as well,
-    # since its description already carries every label in it.
+    if _repair_glued(upright, ruled):
+        upright = [
+            dataclasses.replace(word, text=wording.split_glued(word.text))
+            for word in upright
+        ]
+        metadata["glued_words_split"] = True
+
+    # Figures next, on the repaired words: a picture a model has described is
+    # not OCR'd as well, since its description already carries every label in
+    # it.
     described: list = []
     figure_blocks: list = []
     if figures is not None and not turned:
@@ -272,16 +292,23 @@ def _extract_page(page, region_ocr, budget, dpi, figures=None) -> PdfPage:
             page, upright, region_ocr, budget, dpi, metadata, skip=described
         )
 
-    extras = [
-        geometry.Block(
+    # A title drawn as the table's first, full-width row stays its first row:
+    # it is what tells two tables with the same columns apart (Semester I,
+    # Semester II), so it stays inside the table's span, beside its own
+    # table, and - being the first row - it is the table's header, as it was
+    # before this reading of ruled tables.
+    extras = []
+    for bbox, grid in ruled:
+        block = geometry.Block(
             kind="table",
             top=bbox[1],
             bottom=bbox[3],
-            rows=rows,
+            rows=grid.rows,
             source=SOURCE_RULED,
+            header=True if grid.header else "auto",
         )
-        for bbox, rows in ruled
-    ] + figure_blocks
+        extras.append(block)
+    extras += figure_blocks
     for group in odd:
         # On a turned page the odd ones out are in the other frame, where
         # this page has no place for them: they close it.
@@ -298,7 +325,11 @@ def _extract_page(page, region_ocr, budget, dpi, figures=None) -> PdfPage:
     builder = compose.PageBuilder(source=SOURCE_LAYOUT, source_version=VERSION)
     for block in geometry.layout_page(upright, extra_blocks=extras):
         if block.kind == "table":
-            builder.add_table(block.rows, source=block.source or SOURCE_LAYOUT)
+            builder.add_table(
+                block.rows,
+                source=block.source or SOURCE_LAYOUT,
+                header=block.header,
+            )
         else:
             builder.add_text(block.text)
 
@@ -315,47 +346,139 @@ def _extract_page(page, region_ocr, budget, dpi, figures=None) -> PdfPage:
     return PdfPage(text=text, tables=tables, metadata=metadata)
 
 
+def _repair_glued(words, ruled) -> bool:
+    """Whether this page draws words without spaces, and if so, split its cells.
+
+    Decided on the page's own text, words and cells together: a page that
+    shows the fault (`wording.has_glued_words`) has its long unlisted runs
+    split; any other page is left exactly as drawn. The cells are repaired
+    here, the caller repairs the words.
+    """
+    texts = [word.text for word in words]
+    texts += [cell for _, grid in ruled for row in grid.rows for cell in row]
+    if not wording.has_glued_words(texts):
+        return False
+    for _, grid in ruled:
+        grid.rows = [[wording.repair_lines(cell) for cell in row] for row in grid.rows]
+    return True
+
+
 def _ruled_tables(page, metadata) -> list:
-    """[(bbox, rows)] for each grid drawn with lines on this page."""
-    rulings = len(page.lines) + len(page.rects) + len(page.curves)
-    if rulings > MAX_RULING_OBJECTS:
-        metadata["ruled_tables_skipped"] = f"{rulings} drawn lines"
+    """[(bbox, rulings.Grid)] for each grid drawn with lines on this page.
+
+    Found on the page as a reader sees it (`rulings.visible_page`): shapes
+    painted in the colour already behind them are not rulings.
+    """
+    drawn = len(page.lines) + len(page.rects) + len(page.curves)
+    if drawn > MAX_RULING_OBJECTS:
+        metadata["ruled_tables_skipped"] = f"{drawn} drawn lines"
         return []
 
     found = []
-    for table in page.find_tables(table_settings=RULED_SETTINGS):
-        rows = [
-            ["" if cell is None else cell for cell in row]
-            for row in table.extract(x_tolerance_ratio=X_TOLERANCE_RATIO)
-        ]
-        # A box around a paragraph, an underline, a page border: one row or
-        # one column is not a table, and claiming its words would take them
-        # out of the normal reading flow.
-        if len(rows) < 2 or max((len(row) for row in rows), default=0) < 2:
-            continue
-        if not any(cell.strip() for row in rows for cell in row):
-            continue
-        if not _rows_are_whole(rows):
-            metadata["ruled_tables_distrusted"] = (
-                metadata.get("ruled_tables_distrusted", 0) + 1
-            )
-            continue
-        found.append((table.bbox, rows))
+    source = rulings.visible_page(page)
+    for table in source.find_tables(table_settings=RULED_SETTINGS):
+        for grid in rulings.read(table, text_of=_cell_text):
+            rows = grid.rows
+            if not _is_table(grid):
+                continue
+            if not _rows_are_whole(rows):
+                metadata["ruled_tables_distrusted"] = (
+                    metadata.get("ruled_tables_distrusted", 0) + 1
+                )
+                continue
+            found.append((grid.bbox, grid))
 
     return _outermost(found)
+
+
+def _is_table(grid) -> bool:
+    """Whether a ruled grid is a table rather than a box drawn around text.
+
+    A box around a paragraph, an underline, a page border: one row or one
+    column is not a table, and claiming its words would take them out of the
+    normal reading flow. A titled box with one row of several cells is two
+    rows, the title and that row, and is kept.
+    """
+    rows = grid.rows
+    if len(rows) < 2 or max((len(row) for row in rows), default=0) < 2:
+        return False
+    return any(cell.strip() for row in rows for cell in row)
+
+
+def _cell_text(chars) -> str:
+    """One ruled cell's text, read in the direction its characters run.
+
+    A row label printed sideways down the first column ("Mécanisme",
+    "Kaliémie") comes back reversed when read as upright text.
+    """
+    votes = Counter(_char_direction(char) for char in chars)
+    direction = _text_direction(votes)
+    return pdfplumber.utils.extract_text(
+        chars,
+        x_tolerance_ratio=X_TOLERANCE_RATIO,
+        y_tolerance=3,
+        **_WORD_OPTIONS[direction],
+    )
 
 
 def _rows_are_whole(rows: list) -> bool:
     """Whether each row of this ruled table is one row of the page.
 
-    A cell of one or two lines is a wrapped description. A body in which
-    many cells hold three or more lines is rows that were never separated.
+    Tall cells alone do not say. A table of wrapped descriptions has them -
+    "GRANT" beside four lines of explanation and four of syntax - and is a
+    table. A band of rows the rulings never separated has them too, and
+    something a wrapped description never has: a cell holding a stack of
+    separate figures, one per line, beside other tall cells. A table whose
+    body is enough such cells is not stored as a table.
     """
-    body = [cell for row in rows[1:] for cell in row if cell.strip()]
-    if len(body) < 4:
+    banded = counted = 0
+    for row in rows[1:]:
+        filled = [cell.strip() for cell in row if cell.strip()]
+        counted += len(filled)
+        if len(filled) >= 2 and _is_banded(filled):
+            banded += sum(
+                1 for cell in filled if cell.count("\n") + 1 >= MULTILINE_CELL_LINES
+            )
+    return not counted or banded < MULTILINE_SHARE * counted
+
+
+def _is_item_stack(lines: list) -> bool:
+    """Whether the lines of a cell are separate items, not a wrapped sentence.
+
+    A list of names, designations or sections has a capital (or a digit) at
+    the start of every line. A description wrapped over four lines starts
+    most of them in lower case.
+    """
+    starts = [line.lstrip()[:1] for line in lines[1:] if line.strip()]
+    if not starts:
+        return False
+    lower = sum(1 for start in starts if start.islower())
+    return lower <= ITEM_CONTINUATION_SHARE * len(starts)
+
+
+def _is_banded(filled: list) -> bool:
+    """Whether one ruled row holds several rows of the page.
+
+    Two or more of its filled cells are tall (MULTILINE_CELL_LINES lines or
+    more), they are most of its filled cells, and they are stacks of separate
+    things: one is a stack of figures, or all of them are lists of items about
+    as long as one another (a faculty list ruled only above and below). The
+    tall cells need not be equally tall: in a band one name wraps or one
+    amount is blank, and the stacks no longer line up. A wrapped description
+    beside a short key is not a stack: it is a row.
+    """
+    stacks = [cell.split("\n") for cell in filled]
+    tall = [lines for lines in stacks if len(lines) >= MULTILINE_CELL_LINES]
+    if len(tall) < 2 or len(tall) < BANDED_CELL_SHARE * len(filled):
+        return False
+    if any(
+        sum(1 for line in lines if geometry.is_number(line))
+        >= FIGURE_STACK_SHARE * len(lines)
+        for lines in tall
+    ):
         return True
-    tall = sum(1 for cell in body if cell.count("\n") + 1 >= MULTILINE_CELL_LINES)
-    return tall < MULTILINE_SHARE * len(body)
+    heights = [len(lines) for lines in tall]
+    return max(heights) - min(heights) <= 1 and all(map(_is_item_stack, tall))
 
 
 def _outermost(tables: list) -> list:
@@ -560,7 +683,7 @@ def _words(page, table_boxes, direction: str, votes: Counter) -> tuple:
 def _garbled(words, ruled) -> str:
     """Why this text layer cannot be trusted, or "" when it can."""
     text = " ".join(word.text for word in words)
-    text += " ".join(cell for _, rows in ruled for row in rows for cell in row)
+    text += " ".join(cell for _, grid in ruled for row in grid.rows for cell in row)
 
     # One unmapped glyph is written "(cid:12)" - seven characters standing
     # for one - so each is counted as the single glyph it is, or a lone bad

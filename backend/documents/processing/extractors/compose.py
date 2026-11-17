@@ -63,6 +63,45 @@ _TRANSLATE = {
 _CONTROLS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _BLANK_RUNS = re.compile(r"\n{3,}")
 
+# A header cell names its column. Past this many words it is a sentence.
+HEADER_MAX_WORDS = 6
+# What a header cell never holds: a figure, even with its currency or sign
+# ("Rs. 45,000", "(1,200)", "12.5%"); "Name: Asha"; a date; an identifier.
+_FIGURE = re.compile(
+    r"^[(+\-−]?(?:rs\.?|inr|usd|eur|gbp|[$€£₹¥])?\d[\d,.:/%\-–]*\)?$", re.IGNORECASE
+)
+_LABEL_VALUE = re.compile(r"[^\W\d_]{2}[^:]*:\s*\S")
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
+_DATE = re.compile(
+    rf"\b\d{{1,2}}\s*{_MONTH}\b|\b{_MONTH}\.?\s+\d{{1,2}}\b"
+    r"|\b\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}\b",
+    re.IGNORECASE,
+)
+
+
+def _is_identifier(token: str) -> bool:
+    """A roll number or a code ("21A91A0501", "23ME4119"), or a phone."""
+    digits = sum(ch.isdigit() for ch in token)
+    return digits >= 7 or (digits >= 5 and any(ch.isalpha() for ch in token))
+
+
+def looks_like_value(text) -> bool:
+    """Whether a cell reads as a value rather than as a column's label.
+
+    A figure, a date, an identifier, "Label: value", an e-mail address, or
+    more than HEADER_MAX_WORDS words.
+    """
+    flat = clean_cell(text)
+    if not flat:
+        return False
+    if _FIGURE.match(flat.replace(" ", "")):
+        return True
+    if len(flat.split()) > HEADER_MAX_WORDS or "@" in flat:
+        return True
+    if _LABEL_VALUE.search(flat) or _DATE.search(flat):
+        return True
+    return any(_is_identifier(token) for token in re.findall(r"\w+", flat))
+
 
 def clean_text(text: str) -> str:
     """Normalize characters, never words: nothing here changes what is said."""
@@ -157,7 +196,11 @@ class PageBuilder:
         """Write a table and record where it landed.
 
         `header`: "auto" (the same narrow guess the text detector makes),
-        True (the first row is the header), or False (none).
+        True (the first row is the header), or False (none). The header is
+        always the first row: the Tables tab, the chunks and the answerer's
+        notes all take it to be, and a table whose first row is its title
+        ("IIIrd Year - Semester II") has the title for its header, which is
+        what tells its chunks apart from the next semester's.
 
         Returns whether it was stored as a table. A grid with one row or
         one column is not one - it is a label, or a list - so it is written

@@ -32,7 +32,10 @@ median word height, so neither is special.
 import re
 from bisect import bisect_right
 from dataclasses import dataclass, field
+from math import ceil
 from statistics import mean, median
+
+from documents.processing.extractors import wording
 
 # A gap between two words at least this many median word-heights wide is a
 # column gap rather than a space. A space is ~0.3 of a height, justified text
@@ -74,6 +77,56 @@ REFRESH_EVERY = 8
 MAX_BAND_LINES = 400
 
 MIN_TABLE_ROWS = 3
+
+# Dot leaders: ". . . . ." or "......" between a contents entry and its page.
+_LEADERS = re.compile(r"(?:\.\s){3,}\.|\.{6,}")
+# What may stand after a contents line's leader: a page number, arabic (up to
+# three digits) or lowercase roman (front matter). A decimal ("8.25"), an
+# amount ("20000"), a word ("Civil"), a date, or an upper-case numeral (a year
+# of study, "III") is a value, not a page.
+_PAGE_NUMBER = re.compile(r"^(?:\d{1,3}|(?=[ivx])x{0,2}(?:ix|iv|v?i{0,3}))$")
+
+# A band is a table of contents when this share of its lines (and at least
+# two of them) are entries. One entry in a table is not a contents page: an
+# invoice has a "Total ........ 500" row and a two-column page has a blank to
+# fill in.
+CONTENTS_SHARE = 0.5
+
+
+def _is_contents_line(text: str) -> bool:
+    """A leader, and directly after it nothing but a page number."""
+    leaders = list(_LEADERS.finditer(text))
+    # One leader: a line with several ("Name ..... Roll ..... 12") is a form
+    # to fill in, whatever stands at its end.
+    if len(leaders) != 1:
+        return False
+    return bool(_PAGE_NUMBER.match(text[leaders[-1].end() :].strip()))
+
+
+def _is_contents_band(raw_rows: list) -> bool:
+    """Whether most lines of a band are contents entries: leader after leader."""
+    lines = [" ".join(cell for cell in row if cell) for row in raw_rows]
+    lines = [line for line in lines if line.strip()]
+    entries = sum(1 for line in lines if _is_contents_line(line))
+    return entries >= max(2, ceil(CONTENTS_SHARE * len(lines)))
+
+
+def _leading_entries(raw_rows: list) -> int:
+    """How many lines at the top of a contents band are entries.
+
+    A band that is mostly entries is text, line by line. Judging it again from
+    each of its lines, as a band that fails is, costs more with every line
+    of the page; its leading entries are taken at once instead.
+    """
+    if not _is_contents_band(raw_rows):
+        return 0
+    count = 0
+    for row in raw_rows:
+        if not _is_contents_line(" ".join(cell for cell in row if cell)):
+            break
+        count += 1
+    return count
+
 
 # The largest number a page's line numbering is taken to reach.
 MAX_LINE_NUMBER = 60
@@ -128,6 +181,9 @@ class Block:
     rows: list = field(default_factory=list)
     # Where the block came from, for the caller's own bookkeeping.
     source: str = ""
+    # For a table: True when its first row is known to be the header, or
+    # "auto" to let the writer judge (compose.PageBuilder.add_table).
+    header: object = "auto"
 
 
 @dataclass
@@ -361,6 +417,10 @@ def _is_number(cell: str) -> bool:
     return bool(text) and bool(_NUMBER.match(text.replace(" ", "")))
 
 
+# Public: the ruled-table reader asks the same question of a cell's lines.
+is_number = _is_number
+
+
 def _word_count(cell: str) -> int:
     return len(cell.split())
 
@@ -466,6 +526,13 @@ def _classify(raw_rows: list, merged_rows: list) -> str | None:
     if columns < 2:
         return None
 
+    # Dot leaders run from an entry to its page number: a table of contents,
+    # whose entries are lines. Read as a table, a sub-entry with nothing in
+    # the number column folds into the entry above it. Only a band that is
+    # mostly such entries: one row with a leader is a table with a leader.
+    if _is_contents_band(raw_rows):
+        return None
+
     body = merged_rows[1:] if len(merged_rows) > 1 else merged_rows
     filled = [cell for row in merged_rows for cell in row if cell]
     if not filled:
@@ -500,7 +567,10 @@ def _classify(raw_rows: list, merged_rows: list) -> str | None:
 
     # A label beside its value - "Name | Asha Rao" - is a form, and a form
     # is a table. One short column is what sets it apart from prose columns,
-    # whose cells are all a line of a sentence long.
+    # whose cells are all a line of a sentence long. (A label beside several
+    # lines of text - "UNIT I" beside its topics, "[10]" beside a question -
+    # is the same thing: the label belongs to the lines beside it, and must
+    # stay with them.)
     if rows >= MIN_TABLE_ROWS and columns == 2:
         counts = [
             mean(_word_count(row[index]) for row in merged_rows if row[index])
@@ -548,14 +618,23 @@ def _trim_trailing(lines: list, rows: list) -> tuple:
 
 
 def _lines_to_text(lines: list, height: float) -> str:
-    out = []
+    """Lines as text, a blank line between paragraphs.
+
+    A word hyphenated across two lines of one paragraph is joined
+    (`wording.dehyphenate`); across a paragraph break nothing is. A symbol-font
+    bullet that starts a line is written as a bullet (`wording.bullet_line`);
+    the same glyph anywhere else is a letter, an arrow or a tick, and stays.
+    """
+    paragraphs: list = [[]]
     previous = None
     for line in lines:
         if previous is not None and line.top - previous.bottom > PARAGRAPH_GAP * height:
-            out.append("")
-        out.append(line.text)
+            paragraphs.append([])
+        paragraphs[-1].append(wording.bullet_line(line.text))
         previous = line
-    return "\n".join(out)
+    return "\n\n".join(
+        "\n".join(wording.dehyphenate(paragraph)) for paragraph in paragraphs
+    )
 
 
 def _text_block(lines: list, height: float) -> Block:
@@ -637,6 +716,19 @@ def layout_page(words, extra_blocks=()) -> list:
             rows = [_cells(line, bounds) for line in band]
             band, rows = _trim_trailing(band, rows)
             merged = _merge_continuations(band, rows, height)
+
+            entries = _leading_entries(rows)
+            if entries and waiting:
+                # A block placed by its position still lands between the
+                # lines it lies among.
+                for step in range(1, entries):
+                    if waiting[0].top <= lines[index + step].top:
+                        entries = step
+                        break
+            if entries:
+                pending.extend(lines[index : index + entries])
+                index += entries
+                continue
 
             if len(merged) >= MIN_TABLE_ROWS:
                 verdict = _classify(rows, merged)

@@ -1,6 +1,6 @@
 {
   "name": "institutional",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Fields that actually occur on the document types this platform ingests. Document types absent from this pack (GENERAL, OTHER) are skipped rather than guessed at.",
   "schemas": {
     "CIRCULAR": [
@@ -99,7 +99,7 @@
         "name": "credits",
         "description": "Credit value.",
         "patterns": [
-          "credits?\\s*(?:[:\\-]\\s*)?(?P<value>\\d{1,2}(?:\\.\\d)?)(?!\\.?\\d)"
+          "credits?[^\\S\\r\\n]*(?:[:\\-][^\\S\\r\\n]*)?(?P<value>\\d{1,2}(?:\\.\\d)?)(?!\\.?\\d)"
         ],
         "value_pattern": "\\d{1,2}(?:\\.\\d)?",
         "max_length": 6

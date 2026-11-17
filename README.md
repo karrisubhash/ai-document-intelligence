@@ -606,7 +606,7 @@ its pictures fails with `EMPTY_EXTRACTION`.
 
 | Format | Read with | A page is | Tables |
 |---|---|---|---|
-| PDF | pdfplumber; Tesseract for scanned pages | a PDF page | ruled grids cell by cell, blank and merged cells kept; borderless tables inferred from aligned text |
+| PDF | pdfplumber; Tesseract for scanned pages | a PDF page | ruled grids cell by cell as a reader sees them (invisible cell backgrounds are not rulings, touching tables are split, merged cells and two-row headers resolved); borderless tables inferred from aligned text |
 | Scan or photo — PNG, JPEG, TIFF, WebP, BMP | Tesseract, with word positions | an image, or one TIFF frame | inferred from word positions |
 | DOCX | python-docx, walking the XML | the author's page breaks | the document's own cells |
 | XLSX | openpyxl | a visible sheet, in 500-row parts with the header repeated | a table per run of non-blank rows |
@@ -640,13 +640,71 @@ wrong column. Every table is written into the page text as one `a | b | c` row p
 Pages are read in **reading order** — a two-column page is read one column after the other,
 and a numbered-clause list is left as the lines it is, never cut into cells.
 
+**Ruled PDF tables are read as drawn, not as encoded.** Word exports paint a rectangle
+behind every cell and every paragraph in it, in the cell's own colour; a filled rectangle
+in the colour already behind it is not a ruling (lines and stroked rectangles always are),
+so those backgrounds no longer turn a three-column table into seven columns or a wrapped
+description into one row per line. Each rule was narrowed until the case it gets wrong
+cannot occur, because an independent review found the first version reading ordinary
+layouts worse than the code it replaced:
+
+- Two tables drawn touching are split where their columns conflict, but borders a few
+  points off (a Word table edited row by row) are one table.
+- A table's title row ("IIIrd Year - Semester II") stays its first row, in the table
+  chunk beside its own table, and so is its header, as every reader of a stored table
+  (the Tables tab, the chunks, the answerer's note) takes the header to be its first row:
+  every chunk of a long table carries its semester.
+- A border drawn as a thin rectangle is a ruling in whatever colour it is - a browser
+  prints a dark header bar's cell borders in the bar's own colour, and they are all that
+  says where its cells end. Only a rectangle as large as a cell, in the colour behind
+  it, is paint.
+- A table ruled only around its columns, each of whose cells stacks a list of names or
+  figures (a faculty list, a nominal roll), is not stored as a table with one row of six
+  people: its rows are read from the text, as the code before this one read them. A few
+  questions with sub-parts among single ones (a question paper) are rows of a table.
+- A header split over two rows ("Periods/Week" over L, T, P) becomes one ("Periods/Week L")
+  only when it is laid out as a header: every cell below lies under a cell merged across.
+  A form's first rows (a photo merged down beside "Name") stay as drawn.
+- A label merged down a group of rows ("Pool-I") is written into each record it spans -
+  never a figure or a measure ("9 Hrs", "5 x 2 = 10M"): a part's total marks or an elective
+  slot's credits stays once, so a sum over the column stays right.
+- A cell printed sideways is read in its own direction; a box that holds a table of its
+  own (a statement body, a precinct bulletin) is left to the layout reader, a bulleted
+  cell or two short lists in one cell are not.
+
+**What the PDF itself gets wrong is put right** (`extractors/wording.py`), and only where
+the repair cannot make a correct text worse:
+
+- A word broken across lines by a hyphen is joined ("inspira-" / "tion"), keeping the
+  hyphen where the hyphenated form is the word ("AI-powered"). Where a join could change
+  what is said — "vis-" / "a-vis", "go-" / "to", "short-" / "but" — the lines are left as
+  drawn.
+- A converter that dropped the spaces between words ("Adieselenginehasafuelinjectionsystem")
+  has those runs split into common words. Evidence comes first: a run of 20+ letters that
+  splits into four or five common words with a function word among them cannot be a real
+  word, and only a page that has one gets its shorter runs split, under stricter rules
+  (every content word common, at least four letters, a strong function word such as "the",
+  "of" or "and", no derivational suffix at the end). A page with no such run is left exactly
+  as drawn, whatever words on it the list lacks; names, codes, links, paths, identifiers and
+  CamelCase are never touched. The false-positive rate was measured on the 77,000 dictionary
+  words the list lacks (0.007%) and on names, places and terms, not assumed.
+- A symbol-font bullet (Wingdings, Symbol) at the start of a line is written as "•"; the
+  same glyphs elsewhere (Greek letters, arrows, ticks) stay.
+- Contents lines — a dot leader, then a page number — stay lines instead of becoming
+  tables, when most lines of a band are such entries; a table with one dotted total row
+  stays a table.
+
+The word list (126,000 English words by frequency) is wordninja's, MIT-licensed, and ships
+inside the repository (`extractors/data/`) with its licence: no package is fetched at image
+build time, and if the file is ever missing the repairs switch off and the miss is logged.
+
 Work is **bounded**: a spreadsheet stops at 200,000 filled cells (and says so in its last
 page), a blank-row run ends a sheet, pictures are OCR'd up to a per-file budget, and a
 failure in the PDF engine on one page falls back to the previous engine for that page
 only. A `.docx`-named workbook is still read as a workbook: the bytes decide.
 
 **Re-extracting what is already uploaded.** Every extraction records the pipeline version
-that wrote it (`ingestion-v2` now). `python manage.py reprocess_documents --dry-run` lists
+that wrote it (`ingestion-v3` now). `python manage.py reprocess_documents --dry-run` lists
 the documents an older pipeline read; run it without `--dry-run`, in batches with
 `--limit`, to queue them. It uses the same path as the Reprocess button, so a run already
 in progress is never doubled, and the previous text stays live until the new extraction is
@@ -1907,7 +1965,7 @@ the last recorded results are in [docs/development/testing.md](docs/development/
 | Database | PostgreSQL 16 |
 | Cache / broker | Redis 7 |
 | Async jobs | Celery |
-| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow |
+| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow, a bundled word list (hyphenation and glued-word repair) |
 | Search | PostgreSQL full-text + pgvector (HNSW), reciprocal-rank fusion |
 | ML | scikit-learn (text classifier), sentence-transformers on CPU PyTorch (bge-small embeddings, bge-reranker-base cross-encoder), PyTorch on a remote GPU (vision training path) |
 | LLM providers (optional) | Anthropic API / Amazon Bedrock, any OpenAI-compatible endpoint |

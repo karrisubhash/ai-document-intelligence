@@ -46,7 +46,12 @@ logger = logging.getLogger("adi.pipeline")
 #       orientation, DOCX read as XML, tables stored as the cells the
 #       extractor saw. `manage.py reprocess_documents` re-extracts what v1
 #       produced.
-PROCESSING_VERSION = "ingestion-v2"
+#   v3  ruled PDF tables read as drawn (invisible cell backgrounds are not
+#       rulings; touching tables split; merged cells, two-row headers and
+#       titles resolved; sideways cells), words broken by a line-end hyphen
+#       joined, words a PDF drew without spaces split on pages that show
+#       it, contents lines kept out of tables, symbol-font bullets.
+PROCESSING_VERSION = "ingestion-v3"
 
 # Stages that build the normalized representation from the raw file.
 CONTENT_STAGES = [
