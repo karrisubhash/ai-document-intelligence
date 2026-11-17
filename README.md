@@ -661,13 +661,16 @@ layouts worse than the code it replaced:
 - A table ruled only around its columns, each of whose cells stacks a list of names or
   figures (a faculty list, a nominal roll), is not stored as a table with one row of six
   people: its rows are read from the text, as the code before this one read them. A few
-  questions with sub-parts among single ones (a question paper) are rows of a table.
+  questions with sub-parts among single ones (a question paper) are rows of a table, and
+  so is a body of fewer than four cells - one record with a list in each cell.
 - A header split over two rows ("Periods/Week" over L, T, P) becomes one ("Periods/Week L")
   only when it is laid out as a header: every cell below lies under a cell merged across.
   A form's first rows (a photo merged down beside "Name") stay as drawn.
 - A label merged down a group of rows ("Pool-I") is written into each record it spans -
-  never a figure or a measure ("9 Hrs", "5 x 2 = 10M"): a part's total marks or an elective
-  slot's credits stays once, so a sum over the column stays right.
+  never a figure or a measure ("9 Hrs", "5 x 2 = 10M", "Rs. 5,000/-"): a part's total marks
+  or an elective slot's credits stays once, so a sum over the column stays right. Text that
+  starts with a number is a measure unless its shape says otherwise ("1st Year", "3 Sem",
+  "10A"); not filling is what the code before this one did, so a doubt is settled that way.
 - A cell printed sideways is read in its own direction; a box that holds a table of its
   own (a statement body, a precinct bulletin) is left to the layout reader, a bulleted
   cell or two short lists in one cell are not.

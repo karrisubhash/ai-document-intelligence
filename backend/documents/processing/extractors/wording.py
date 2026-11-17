@@ -52,6 +52,7 @@ import logging
 import math
 import os
 import re
+import zlib
 from functools import lru_cache
 
 # The word list ships with the code (extractors/data/, MIT licence beside it):
@@ -150,14 +151,18 @@ _LOWER_START = re.compile(r"^([a-z]+)")
 
 @lru_cache(maxsize=1)
 def _ranks() -> dict:
-    """word -> rank (0 = most frequent). Empty, and logged, if the file is gone."""
+    """word -> rank (0 = most frequent). Empty, and logged, if the file is
+    gone or damaged: a truncated or corrupt file must switch the repairs off,
+    not fail every page of every PDF."""
     try:
         with gzip.open(WORD_LIST, "rt", encoding="utf-8") as handle:
             words = handle.read().split()
-    except OSError:
+        if not words:
+            raise EOFError("the word list is empty")
+    except (OSError, EOFError, UnicodeError, zlib.error) as exc:
         logger.error(
             "extraction.word_list_missing",
-            extra={"path": WORD_LIST},
+            extra={"path": WORD_LIST, "error": repr(exc)},
         )
         return {}
     return {word: rank for rank, word in enumerate(words)}
@@ -250,6 +255,13 @@ def dehyphenate(lines: list) -> list:
 
 def _segment(run: str):
     """The cheapest split of `run` into listed words, as slices of it."""
+    pieces = _segmented(run)
+    return None if pieces is None else list(pieces)
+
+
+@lru_cache(maxsize=4096)
+def _segmented(run: str):
+    """`_segment`, remembered: the strong and the weak test both ask for it."""
     ranks = _ranks()
     lower = run.lower()
     size = len(lower)
@@ -275,7 +287,7 @@ def _segment(run: str):
         begin = back[end]
         pieces.append(run[begin:end])
         end = begin
-    return pieces[::-1]
+    return tuple(pieces[::-1])
 
 
 def _case_breaks(run: str) -> set:

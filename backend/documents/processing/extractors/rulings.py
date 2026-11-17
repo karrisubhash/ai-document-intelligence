@@ -45,7 +45,7 @@ a header's are; a form's first rows beside a merged photo cell are rows.
 """
 
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 
 from documents.processing.extractors import compose
@@ -259,13 +259,28 @@ _MARKER = re.compile(
     r"^(?:\(?[0-9A-Za-z]{1,3}[.)]|\d{1,3}(?:\.\d{1,3})+\.?|[•◦▪"
     r"■●○·‣⁃➢✓✔*\-–—>o])$"
 )
-# A figure with its unit, or a sum of them: "9 Hrs", "10M", "45 min", "5 x 2 =
-# 10M". Written into every row of a merged cell it would be a value per row,
-# which it is not - it is the whole group's. An ordinal ("1st Year") is a label.
-_MEASURE = re.compile(
-    r"^\(?[+\-\u2212]?(?:rs\.?|inr|usd|eur|gbp|[$\u20ac\u00a3\u20b9\u00a5])?\s*"
-    r"\d[\d,.]*\s*(?:%|(?!(?:st|nd|rd|th)\b)[A-Za-z]{1,10}\.?)?\)?"
-    r"(?:\s*[x\u00d7*=+/\-]\s*\(?\d[\d,.]*\s*(?:%|[A-Za-z]{1,10}\.?)?\)?)*$",
+# What a merged cell may hold and still be a label. A text that STARTS with a
+# number - "9 Hrs", "10M", "5 x 2 = 10M", "Rs. 5,000/-", "3-0-0 (L-T-P)",
+# "2 Hours 30 Min" - is a measure, and one with a big or decimal number in it,
+# or a "Max. 100" / "Total: 30", is a value: written into every row of a merged
+# cell it would be a value per row, which it is not - it is the whole group's,
+# and a sum over the column would count it once per row. Not filling is what
+# the code before this one did, so a doubt is settled that way. A few labels
+# that start with a number are told by their shape: an ordinal ("1st Year"),
+# a year, semester or class ("3 Sem", "8 Std"), a section ("3A").
+_NUMBER_FIRST = re.compile(
+    r"^\(?[+\-\u2212]?(?:rs\.?|inr|usd|eur|gbp|[$\u20ac\u00a3\u20b9\u00a5])?\s*\d",
+    re.IGNORECASE,
+)
+_DIGIT_LABEL = re.compile(
+    r"^\d{1,2}(?:st|nd|rd|th)\b"
+    r"|^\d{1,2}\s?(?:year|yr|sem|semester|std|class|puc|bhk|section|sec)\b"
+    r"|^\d{1,2}[A-LN-Z]$",
+    re.IGNORECASE,
+)
+_BIG_NUMBER = re.compile(r"\d{3,}|\d[,.]\d")
+_QUALIFIED = re.compile(
+    r"\b(?:max|min|total|approx|about|upto|each|per)\b.*\d|\d.*\b(?:each|per)\b",
     re.IGNORECASE,
 )
 # Three letters in a row: a word, not a figure, a dash or a code like "C2".
@@ -307,7 +322,7 @@ def _snapped(values) -> list:
 
 def _count(boundaries, start, end) -> int:
     """How many of `boundaries` fall in [start, end)."""
-    return sum(1 for b in boundaries if start - SNAP <= b < end - SNAP)
+    return bisect_left(boundaries, end - SNAP) - bisect_left(boundaries, start - SNAP)
 
 
 def _cells(table) -> tuple:
@@ -580,13 +595,13 @@ def _is_short(text: str) -> bool:
 
 
 def _is_label(text: str) -> bool:
-    """Short text with a letter in it that is not a figure or a measure."""
+    """Short text with a letter in it that is not a figure, a measure or a value."""
     flat = " ".join(text.split())
-    return (
-        _is_short(flat)
-        and any(ch.isalpha() for ch in flat)
-        and not _MEASURE.match(flat)
-    )
+    if not (_is_short(flat) and any(ch.isalpha() for ch in flat)):
+        return False
+    if _NUMBER_FIRST.match(flat) and not _DIGIT_LABEL.match(flat):
+        return False
+    return not (_BIG_NUMBER.search(flat) or _QUALIFIED.search(flat))
 
 
 def _fills(cell, mine, first_body_row) -> bool:
@@ -724,12 +739,16 @@ def _read_segment(cells, tops, start, end, table_bottom) -> Grid | None:
         first = 1
 
     body_from = first
+    merged_header = False
     depth = _header_depth(grid, first, start)
     combined = _combined_header(grid, first, depth) if depth > 1 else []
     # The combined row is the header only when it reads as one: some text,
     # and no cell that reads as a value. Otherwise the rows stay as drawn.
     if any(combined) and not any(map(compose.looks_like_value, combined)):
-        result.header = True
+        # Known to be the header only when it is the table's first row; under a
+        # title the first row is the title, and the header is not the title.
+        result.header = first == 0
+        merged_header = True
         body_from = first + depth
     first_body_row = start + max(body_from, first + 1)
 
@@ -752,7 +771,7 @@ def _read_segment(cells, tops, start, end, table_bottom) -> Grid | None:
 
     if first:
         result.rows.append(written(0))
-    if result.header:
+    if merged_header:
         result.rows.append(combined)
     for r in range(body_from, height):
         if not any(starts_here(cell, r) for cell in grid[r]):

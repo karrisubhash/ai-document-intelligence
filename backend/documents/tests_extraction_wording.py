@@ -11,6 +11,7 @@ became "Sri niv as an") and opening on one real word ("histocompatibility");
 the lists below are what it found, so that it cannot happen again.
 """
 
+import gzip
 import os
 import tempfile
 import time
@@ -515,3 +516,54 @@ class WordListTests(SimpleTestCase):
                 self.assertFalse(wording.has_glued_words([GLUED]))
         finally:
             wording._ranks.cache_clear()
+
+    def test_a_damaged_file_is_the_same_as_a_missing_one(self):
+        """A truncated or corrupt download must switch the repairs off; it
+        used to raise out of every page and send the whole PDF to the
+        fallback reader, with no tables."""
+        with tempfile.TemporaryDirectory() as folder:
+            with gzip.open(wording.WORD_LIST, "rb") as handle:
+                good = gzip.compress(handle.read())
+            damaged = {
+                "truncated.gz": good[: len(good) // 2],
+                "bad-utf8.gz": gzip.compress(b"the of and \xff\xfe broken"),
+                "not-gzip.gz": b"plain text, not gzip",
+                "empty.gz": b"",
+            }
+            for name, payload in damaged.items():
+                path = os.path.join(folder, name)
+                with open(path, "wb") as handle:
+                    handle.write(payload)
+                wording._ranks.cache_clear()
+                try:
+                    with self.subTest(file=name):
+                        with mock.patch.object(wording, "WORD_LIST", path):
+                            with self.assertLogs("adi.extraction", level="ERROR"):
+                                self.assertEqual(wording._ranks(), {})
+                            self.assertEqual(wording.split_glued(GLUED), GLUED)
+                finally:
+                    wording._ranks.cache_clear()
+
+    def test_a_page_is_still_read_with_a_damaged_word_list(self):
+        page = fx.Page().lines(72, 100, ["A line of ordinary text.", "Another line."])
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "damaged.gz")
+            with open(path, "wb") as handle:
+                handle.write(gzip.compress(b"the of")[:-6])
+            wording._ranks.cache_clear()
+            try:
+                with mock.patch.object(wording, "WORD_LIST", path):
+                    with self.assertLogs("adi.extraction", level="ERROR"):
+                        (result,) = run(page)
+            finally:
+                wording._ranks.cache_clear()
+
+        self.assertIn("A line of ordinary text.", result.text)
+        self.assertNotIn("fallback_reason", result.metadata)
+
+    def test_a_split_is_remembered_but_cannot_be_changed_by_a_caller(self):
+        first = wording._segment("thequickbrownfox")
+        first.append("changed")
+
+        self.assertEqual(wording._segment("thequickbrownfox")[-1], "fox")
+        self.assertIsNone(wording._segment("zzqxjvkw"))
