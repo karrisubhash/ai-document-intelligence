@@ -361,7 +361,10 @@ class BaselineGateTests(TestCase):
         self.run_evaluation(write_baseline=str(self.baseline))
 
         payload = json.loads(self.baseline.read_text(encoding="utf-8"))
-        payload["metrics"]["generation"]["groundedness"] = 0.999
+        # A baseline the system cannot reach, whatever it scores now: a fixed
+        # 0.999 stopped being one when groundedness reached 1.0 (tables
+        # written as labelled rows, ingestion-v4).
+        payload["metrics"]["generation"]["groundedness"] += 0.5
         self.baseline.write_text(json.dumps(payload), encoding="utf-8")
 
         with self.assertRaises(CommandError) as caught:

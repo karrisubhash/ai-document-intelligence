@@ -21,7 +21,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.core.management import call_command
 from django.db import connection
 from django.test import TestCase, TransactionTestCase, override_settings
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
@@ -671,7 +671,6 @@ class NoExistenceLeakTests(APITestCase):
             "document-content",
             "document-versions",
             "document-download",
-            "document-tables",
             "document-figures",
         ):
             with self.subTest(route=route):
@@ -817,15 +816,22 @@ class StructureEndpointTests(APITestCase):
             )
         self.document_id = response.data["id"]
 
-    def test_tables_come_from_the_live_pass_with_their_span(self):
-        response = self.client.get(reverse("document-tables", args=[self.document_id]))
+    def test_a_table_is_read_as_labelled_rows_in_the_page_text(self):
+        """No tables endpoint: the table is its rows in the live pass's text."""
+        response = self.client.get(reverse("document-content", args=[self.document_id]))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        table = response.data[0]
-        self.assertEqual(table["header"], ["Programme", "Tuition", "Hostel"])
-        self.assertEqual(table["page_number"], 1)
-        self.assertLess(table["character_start"], table["character_end"])
+        text = response.data["pages"][0]["text"]
+        self.assertIn(
+            "Table 1, row 1: Programme: B.Tech CSE; Tuition: 85000; Hostel: 60000",
+            text,
+        )
+        self.assertIn(
+            "Table 1, row 2: Programme: B.Tech MECH; Tuition: 80000; Hostel: 58000",
+            text,
+        )
+        with self.assertRaises(NoReverseMatch):
+            reverse("document-tables", args=[self.document_id])
 
     def test_figures_is_an_empty_list_for_a_text_document(self):
         response = self.client.get(reverse("document-figures", args=[self.document_id]))

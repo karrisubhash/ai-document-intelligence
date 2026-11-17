@@ -28,7 +28,7 @@ for** and **what is actually built today**, and never conflates the two.
 | Document upload, versioning, metadata | 5, 10 | ✅ Built — row-locked versioning, archival, per-version download, 404 (not 403) to non-readers |
 | Async processing (queue + worker) | 17 | ✅ Built (Celery + Redis) — time limits, stalled-run recovery, duplicate-run refusal |
 | Validation, ingestion, integrity checks | 5, 10 | ✅ Built |
-| PDF/DOCX/XLSX/PPTX/ODF/RTF/HTML/CSV/JSON/XML/TXT/image parsing + OCR, old .doc/.xls/.ppt, tables kept as tables, charts and diagrams read | 11.3 | ✅ Built (pdfplumber, python-docx, openpyxl, python-pptx, lxml, LibreOffice for the old formats, pdf2image, Tesseract, an optional vision model for figures) |
+| PDF/DOCX/XLSX/PPTX/ODF/RTF/HTML/CSV/JSON/XML/TXT/image parsing + OCR, old .doc/.xls/.ppt, tables written as labelled text rows with table/row references, charts and diagrams read | 11.3 | ✅ Built (pdfplumber, python-docx, openpyxl, python-pptx, lxml, LibreOffice for the old formats, pdf2image, Tesseract, an optional vision model for figures) |
 | Per-page normalized content store | 15 | ✅ Built (`DocumentContent` / `PageContent`) |
 | Classification pipeline stage + contract | 11.1 | ✅ Built — pluggable |
 | Trained document classifier + inference adapter | 11.1 | ✅ Built — text baseline, 71.9% test accuracy ([results](ai/classification/README.md#results)) |
@@ -113,8 +113,8 @@ Celery worker
         INGESTION → SCANNING → VALIDATION → TEXT_EXTRACTION → OCR
                         │
                         ▼
-                 LAYOUT_ANALYSIS                 → DocumentTable
-                        │                          + DocumentFigure
+                 LAYOUT_ANALYSIS                 → tables written into the page text
+                        │                          as labelled rows; DocumentFigure
                         ▼
                  DocumentContent + PageContent   (the internal representation)
                         │
@@ -635,8 +635,32 @@ or with no key set, nothing changes and no picture leaves the server.
 The same reasoning runs through all of them. **Extractors that can see real cells hand
 them over as structure** instead of flattening them to text for a detector to rediscover:
 a blank cell otherwise leaves no trace, and the number after it silently moves into the
-wrong column. Every table is written into the page text as one `a | b | c` row per line
-(blank cells kept) and recorded with its exact span, so the invariant below still holds.
+wrong column. Every table is first written into the page text as one `a | b | c` row per
+line (blank cells kept) with its exact span, and verified against it cell by cell.
+
+**Tables are kept as text, not as grids** (since `ingestion-v4`). Once verified, each
+table's span is rewritten as one line per row, every value beside the name of its column,
+the line opening with the table's number in the document and the row's number in it:
+
+    Table 2, row 1: Course Code: 23CS101; Course Title: Engineering Mathematics; Credits: 4
+    Table 3 (IIIrd Year - Semester II / Practical), row 7: Course Code: 23CS3L1; ...
+
+No grid is stored (no `DocumentTable` rows, no Tables tab); the text is the table. That is
+what makes a reference valid: a chunk of a long table, a quoted row and a citation each
+carry the table, the row and every column's name, so "85000" in the fourth chunk of a fee
+table still says it is the CSE tuition. A citation of table rows names them
+("Syllabus, p. 5, Table 2, row 1"), narrowed to the rows the answer's sentence was taken
+from when that can be told. A long sheet split over pages keeps one table number and goes
+on counting rows. A wrong label would be worse than none, so a header the source did not
+declare (HTML `<th>`, a sheet's column names, a chart's series and a ruled PDF's merged
+header are declared) is used only if it reads as column names - no value, date, code or
+clause in it, nothing repeated in its own column, no column mixing names with numbers, and,
+for a table read from layout alone, a name over every column; otherwise rows are written
+without labels. A two-column form is written as labels and values ("Roll No:
+21A91A0501"), two columns of running text side by side are not. Field extraction does not
+read inside table rows (a course code in row 1 of twelve is not the syllabus's).
+`processing/tables/text_rows.py` writes and reads the form; `DocumentTable` stays only for
+passes made before `ingestion-v4`.
 Pages are read in **reading order** — a two-column page is read one column after the other,
 and a numbered-clause list is left as the lines it is, never cut into cells.
 
@@ -650,10 +674,9 @@ layouts worse than the code it replaced:
 
 - Two tables drawn touching are split where their columns conflict, but borders a few
   points off (a Word table edited row by row) are one table.
-- A table's title row ("IIIrd Year - Semester II") stays its first row, in the table
-  chunk beside its own table, and so is its header, as every reader of a stored table
-  (the Tables tab, the chunks, the answerer's note) takes the header to be its first row:
-  every chunk of a long table carries its semester.
+- A table's title row ("IIIrd Year - Semester II") stays its first row, inside the table's
+  span; written as text, it is named in every row of the table ("Table 3 (IIIrd Year -
+  Semester II), row 4: ..."), so every chunk of a long table carries its semester.
 - A border drawn as a thin rectangle is a ruling in whatever colour it is - a browser
   prints a dark header bar's cell borders in the bar's own colour, and they are all that
   says where its cells end. Only a rectangle as large as a cell, in the colour behind

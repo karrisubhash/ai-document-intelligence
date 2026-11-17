@@ -760,8 +760,8 @@ class PipelineInputRegressionTests(TestCase):
         self.assertEqual(content.status_code, status.HTTP_404_NOT_FOUND)
         chunks = client.get(reverse("document-chunks", args=[document.id]))
         self.assertEqual(chunks.status_code, status.HTTP_404_NOT_FOUND)
-        tables = client.get(reverse("document-tables", args=[document.id]))
-        self.assertEqual(tables.json(), [])
+        figures = client.get(reverse("document-figures", args=[document.id]))
+        self.assertEqual(figures.json(), [])
         source = client.get(
             reverse("document-source", args=[document.id]), {"chunk": chunk.id}
         )

@@ -34,7 +34,7 @@ function documentWith(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     },
     page_count: 2,
     has_thumbnail: true,
-    counts: { tables: 0, figures: 1, fields_found: 3 },
+    counts: { figures: 1, fields_found: 3 },
     collections: [{ id: 4, name: "Transport" }],
     is_archived: false,
     archived_at: null,
@@ -251,8 +251,15 @@ describe("helpers", () => {
     const ids = tabs.map((tab) => tab.id);
     expect(ids).toEqual(["overview", "preview", "text", "fields", "figures", "versions", "processing"]);
     expect(tabs.find((tab) => tab.id === "fields")?.count).toBe(3);
-    expect(tabsFor(documentWith(), "tables").map((tab) => tab.id)).toContain("tables");
-    expect(tabsFor(documentWith({ counts: undefined }), "overview")).toHaveLength(8);
+    const noFigures = documentWith({ counts: { figures: 0, fields_found: 3 } });
+    expect(tabsFor(noFigures, "overview").map((tab) => tab.id)).not.toContain("figures");
+    expect(tabsFor(noFigures, "figures").map((tab) => tab.id)).toContain("figures");
+    expect(tabsFor(documentWith({ counts: undefined }), "overview")).toHaveLength(7);
+  });
+
+  it("has no Tables tab: a table is labelled rows in the Text tab", () => {
+    const ids = tabsFor(documentWith(), "tables").map((tab) => tab.id);
+    expect(ids).not.toContain("tables");
   });
 });
 

@@ -102,7 +102,7 @@ the caller is refused.
 | GET | `/api/documents/{id}/content/` | read | Page texts of the live extraction pass |
 | GET | `/api/documents/{id}/classification/` | read | Every verdict, with model and version |
 | GET | `/api/documents/{id}/extraction/` | read | The field extractions of the live extraction pass under the document's current type, newest first; one row per declared field, including NOT_FOUND and CONFLICTED. Empty when that type has no schema or has not been extracted yet, and for a quarantined version |
-| GET | `/api/documents/{id}/tables/` · `/figures/` | read | Detected tables (cells + span) and located figures |
+| GET | `/api/documents/{id}/figures/` | read | Located figures. (No `tables/` endpoint: a table is labelled rows in the page text, `Table 2, row 1: Course Code: 23CS101; ...`, read through `content/` and cited like other text; a citation of table rows carries `table: {number, first_row, last_row, rows, narrowed, label}`) |
 | GET | `/api/documents/{id}/chunks/` | read | Indexed chunks with page, span and embedding identity (paginated) |
 | GET | `/api/documents/{id}/source/?chunk=C` | read | The page text of the pass chunk C came from, its span, and `is_current` |
 | GET | `/api/documents/{id}/insights/` | read | The extractive brief — see [Document intelligence](#document-intelligence). Not audited when allowed |
