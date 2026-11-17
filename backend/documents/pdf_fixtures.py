@@ -141,7 +141,7 @@ class Page:
 
     # -- filled shapes ------------------------------------------------------
 
-    def fill(self, x, y, width, height, rgb=(0.27, 0.45, 0.77)):
+    def solid(self, x, y, width, height, rgb=(0.27, 0.45, 0.77)):
         """A filled rectangle with its top-left at (x, y): a bar, a cell shade."""
         red, green, blue = rgb
         self.ops.append(
