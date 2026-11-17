@@ -633,14 +633,23 @@ layouts worse than the code it replaced:
 - Two tables drawn touching are split where their columns conflict, but borders a few
   points off (a Word table edited row by row) are one table.
 - A table's title row ("IIIrd Year - Semester II") stays its first row, in the table
-  chunk beside its own table; the header is looked for under it, and taken only when that
-  row reads as a header (no value in it, the label of a column of figures).
+  chunk beside its own table, and so is its header, as every reader of a stored table
+  (the Tables tab, the chunks, the answerer's note) takes the header to be its first row:
+  every chunk of a long table carries its semester.
+- A border drawn as a thin rectangle is a ruling in whatever colour it is - a browser
+  prints a dark header bar's cell borders in the bar's own colour, and they are all that
+  says where its cells end. Only a rectangle as large as a cell, in the colour behind
+  it, is paint.
+- A table ruled only around its columns, each of whose cells stacks a list of names or
+  figures (a faculty list, a nominal roll), is not stored as a table with one row of six
+  people: its rows are read from the text, as the code before this one read them. A few
+  questions with sub-parts among single ones (a question paper) are rows of a table.
 - A header split over two rows ("Periods/Week" over L, T, P) becomes one ("Periods/Week L")
   only when it is laid out as a header: every cell below lies under a cell merged across.
   A form's first rows (a photo merged down beside "Name") stay as drawn.
 - A label merged down a group of rows ("Pool-I") is written into each record it spans -
-  never a figure: a part's total marks or an elective slot's credits stays once, so a sum
-  over the column stays right.
+  never a figure or a measure ("9 Hrs", "5 x 2 = 10M"): a part's total marks or an elective
+  slot's credits stays once, so a sum over the column stays right.
 - A cell printed sideways is read in its own direction; a box that holds a table of its
   own (a statement body, a precinct bulletin) is left to the layout reader, a bulleted
   cell or two short lists in one cell are not.

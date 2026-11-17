@@ -257,6 +257,61 @@ class ContainerTests(SimpleTestCase):
 
         self.assertIn("1 Relational model", table[1][0])
 
+    def boxed_lines(self, lines):
+        """A header row over a box alone in its row, holding `lines` of
+        (left, right) text, the right ones in a column of their own."""
+        page = fx.Page()
+        page.box(72, 100, 400, 20)
+        page.rule(272, 100, 272, 120)
+        page.text(76, 105, "Unit")
+        page.text(276, 105, "Hours")
+        page.box(72, 120, 400, 20 + 14 * len(lines))
+        for index, (left, right) in enumerate(lines):
+            page.text(80, 124 + 14 * index, left, size=9)
+            if right:
+                page.text(300, 124 + 14 * index, right, size=9)
+        return page
+
+    def test_two_lines_in_two_columns_are_not_a_box_holding_a_table(self):
+        """A table of its own needs rows: three lines at least."""
+        page = self.boxed_lines(
+            [("Serial DL15", "Warranty one year"), ("Colour Black", "HSN eight")]
+        )
+
+        (table,) = ruled(run(page))
+
+        self.assertEqual(len(table), 2)
+        self.assertIn("Warranty one year", table[1][0])
+
+    def test_one_line_with_a_gap_is_not_a_second_column(self):
+        """Text on both sides of a gap in two lines at least is a column."""
+        page = self.boxed_lines(
+            [
+                ("Relational model and keys", "Hours nine"),
+                ("Constraints and algebra", ""),
+                ("Normal forms and joins", ""),
+            ]
+        )
+
+        (table,) = ruled(run(page))
+
+        self.assertEqual(len(table), 2)
+        self.assertIn("Hours nine", table[1][0])
+
+    def test_three_lines_in_two_columns_are_a_box_holding_a_table(self):
+        page = self.boxed_lines(
+            [
+                ("Relational model", "Hours nine"),
+                ("Constraints keys", "Hours ten"),
+                ("Normal forms", "Hours eight"),
+            ]
+        )
+
+        result = run(page)
+
+        self.assertEqual(ruled(result), [])
+        self.assertIn("Relational model", result.text)
+
     def test_a_merged_cell_reaching_into_a_box_row_is_read_once(self):
         """ "GOVERNOR" sits beside a box merged over two rows; the second row
         is only the box. Cut at that row, the box would be read twice."""

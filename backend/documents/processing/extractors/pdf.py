@@ -81,10 +81,18 @@ MAX_RULING_OBJECTS = 3000
 # may be right and its rows are not; it is not stored as a table, and its
 # words are read by the layout pass, which finds the rows from the text.
 MULTILINE_CELL_LINES = 3
+# A table is distrusted when this share of the cells of its body are tall
+# cells of banded rows. Counted in cells, not rows: a monthly report ruled
+# every third month has a band whose every cell is a stack of three, a
+# question paper with a few questions in parts has bands whose marks and
+# outcomes are stacked beside a question number that is not.
 MULTILINE_SHARE = 0.3
 BANDED_CELL_SHARE = 0.6
 # A tall cell whose lines are this share figures is a stack of separate values.
 FIGURE_STACK_SHARE = 0.8
+# A tall cell whose lines are items - each starting a new one - has at most
+# this share of lines that start in lower case, as a wrapped sentence's do.
+ITEM_CONTINUATION_SHARE = 0.2
 
 # A page is deferred to OCR when this share of its text is unreadable.
 GARBLED_SHARE = 0.2
@@ -270,10 +278,9 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
     # A title drawn as the table's first, full-width row stays its first row:
     # it is what tells two tables with the same columns apart (Semester I,
     # Semester II), so it stays inside the table's span, beside its own
-    # table. The header is looked for under it. layout_page hands these
-    # blocks back as they are, so each finds its title rows by identity.
+    # table, and - being the first row - it is the table's header, as it was
+    # before this reading of ruled tables.
     extras = []
-    title_rows = {}
     for bbox, grid in ruled:
         block = geometry.Block(
             kind="table",
@@ -283,7 +290,6 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
             source=SOURCE_RULED,
             header=True if grid.header else "auto",
         )
-        title_rows[id(block)] = grid.title_rows
         extras.append(block)
     for group in odd:
         # On a turned page the odd ones out are in the other frame, where
@@ -305,7 +311,6 @@ def _extract_page(page, region_ocr, budget, dpi) -> PdfPage:
                 block.rows,
                 source=block.source or SOURCE_LAYOUT,
                 header=block.header,
-                title_rows=title_rows.get(id(block), 0),
             )
         else:
             builder.add_text(block.text)
@@ -405,37 +410,57 @@ def _rows_are_whole(rows: list) -> bool:
     "GRANT" beside four lines of explanation and four of syntax - and is a
     table. A band of rows the rulings never separated has them too, and
     something a wrapped description never has: a cell holding a stack of
-    separate figures, one per line, beside other tall cells. A table with
-    enough banded rows is not stored as a table.
+    separate figures, one per line, beside other tall cells. A table whose
+    body is enough such cells is not stored as a table.
     """
     banded = counted = 0
     for row in rows[1:]:
         filled = [cell.strip() for cell in row if cell.strip()]
-        if len(filled) < 2:
-            continue
-        counted += 1
-        if _is_banded(filled):
-            banded += 1
+        counted += len(filled)
+        if len(filled) >= 2 and _is_banded(filled):
+            banded += sum(
+                1 for cell in filled if cell.count("\n") + 1 >= MULTILINE_CELL_LINES
+            )
     return not counted or banded < MULTILINE_SHARE * counted
+
+
+def _is_item_stack(lines: list) -> bool:
+    """Whether the lines of a cell are separate items, not a wrapped sentence.
+
+    A list of names, designations or sections has a capital (or a digit) at
+    the start of every line. A description wrapped over four lines starts
+    most of them in lower case.
+    """
+    starts = [line.lstrip()[:1] for line in lines[1:] if line.strip()]
+    if not starts:
+        return False
+    lower = sum(1 for start in starts if start.islower())
+    return lower <= ITEM_CONTINUATION_SHARE * len(starts)
 
 
 def _is_banded(filled: list) -> bool:
     """Whether one ruled row holds several rows of the page.
 
     Two or more of its filled cells are tall (MULTILINE_CELL_LINES lines or
-    more), they are most of its filled cells, and one of them is a stack of
-    figures. The tall cells need not be equally tall: in a band one name
-    wraps or one amount is blank, and the stacks no longer line up.
+    more), they are most of its filled cells, and they are stacks of separate
+    things: one is a stack of figures, or all of them are lists of items about
+    as long as one another (a faculty list ruled only above and below). The
+    tall cells need not be equally tall: in a band one name wraps or one
+    amount is blank, and the stacks no longer line up. A wrapped description
+    beside a short key is not a stack: it is a row.
     """
     stacks = [cell.split("\n") for cell in filled]
     tall = [lines for lines in stacks if len(lines) >= MULTILINE_CELL_LINES]
     if len(tall) < 2 or len(tall) < BANDED_CELL_SHARE * len(filled):
         return False
-    return any(
+    if any(
         sum(1 for line in lines if geometry.is_number(line))
         >= FIGURE_STACK_SHARE * len(lines)
         for lines in tall
-    )
+    ):
+        return True
+    heights = [len(lines) for lines in tall]
+    return max(heights) - min(heights) <= 1 and all(map(_is_item_stack, tall))
 
 
 def _outermost(tables: list) -> list:

@@ -241,7 +241,8 @@ class MergedCellTests(SimpleTestCase):
 
         (table,) = page.tables
         self.assertEqual(table.rows[1], HEADER)
-        self.assertEqual(table.header, HEADER)
+        # The header of a stored table is its first row - here the title.
+        self.assertEqual(table.header, table.rows[0])
         self.assertEqual(len(table.rows), 4)
 
     def test_a_full_width_first_row_stays_the_tables_title(self):

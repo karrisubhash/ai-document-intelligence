@@ -111,6 +111,23 @@ def _is_contents_band(raw_rows: list) -> bool:
     return entries >= max(2, ceil(CONTENTS_SHARE * len(lines)))
 
 
+def _leading_entries(raw_rows: list) -> int:
+    """How many lines at the top of a contents band are entries.
+
+    A band that is mostly entries is text, line by line. Judging it again from
+    each of its lines, as a band that fails is, costs more with every line
+    of the page; its leading entries are taken at once instead.
+    """
+    if not _is_contents_band(raw_rows):
+        return 0
+    count = 0
+    for row in raw_rows:
+        if not _is_contents_line(" ".join(cell for cell in row if cell)):
+            break
+        count += 1
+    return count
+
+
 # The largest number a page's line numbering is taken to reach.
 MAX_LINE_NUMBER = 60
 MIN_COLUMN_LINES = 4
@@ -699,6 +716,19 @@ def layout_page(words, extra_blocks=()) -> list:
             rows = [_cells(line, bounds) for line in band]
             band, rows = _trim_trailing(band, rows)
             merged = _merge_continuations(band, rows, height)
+
+            entries = _leading_entries(rows)
+            if entries and waiting:
+                # A block placed by its position still lands between the
+                # lines it lies among.
+                for step in range(1, entries):
+                    if waiting[0].top <= lines[index + step].top:
+                        entries = step
+                        break
+            if entries:
+                pending.extend(lines[index : index + entries])
+                index += entries
+                continue
 
             if len(merged) >= MIN_TABLE_ROWS:
                 verdict = _classify(rows, merged)

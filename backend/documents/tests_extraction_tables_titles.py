@@ -1,12 +1,13 @@
-"""A ruled table's title row: it stays in the table, the header is found under it.
+"""A ruled table's title row: it stays in the table, as its first row.
 
 Indian syllabi draw each semester's table with a first row spanning the whole
 table - "I Year - Semester I", "I Year - Semester II" - over the same
 columns. That row is the only thing telling the two tables apart, so it is
 kept as the table's first row, inside its span: the table chunk, its every
-reader, and the table beside it all see it where it was drawn. The header is
-the row under it, when that row reads as a header; otherwise the guess is the
-one made without a title.
+reader, and the table beside it all see it where it was drawn. Being the first
+row it is the table's header, because the header of a stored table is its first
+row: the Tables tab drops that row from the body and shows it as the header,
+every chunk of a long table carries it, and the answerer's note names it.
 """
 
 import os
@@ -75,12 +76,26 @@ class TitleRowTests(SimpleTestCase):
         self.assertTrue(span.startswith("I Year - Semester II"))
         self.assertIn("Data Structures", span)
 
-    def test_the_header_is_the_row_under_the_title(self):
+    def test_the_title_is_the_header_and_the_columns_are_the_row_under_it(self):
         (page,) = run(semesters())
 
-        for table in ruled(page):
-            self.assertEqual(table.header, SEMESTER_I[0])
+        first, second = ruled(page)
+        self.assertEqual(first.header, ["I Year - Semester I", "", "", ""])
+        self.assertEqual(second.header, ["I Year - Semester II", "", "", ""])
+        for table in (first, second):
+            self.assertEqual(table.rows[0], table.header)
             self.assertEqual(table.rows[1], SEMESTER_I[0])
+
+    def test_the_header_of_a_stored_table_is_never_below_its_first_row(self):
+        """The Tables tab takes rows[0] for the header whenever there is one."""
+        pages = [
+            semesters(),
+            fx.Page().grid(72, 100, [80, 200, 80], [["Core", "", ""], *SEMESTER_I]),
+        ]
+        for page in pages:
+            (result,) = run(page)
+            for table in ruled(result):
+                self.assertIn(table.header, ([], table.rows[0]))
 
     def test_side_by_side_tables_keep_their_own_titles(self):
         page = fx.Page()
@@ -134,8 +149,8 @@ class TitleRowTests(SimpleTestCase):
         self.assertEqual(table.header, ["Core", "", ""])
 
 
-class HeaderUnderTitleTests(SimpleTestCase):
-    """The row under a title is taken for the header only when it reads as one."""
+class TitledFormTests(SimpleTestCase):
+    """What sits under a title never becomes the header: the title is."""
 
     def test_a_forms_first_line_is_not_its_header(self):
         page = fx.Page()
@@ -237,48 +252,27 @@ class TouchingTitleTests(SimpleTestCase):
 # -- the writer ---------------------------------------------------------------
 
 
-class TitleRowsWriterTests(SimpleTestCase):
-    """compose.PageBuilder.add_table(title_rows=...)."""
+class HeaderIsTheFirstRowTests(SimpleTestCase):
+    """compose.PageBuilder.add_table: the header it records is the first row."""
 
     def header(self, rows, **options):
         builder = compose.PageBuilder()
         builder.add_table(rows, **options)
         return builder.tables[0].header
 
-    def test_the_header_is_guessed_under_the_title(self):
+    def test_a_title_row_is_the_header_of_its_table(self):
         rows = [["Semester I", "", ""], *[row[1:] for row in SEMESTER_I]]
 
-        self.assertEqual(self.header(rows, title_rows=1), SEMESTER_I[0][1:])
-        # Without a title the first row is the guess, as it always was.
         self.assertEqual(self.header(rows), ["Semester I", "", ""])
+        self.assertEqual(self.header(rows, header=True), ["Semester I", "", ""])
 
-    def test_nothing_under_the_title_reading_as_a_header_falls_back(self):
+    def test_no_header_is_no_header(self):
         rows = [["Marks", ""], ["Asha", "91"], ["Ravi", "78"]]
 
-        self.assertEqual(self.header(rows, title_rows=1), ["Marks", ""])
+        self.assertEqual(self.header(rows, header=False), [])
 
-    def test_a_header_given_is_the_row_under_the_title(self):
-        rows = [["Pools", "", ""], ["Pool", "Code", "Credits"], ["Pool-I", "C1", "4"]]
 
-        self.assertEqual(
-            self.header(rows, header=True, title_rows=1), ["Pool", "Code", "Credits"]
-        )
-        self.assertEqual(self.header(rows, header=True), ["Pools", "", ""])
-
-    def test_a_blank_first_row_is_no_title(self):
-        rows = [["", ""], ["Code", "Credits"], ["CS101", "4"], ["CS102", "3"]]
-
-        self.assertEqual(
-            self.header(rows, header=True, title_rows=1), ["Code", "Credits"]
-        )
-
-    def test_a_column_of_figures_needs_two_of_them(self):
-        one = [["Lab", ""], ["Code", "Credits"], ["23ME4216", "1.5"]]
-        two = [*one, ["23ME4217", "2"]]
-
-        self.assertEqual(self.header(one, title_rows=1), ["Lab", ""])
-        self.assertEqual(self.header(two, title_rows=1), ["Code", "Credits"])
-
+class ValueTests(SimpleTestCase):
     def test_values_are_told_from_labels(self):
         for value in (
             "Rs. 45,000",

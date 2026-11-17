@@ -36,7 +36,8 @@ belongs to every record of the group, so it is written into each, while a
 blank cell stays blank and a merged figure (a group total, a shared credit
 value) stays once, where it is printed - written into every row, a column's
 sum would count it once per row. A first row that is only a title stays the
-table's first row, and the header is looked for under it. A header split
+table's first row - and so its header, as every reader of a table takes the
+header to be its first row. A header split
 over two rows becomes one row whose columns read "Periods/Week L",
 "Periods/Week T" - the form every later reader of a row (search, the
 answerer, table arithmetic) needs - but only when its cells are laid out as
@@ -47,7 +48,7 @@ import re
 from bisect import bisect_right
 from dataclasses import dataclass, field
 
-from documents.processing.extractors import compose, geometry
+from documents.processing.extractors import compose
 
 # Two colours closer than this on every RGB channel (0-1) are the same colour
 # to a reader: an edge between them is not visible.
@@ -55,6 +56,13 @@ SAME_COLOUR = 0.02
 
 # Coordinates closer than this (points) are the same boundary.
 SNAP = 1.0
+
+# A filled rectangle this thin (points), and at least LINE_LENGTH long, is a
+# line drawn as a rectangle - the border of a cell, as browsers print them -
+# and a border in the colour of what it lies on is the only thing that says
+# where the cells of a dark header row end.
+LINE_THICKNESS = 3.0
+LINE_LENGTH = 8.0
 
 # What lies behind a filled rectangle is looked up among the fills that
 # overlap the same square of the page; the page is cut into this many
@@ -102,6 +110,13 @@ def _same(a, b) -> bool:
     if a is None or b is None:
         return False
     return all(abs(x - y) <= SAME_COLOUR for x, y in zip(a, b, strict=True))
+
+
+def _is_line(rect) -> bool:
+    """A rectangle that is a line: thin one way, long the other."""
+    width = max(rect["x1"] - rect["x0"], 0.0)
+    height = max(rect["bottom"] - rect["top"], 0.0)
+    return min(width, height) <= LINE_THICKNESS and max(width, height) >= LINE_LENGTH
 
 
 def _area(obj) -> float:
@@ -173,15 +188,20 @@ def invisible(page) -> set:
     """ids of the filled rectangles on this page that draw no visible edge.
 
     Only a rectangle filled and not stroked can be invisible, and only when
-    its colour is the colour behind it. Lines and stroked rectangles are
-    always kept: they are what a table is ruled with.
+    its colour is the colour behind it. Lines, stroked rectangles and
+    rectangles thin enough to be lines are always kept: they are what a table
+    is ruled with, in whatever colour.
     """
     fills = [
         (rect, _rgb(rect.get("non_stroking_color")))
         for rect in page.rects
         if rect.get("fill")
     ]
-    plain = [(rect, colour) for rect, colour in fills if not rect.get("stroke")]
+    plain = [
+        (rect, colour)
+        for rect, colour in fills
+        if not rect.get("stroke") and not _is_line(rect)
+    ]
     if not plain:
         return set()
     backgrounds = _Backgrounds(fills, page.bbox)
@@ -239,6 +259,15 @@ _MARKER = re.compile(
     r"^(?:\(?[0-9A-Za-z]{1,3}[.)]|\d{1,3}(?:\.\d{1,3})+\.?|[•◦▪"
     r"■●○·‣⁃➢✓✔*\-–—>o])$"
 )
+# A figure with its unit, or a sum of them: "9 Hrs", "10M", "45 min", "5 x 2 =
+# 10M". Written into every row of a merged cell it would be a value per row,
+# which it is not - it is the whole group's. An ordinal ("1st Year") is a label.
+_MEASURE = re.compile(
+    r"^\(?[+\-\u2212]?(?:rs\.?|inr|usd|eur|gbp|[$\u20ac\u00a3\u20b9\u00a5])?\s*"
+    r"\d[\d,.]*\s*(?:%|(?!(?:st|nd|rd|th)\b)[A-Za-z]{1,10}\.?)?\)?"
+    r"(?:\s*[x\u00d7*=+/\-]\s*\(?\d[\d,.]*\s*(?:%|[A-Za-z]{1,10}\.?)?\)?)*$",
+    re.IGNORECASE,
+)
 # Three letters in a row: a word, not a figure, a dash or a code like "C2".
 _LETTERS = re.compile(r"[^\W\d_]{3}")
 _WORDY = re.compile(r"[^\W_]")
@@ -262,9 +291,6 @@ class Grid:
 
     bbox: tuple
     rows: list
-    # 1 when the first row is the table's title (one cell of text across the
-    # table): the header, if any, is the row under it.
-    title_rows: int = 0
     # True when the first row after the title was built from a header split
     # over several rows, so it is known to be a header rather than guessed.
     header: bool = False
@@ -554,12 +580,12 @@ def _is_short(text: str) -> bool:
 
 
 def _is_label(text: str) -> bool:
-    """Short text with a letter in it that is not a figure."""
+    """Short text with a letter in it that is not a figure or a measure."""
     flat = " ".join(text.split())
     return (
         _is_short(flat)
         and any(ch.isalpha() for ch in flat)
-        and not geometry.is_number(flat)
+        and not _MEASURE.match(flat)
     )
 
 
@@ -695,7 +721,7 @@ def _read_segment(cells, tops, start, end, table_bottom) -> Grid | None:
 
     first = 0
     if _is_title(grid, right - left):
-        result.title_rows = first = 1
+        first = 1
 
     body_from = first
     depth = _header_depth(grid, first, start)
