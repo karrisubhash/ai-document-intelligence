@@ -146,6 +146,22 @@ class DetectorTests(SimpleTestCase):
         self.assertEqual(prediction.label, UNKNOWN_LABEL)
         self.assertLess(prediction.confidence, 0.2)
 
+    def test_a_table_of_many_rows_lends_no_field_as_evidence(self):
+        """Labelled table rows ("Date: 12/03/2025" on every row of an exam
+        timetable) are read as field extraction reads them: a value that
+        recurs row after row is no field of the document, so it votes for
+        no type. A form's one-per-field rows still do."""
+        rows = "\n".join(
+            f"Table 1, row {n}: Date: {n:02d}/03/2025; Subject: Paper {n}; Hall: H{n}"
+            for n in range(1, 7)
+        )
+        evidence = detect(rows).metadata.get("evidence", {})
+        self.assertNotIn("issue date found", evidence.get("CIRCULAR", []))
+
+        form = "Table 1, row 1: Circular No: ACAD/2025/14\nTable 1, row 2: Date: 12/03/2025"
+        evidence = detect(form).metadata.get("evidence", {})
+        self.assertIn("issue date found", evidence.get("CIRCULAR", []))
+
     def test_general_and_other_are_never_predicted(self):
         for text in (CIRCULAR, SYLLABUS, FORM, POLICY, NOTES, ""):
             self.assertNotIn(detect(text).label, ("GENERAL", "OTHER"))

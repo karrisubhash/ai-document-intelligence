@@ -54,6 +54,7 @@ from documents.models import DocumentContent
 from ..field_extraction.matching import NOT_FOUND, find_fields
 from ..field_extraction.rule_extractor import DEFAULT_PACK
 from ..field_extraction.schemas import SchemaError, load_pack
+from ..tables import text_rows
 from .base import UNKNOWN_LABEL, ClassificationPrediction
 
 logger = logging.getLogger("adi.classification")
@@ -450,6 +451,10 @@ class InstitutionalTypeDetector:
             logger.warning("type_detection.pack_unavailable", extra={"error": str(exc)})
             return ""
 
+        # The pages as field extraction reads them: a field found only in the
+        # rows of a table of many ("Course Code: 23CS101" in row 1 of twelve)
+        # is not one the document has, so it is no evidence of its type.
+        pages = [(number, text_rows.field_view(text or "")) for number, text in pages]
         for name in TYPES:
             schema = pack.for_document_type(name)
             if schema is None:
