@@ -214,6 +214,8 @@ class WritingTests(SimpleTestCase):
         )
 
     def test_a_guessed_header_that_holds_a_value_is_not_used(self):
+        """Labels and values side by side, twice per row: a form, read as
+        one - not a header of "Asha Rao" over "CSE"."""
         written = text_rows.write(
             1,
             [
@@ -222,9 +224,12 @@ class WritingTests(SimpleTestCase):
             ],
             ["Name", "Asha Rao", "Roll No", "21A91A0501"],
         )
-        self.assertFalse(written.labelled)
         self.assertEqual(
-            _lines(written)[0], "Table 1, row 1: Name; Asha Rao; Roll No; 21A91A0501"
+            _lines(written),
+            [
+                "Table 1, row 1: Name: Asha Rao; Roll No: 21A91A0501",
+                "Table 1, row 2: Branch: CSE; Date: 12-03-2003",
+            ],
         )
 
     def test_a_declared_header_is_used_even_when_it_reads_like_figures(self):
@@ -468,3 +473,280 @@ class QuotingTests(SimpleTestCase):
         """ "Dr." inside a value is not where the statement ends."""
         line = "Table 1, row 2: Name: Dr. A. Rao; Designation: Professor"
         self.assertEqual(ExtractiveAnswerer._sentences(line), [line])
+
+
+class ReviewFindingsTests(SimpleTestCase):
+    """What an independent review of this change found, each pinned."""
+
+    def test_a_list_of_names_does_not_lend_its_first_row_as_labels(self):
+        written = text_rows.write(
+            1,
+            [
+                ["Asha Rao", "Computer Science", "Placement Coordinator"],
+                ["Ravi Kumar", "Electronics", "Sports Secretary"],
+                ["Meena Sharma", "Mechanical", "Cultural Secretary"],
+            ],
+            strict=True,
+        )
+        self.assertFalse(written.labelled)
+        self.assertEqual(
+            _lines(written)[0],
+            "Table 1, row 1: Asha Rao; Computer Science; Placement Coordinator",
+        )
+
+    def test_column_names_over_text_columns_are_still_a_header(self):
+        written = text_rows.write(
+            1,
+            [
+                ["Command", "Description", "Syntax"],
+                ["DROP", "Delete objects from the database", "DROP TABLE t;"],
+                [
+                    "ALTER",
+                    "Alter the structure of the database",
+                    "ALTER TABLE t ADD c;",
+                ],
+            ],
+        )
+        self.assertEqual(
+            _lines(written)[0],
+            "Table 1, row 1: Command: DROP; Description: Delete objects from the "
+            "database; Syntax: DROP TABLE t;",
+        )
+
+    def test_a_wide_form_is_written_as_its_pairs(self):
+        written = text_rows.write(
+            1,
+            [
+                ["Name", "KARRI SUBHASH", "Father's Name", "K APPA RAO"],
+                ["Branch", "CSE", "Year", "III"],
+                ["Roll No", "21A91A0501", "Date of Birth", "01-01-2003"],
+            ],
+            ["Name", "KARRI SUBHASH", "Father's Name", "K APPA RAO"],
+        )
+        self.assertEqual(
+            _lines(written),
+            [
+                "Table 1, row 1: Name: KARRI SUBHASH; Father's Name: K APPA RAO",
+                "Table 1, row 2: Branch: CSE; Year: III",
+                "Table 1, row 3: Roll No: 21A91A0501; Date of Birth: 01-01-2003",
+            ],
+        )
+
+    def test_a_note_under_a_table_is_kept_as_a_row(self):
+        header = ["Course Code", "Course Title", "Credits"]
+        written = text_rows.write(
+            1,
+            [
+                header,
+                ["23CS101", "Mathematics", "4"],
+                ["L - Lecture, T - Tutorial", "", ""],
+            ],
+            header,
+            header_declared=True,
+        )
+        self.assertEqual(
+            _lines(written)[-1], "Table 1, row 2: L - Lecture, T - Tutorial"
+        )
+
+    def test_sections_nest_and_replace_their_own_kind(self):
+        header = ["Course Code", "Course Title", "Credits"]
+        written = text_rows.write(
+            1,
+            [
+                header,
+                ["Semester I", "", ""],
+                ["Theory", "", ""],
+                ["23CS101", "Mathematics", "4"],
+                ["Practical", "", ""],
+                ["23CS1L1", "Physics Lab", "1.5"],
+                ["Semester II", "", ""],
+                ["Theory", "", ""],
+                ["23CS201", "Discrete Mathematics", "4"],
+            ],
+            header,
+            header_declared=True,
+        )
+        self.assertEqual(
+            [line.split(", row")[0] for line in _lines(written)],
+            [
+                "Table 1 (Semester I / Theory)",
+                "Table 1 (Semester I / Practical)",
+                "Table 1 (Semester II / Theory)",
+            ],
+        )
+
+    def test_a_day_at_the_top_is_not_a_title_over_the_next_day(self):
+        written = text_rows.write(
+            1,
+            [
+                ["Monday", "", ""],
+                ["Time", "Subject", "Room"],
+                ["9:00", "Maths", "Room 1"],
+                ["Tuesday", "", ""],
+                ["9:00", "Chemistry", "Room 3"],
+            ],
+        )
+        self.assertNotIn("Monday / Tuesday", written.text)
+        self.assertIn("(Tuesday), row 2: Time: 9:00; Subject: Chemistry", written.text)
+
+    def test_a_lone_name_in_a_list_is_a_row_not_a_section(self):
+        header = ["Name", "Department", "Marks"]
+        written = text_rows.write(
+            1,
+            [
+                header,
+                ["Asha Rao", "CSE", "91"],
+                ["Ravi Kumar", "", ""],
+                ["Meena S", "ECE", "88"],
+            ],
+            header,
+            header_declared=True,
+        )
+        self.assertIn("Table 1, row 2: Name: Ravi Kumar", written.text)
+        self.assertNotIn("(Ravi Kumar)", written.text)
+
+    def test_an_unlabelled_row_keeps_every_value_in_its_column(self):
+        written = text_rows.write(
+            1,
+            [
+                ["23CS101", "Mathematics", "3", "1", "4"],
+                ["23CS104", "Workshop", "", "", "2"],
+            ],
+            plain=True,
+        )
+        self.assertEqual(_lines(written)[1], "Table 1, row 2: 23CS104; Workshop; ; ; 2")
+        line = text_rows.parse_line(_lines(written)[1])
+        self.assertEqual(
+            [value for _, value in line.pairs], ["23CS104", "Workshop", "", "", "2"]
+        )
+
+    def test_a_label_with_a_colon_in_it_reads_back_whole(self):
+        header = ["Course", "Hours (L: T: P)"]
+        written = text_rows.write(
+            1, [header, ["Maths", "3-1-0"]], header, header_declared=True
+        )
+        line = text_rows.parse_line(_lines(written)[0])
+        self.assertEqual(line.pairs, [("Course", "Maths"), ("Hours (L:T:P)", "3-1-0")])
+
+    def test_a_row_reference_is_not_a_figure_of_the_table(self):
+        from documents.rag import grounding
+
+        passage = "Table 2, row 3: Course: Applied Physics; Credits: 4"
+        self.assertNotIn("3", grounding._support_facts(passage))
+        self.assertIn("4", grounding._support_facts(passage))
+        answer = "Table 2, row 3 says Applied Physics carries 4 credits [1]."
+        self.assertEqual(grounding._answer_facts(answer), {"4"})
+
+    def test_a_form_stays_readable_to_field_extraction(self):
+        text = NL.join(
+            [
+                "Table 1, row 1: Course Code: CS101",
+                "Table 1, row 2: Credits: 4",
+                "",
+                "Table 2, row 1: Course Code: 23CS101; Credits: 4",
+                "Table 2, row 2: Course Code: 23CS102; Credits: 3",
+            ]
+        )
+        view = text_rows.field_view(text)
+        self.assertEqual(len(view), len(text))
+        self.assertIn("Course Code: CS101", view)
+        self.assertIn("Credits: 4", view.split(NL)[1])
+        self.assertNotIn("Table 1, row", view)
+        # A table whose labels recur on every row gives no one field.
+        self.assertNotIn("23CS101", view)
+
+
+class SheetContinuationTests(SimpleTestCase):
+    """A long sheet through the real builder and the real layout stage."""
+
+    def run_sheet(self, rows):
+        from django.test.utils import override_settings
+
+        from documents.processing.context import ExtractedPage, IngestionContext
+        from documents.processing.extractors import spreadsheet
+        from documents.processing.stages import layout_analysis
+        from documents.processing.tables import service as table_service
+
+        pages = spreadsheet.build_pages(
+            rows, name="S", source="openpyxl:sheet", source_version="x", metadata={}
+        )
+        context = IngestionContext(
+            document_version=None,
+            file_path="",
+            pages=[
+                ExtractedPage(page_number=number, text=page.text, tables=page.tables)
+                for number, page in enumerate(pages, start=1)
+            ],
+        )
+        with override_settings(DOCUMENT_TABLE_DETECTOR=""):
+            table_service.reset_detector_cache()
+            layout_analysis._run_tables(context)
+        table_service.reset_detector_cache()
+        return [page.text for page in context.pages]
+
+    def test_the_next_page_keeps_the_labels_title_and_count(self):
+        from documents.processing.extractors import spreadsheet
+
+        per_page = spreadsheet.ROWS_PER_PAGE
+        rows = [["Library catalogue 2024", "", ""], ["Title", "Author", "Publisher"]]
+        rows += [
+            [f"Book {i}", f"Writer {i}", f"House {i}"] for i in range(1, per_page + 3)
+        ]
+
+        first, second = self.run_sheet(rows)
+
+        self.assertIn(
+            "Table 1 (Library catalogue 2024), row 1: Title: Book 1; "
+            "Author: Writer 1; Publisher: House 1",
+            first,
+        )
+        # Rows 1-498 of the table are on the first page, under its title and
+        # header; the second page goes on from row 499, labelled alike.
+        row = per_page - 1
+        self.assertIn(
+            f"Table 1 (Library catalogue 2024), row {row}: Title: Book {row}; "
+            f"Author: Writer {row}",
+            second,
+        )
+
+    def test_a_column_empty_on_the_next_page_does_not_shift_the_labels(self):
+        from documents.processing.extractors import spreadsheet
+
+        per_page = spreadsheet.ROWS_PER_PAGE
+        rows = [["Code", "Phone", "Credits"]]
+        rows += [
+            [f"C{i}", "98480" if i < per_page else "", "3"]
+            for i in range(1, per_page + 3)
+        ]
+
+        _, second = self.run_sheet(rows)
+
+        self.assertIn(f"Table 1, row {per_page}: Code: C{per_page}; Credits: 3", second)
+
+    def test_a_blank_row_at_the_page_break_starts_a_new_table(self):
+        from documents.processing.extractors import spreadsheet
+
+        per_page = spreadsheet.ROWS_PER_PAGE
+        rows = [["Code", "Title", "Credits"]]
+        rows += [[f"C{i}", f"Course {i}", "4"] for i in range(1, per_page)]
+        rows += [
+            [],
+            ["Name", "Dept", "Phone"],
+            ["Asha", "CSE", "98480"],
+            ["Ravi", "ECE", "98481"],
+        ]
+
+        _, second = self.run_sheet(rows)
+
+        self.assertIn("Table 2, row 1: Name: Asha; Dept: CSE; Phone: 98480", second)
+        self.assertNotIn("Table 1", second)
+
+    def test_a_guessed_sheet_header_is_checked(self):
+        rows = [
+            ["Asha Rao", "Mechanical", "Pune"],
+            ["Ravi Kumar", "Civil", "Delhi"],
+            ["Meena S", "Mechanical", "Chennai"],
+            ["John P", "ECE", "Pune"],
+        ]
+        (text,) = self.run_sheet(rows)
+        self.assertIn("Table 1, row 1: Asha Rao; Mechanical; Pune", text)

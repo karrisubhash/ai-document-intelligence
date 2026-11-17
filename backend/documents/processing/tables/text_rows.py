@@ -137,6 +137,7 @@ class Layout:
     title: tuple = ()
     labels: tuple = ()  # ((column id, label), ...)
     sections: tuple = ()  # the section path open at the last row
+    header: tuple = ()  # ((column id, cell), ...) of the header row, if any
 
 
 @dataclass(frozen=True)
@@ -702,7 +703,10 @@ def write(
                 mode = PLAIN
         else:
             labels = [""] * width
-        chosen = _Plan(mode, list(carry.title), labels, grid)
+        # The header printed again at the top of this page is not a row.
+        printed = dict(carry.header)
+        header_row = [printed.get(column, "") for column in ids] if printed else None
+        chosen = _Plan(mode, list(carry.title), labels, grid, header_row)
         sections = list(carry.sections)
     elif plain:
         chosen = _Plan(PLAIN, [], [""] * width, grid)
@@ -754,6 +758,10 @@ def write(
             (column, label) for column, label in zip(ids, chosen.labels, strict=False)
         ),
         sections=tuple(sections),
+        header=tuple(
+            (column, cell)
+            for column, cell in zip(ids, chosen.header_row or (), strict=False)
+        ),
     )
     return Written(
         lines=lines,

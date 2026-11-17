@@ -186,7 +186,7 @@ class WorkbookTests(SimpleTestCase):
         self.assertEqual(page.tables[1].rows[0], ["Hostel", "Rent"])
         self.assertIn("Fee schedule 2024", page.text)
 
-    def test_a_long_sheet_is_paged_with_the_header_repeated(self):
+    def test_a_long_sheet_is_paged_as_one_table_running_on(self):
         def build(book):
             sheet = book.active
             sheet.title = "Marks"
@@ -197,13 +197,19 @@ class WorkbookTests(SimpleTestCase):
         pages, _ = workbook_pages(build)
 
         self.assertEqual(len(pages), 3)
-        self.assertIn("(rows 1-500)", pages[0].text)
-        self.assertIn("(rows 501-1000)", pages[1].text)
-        self.assertIn("(rows 1001-1101)", pages[2].text)
-        for page in pages:
-            self.assertEqual(page.tables[0].rows[0], ["Name", "Marks", "Grade"])
-        # Sheet row 501 is data row 500; the header was repeated above it.
-        self.assertEqual(pages[1].tables[0].rows[1][0], "S500")
+        self.assertIn("(sheet rows 1-500)", pages[0].text)
+        self.assertIn("(sheet rows 501-1000)", pages[1].text)
+        self.assertIn("(sheet rows 1001-1101)", pages[2].text)
+        self.assertEqual(pages[0].tables[0].rows[0], ["Name", "Marks", "Grade"])
+        # The later pages are the rest of that table: no header of their own
+        # (LAYOUT_ANALYSIS writes them under the first page's labels), first
+        # row data. Sheet row 501 is data row 500.
+        for page in pages[1:]:
+            table = page.tables[0]
+            self.assertTrue(table.continues)
+            self.assertEqual(table.header, [])
+        self.assertEqual(pages[1].tables[0].rows[0][0], "S500")
+        self.assertEqual(pages[1].tables[0].column_ids, (0, 1, 2))
 
     def test_the_cell_cap_cuts_the_file_off_and_says_so(self):
         def build(book):
@@ -360,14 +366,15 @@ class DelimitedTests(SimpleTestCase):
 
                 self.assertEqual(page.tables[0].rows[1], ["Asha", "Zürich"])
 
-    def test_a_long_csv_is_paged_with_the_header_repeated(self):
+    def test_a_long_csv_is_paged_as_one_table_running_on(self):
         lines = ["Name,Marks,Grade"] + [f"S{n},{n % 100},A" for n in range(1, 1101)]
 
         pages, _ = delimited("\n".join(lines).encode())
 
         self.assertEqual(len(pages), 3)
-        self.assertTrue(pages[1].text.startswith("(rows 501-1000)"))
-        self.assertEqual(pages[1].tables[0].rows[0], ["Name", "Marks", "Grade"])
+        self.assertTrue(pages[1].text.startswith("(sheet rows 501-1000)"))
+        self.assertTrue(pages[1].tables[0].continues)
+        self.assertEqual(pages[1].tables[0].rows[0], ["S500", "0", "A"])
 
     def test_the_cell_cap_applies_to_a_csv_too(self):
         lines = ["A,B,C"] + [f"{n},{n},{n}" for n in range(100)]
