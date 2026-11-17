@@ -84,12 +84,12 @@ def load_pages(content: DocumentContent) -> list:
 
 
 def load_tables(content: DocumentContent) -> dict:
-    """Tables per page, for the chunker to keep intact.
+    """Stored table grids per page, for the chunker to keep intact.
 
-    Read back from the database rather than passed down from the stage:
-    chunking also runs from the re-index task, which starts from stored
-    content and has no pipeline context to inherit. Reading one source
-    means a re-index chunks a document exactly as ingestion did.
+    Only a pass before ingestion-v4 has any: since then a table is written
+    into the page text as labelled rows and the chunker finds it there (see
+    splitter._regions), so this is empty and a re-index of either kind of
+    pass chunks it exactly as ingestion did.
     """
     tables = {}
     for table in content.tables.order_by("table_index"):

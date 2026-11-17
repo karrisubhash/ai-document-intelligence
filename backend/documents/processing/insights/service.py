@@ -29,6 +29,7 @@ from documents.models import (
     ExtractedField,
 )
 from documents.models.chunk import EMBEDDING_DIMENSIONS
+from documents.processing.tables import text_rows
 
 from . import GENERATOR_NAME, GENERATOR_VERSION
 from .entities import extract_entities
@@ -314,6 +315,56 @@ def _verified(items, page_texts, what):
     return kept
 
 
+def _tables(content, text_pages) -> tuple:
+    """(regions, question material) of the pass's tables.
+
+    Regions are (page, start, end), kept out of the summary and key points:
+    a row is not a sentence about the document. Question material is
+    (labels, rows of values, page, start) per table, for "What is the <column>
+    for <row>?". Since ingestion-v4 both come from the labelled rows in the
+    page text; a pass before that stored its tables as grids.
+    """
+    stored = list(
+        content.tables.order_by("table_index").values_list(
+            "page_number", "character_start", "character_end", "header", "rows"
+        )
+    )
+    if stored:
+        return (
+            [(page, start, end) for page, start, end, _, _ in stored],
+            [
+                (
+                    header or (rows[0] if rows else []),
+                    rows[1:] if not header else rows,
+                    page,
+                    start,
+                )
+                for page, start, _, header, rows in stored
+            ],
+        )
+
+    regions = []
+    questions = []
+    asked = set()
+    for page, text in text_pages:
+        for region in text_rows.regions(text):
+            regions.append((page, region.start, region.end))
+            if region.number in asked:
+                continue
+            lines = text_rows.row_lines(text[region.start : region.end])
+            labels = [label for label, _ in lines[0].pairs] if lines else []
+            if sum(1 for label in labels if label) < 1:
+                continue
+            asked.add(region.number)
+            rows = [
+                [value for _, value in line.pairs]
+                for line in lines
+                if [label for label, _ in line.pairs] == labels
+            ]
+            questions.append((labels, rows, page, region.start))
+    return regions, questions
+
+
 def build_insight(content, *, processing_job=None) -> DocumentInsight:
     """Compute and store the brief of one extraction pass. Idempotent."""
     with content_lock(content.id):
@@ -335,12 +386,7 @@ def _build(content, *, processing_job=None):
     )
     text_pages = [(number, text or "") for number, text, _ in pages]
     page_texts = dict(text_pages)
-    tables = list(
-        content.tables.order_by("table_index").values_list(
-            "page_number", "character_start", "character_end", "header", "rows"
-        )
-    )
-    table_regions = [(page, start, end) for page, start, end, _, _ in tables]
+    table_regions, table_questions = _tables(content, text_pages)
 
     entities = extract_entities(text_pages)
     segments = segment(text_pages)
@@ -368,15 +414,7 @@ def _build(content, *, processing_job=None):
         document_type=document_type,
         fields=fields,
         deadlines=deadlines,
-        tables=[
-            (
-                header or (rows[0] if rows else []),
-                rows[1:] if not header else rows,
-                p,
-                s,
-            )
-            for p, s, _, header, rows in tables
-        ],
+        tables=table_questions,
         headings=headings,
         phrases=phrases,
     )

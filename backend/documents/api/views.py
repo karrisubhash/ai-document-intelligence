@@ -52,7 +52,6 @@ from .serializers import (
     DocumentListQuerySerializer,
     DocumentListSerializer,
     DocumentSerializer,
-    DocumentTableSerializer,
     DocumentVersionCreateSerializer,
     DocumentVersionSerializer,
     ExtractionResultSerializer,
@@ -589,19 +588,9 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         return self.get_paginated_response(serializer.data)
 
-    @action(detail=True, methods=["get"])
-    def tables(self, request, pk=None):
-        """Tables detected in the live extraction pass, with their cells.
-
-        Each table carries the page and character span it was read from, so
-        a cell can be checked against the page text it claims to come from.
-        """
-        document = self.get_object()
-        version = document.current_version
-        content = _live_content(version) if version else None
-        if content is None:
-            return Response([])
-        return Response(DocumentTableSerializer(content.tables.all(), many=True).data)
+    # No `tables` endpoint: since ingestion-v4 a table is its labelled rows in
+    # the page text ("Table 2, row 1: Course Code: 23CS101; ..."), read through
+    # `pages` and cited like any other text.
 
     @action(detail=True, methods=["get"])
     def figures(self, request, pk=None):

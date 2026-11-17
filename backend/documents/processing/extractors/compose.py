@@ -14,9 +14,10 @@ The builder owns the final string, so the offsets are taken from the very
 characters that get stored.
 
 *Every source reads the same.* A table is written as one ` | `-separated row
-per line, whatever it came from, with blank cells left blank. A reader (or
-the answerer) sees the same shape for a PDF, a DOCX and a spreadsheet, and
-the chunker keeps it together as a table either way.
+per line, whatever it came from, with blank cells left blank. That form is
+an intermediate one: once the table is verified against it, LAYOUT_ANALYSIS
+rewrites it as labelled text rows ("Table 2, row 1: Course Code: 23CS101;
+..."), the form a table is stored in (see tables/text_rows.py).
 
 The cleanup is deliberately small and lossless in meaning: ligatures that a
 PDF font encodes as one glyph are spelled out (so "office" is searchable),
@@ -192,6 +193,7 @@ class PageBuilder:
         header="auto",
         source: str | None = None,
         source_version: str | None = None,
+        continues: bool = False,
     ) -> bool:
         """Write a table and record where it landed.
 
@@ -236,6 +238,8 @@ class PageBuilder:
                     if source_version is not None
                     else self.source_version
                 ),
+                header_declared=header is True,
+                continues=continues,
             )
         )
         return True

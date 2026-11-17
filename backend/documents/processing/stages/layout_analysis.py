@@ -11,19 +11,25 @@ the document quietly loses whatever it was showing. Figures are recorded
 here for that reason - not to read them, which needs a vision model this
 project does not ship, but so that an answer can point at one.
 
+A table is not kept as a grid. Once its cells are verified against the page,
+its span is rewritten as labelled text rows - one line per row, every value
+beside its column's name, opening with the table's number in the document
+and the row's number in it ("Table 2, row 1: Course Code: 23CS101; ...").
+The text is the table: a chunk of it, a quote from it and a citation of it
+each carry their own labels and reference (see tables/text_rows.py).
+
 This stage runs in the CONTENT phase, not the analysis phase, because
 structure is part of the normalized representation of the document rather
 than a conclusion drawn from it. It therefore has no database access: it
-fills `context.tables` and `context.figures`, and the pipeline writes them
-in the same transaction as the pages they point into. Pages without their
-structure is not a state anything downstream should have to handle.
+rewrites the pages' text and fills `context.figures`, and the pipeline writes
+them in one transaction.
 
 The two halves are independent. Either detector can be unconfigured or
 unavailable without costing the document the other, and the stage is only
 SKIPPED when neither ran.
 """
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from documents.processing.context import StageResult
 from documents.processing.figures.exceptions import (
@@ -33,6 +39,7 @@ from documents.processing.figures.exceptions import (
 )
 from documents.processing.figures.service import get_detector as get_figure_detector
 from documents.processing.normalize import strip_nul
+from documents.processing.tables import text_rows
 from documents.processing.tables.detector import DetectedTable
 from documents.processing.tables.detector import verify as verify_table
 from documents.processing.tables.exceptions import (
@@ -130,16 +137,20 @@ def _run_tables(context):
         metadata.update(unavailable[1])
         metadata.pop("skipped", None)
 
-    # Re-numbered across the document in reading order. The detector
-    # numbers within a page, and two pages would otherwise both claim
-    # table 0 - which the uniqueness constraint on (content, table_index)
-    # would reject at the very end of an otherwise successful pipeline.
+    # Numbered across the document in reading order, then written into the
+    # page text as labelled rows. The cells are the verified ones; the grid
+    # itself is not kept.
     found.sort(key=lambda table: (table.page_number, table.character_start))
-    context.tables = [_renumber(table, index) for index, table in enumerate(found)]
+    context.tables = _write_as_text(context, found)
 
-    metadata["tables"] = len(context.tables)
+    metadata["tables"] = len({table.number for table in context.tables})
     metadata["tables_rejected"] = rejected
-    sources = sorted({table.source for table in context.tables if table.source})
+    if context.tables:
+        metadata["table_rows"] = sum(table.rows for table in context.tables)
+        unlabelled = {t.number for t in context.tables if not t.labelled}
+        if unlabelled:
+            metadata["tables_without_labels"] = len(unlabelled)
+    sources = sorted({table.source for table in found if table.source})
     if sources:
         metadata["table_sources"] = sources
 
@@ -153,13 +164,16 @@ def _run_tables(context):
         note = "No tables found."
         if rejected:
             note = (
-                f"No tables stored: rejected {rejected} that did not verify "
+                f"No tables written: rejected {rejected} that did not verify "
                 f"against the page."
             )
         return note, metadata
 
     pages_with_tables = len({table.page_number for table in context.tables})
-    note = f"Found {len(context.tables)} table(s) across {pages_with_tables} page(s)."
+    note = (
+        f"Wrote {metadata['tables']} table(s) across {pages_with_tables} page(s) "
+        f"as {metadata['table_rows']} labelled text row(s)."
+    )
     if rejected:
         note += f" Rejected {rejected} that did not verify against the page."
 
@@ -189,6 +203,8 @@ def _structured_tables(context):
                 header=list(recorded.header),
                 source=recorded.source,
                 source_version=recorded.source_version,
+                header_declared=getattr(recorded, "header_declared", False),
+                continues=getattr(recorded, "continues", False),
             )
             if not verify_table(table, text):
                 rejected += 1
@@ -277,7 +293,93 @@ def _run_figures(context):
     ), metadata
 
 
-def _renumber(table, index: int):
-    from dataclasses import replace
+@dataclass(frozen=True)
+class WrittenTable:
+    """Where one table's rows landed in its page's text, as stored."""
 
-    return replace(table, table_index=index)
+    page_number: int
+    number: int
+    character_start: int
+    character_end: int
+    first_row: int
+    last_row: int
+    labelled: bool
+    source: str = ""
+
+    @property
+    def rows(self) -> int:
+        return self.last_row - self.first_row + 1
+
+
+def _write_as_text(context, tables) -> list:
+    """Replace every table's span in its page with its labelled rows.
+
+    `tables` are verified and in reading order. Table numbers run across the
+    document; a table that continues the previous page's (a long sheet) keeps
+    its number and goes on counting rows. Each page's text is rebuilt once,
+    so the spans returned index the text as it will be stored, and the page
+    no longer carries cells of its own.
+    """
+    by_page = {}
+    for table in tables:
+        by_page.setdefault(table.page_number, []).append(table)
+
+    written_tables = []
+    number = 0
+    rows_in = {}
+
+    for page in context.pages:
+        mine = by_page.get(page.page_number)
+        page.tables = []
+        if not mine:
+            continue
+
+        text = strip_nul(page.text)
+        pieces = []
+        length = 0
+        cursor = 0
+        for table in mine:
+            if table.character_start < cursor:
+                # Overlaps one already written; verification makes this
+                # unreachable, and the text is left as it was if it happens.
+                continue
+            if table.continues and number:
+                table_number, first_row = number, rows_in[number] + 1
+            else:
+                table_number, first_row = number + 1, 1
+
+            written = text_rows.write(
+                table_number,
+                table.rows,
+                table.header,
+                header_declared=table.header_declared,
+                first_row=first_row,
+            )
+            if not written.lines:
+                continue
+            number = table_number
+            rows_in[number] = first_row - 1 + written.rows
+
+            before = text[cursor : table.character_start]
+            pieces.append(before)
+            length += len(before)
+            pieces.append(written.text)
+            written_tables.append(
+                WrittenTable(
+                    page_number=page.page_number,
+                    number=number,
+                    character_start=length,
+                    character_end=length + len(written.text),
+                    first_row=first_row,
+                    last_row=first_row + written.rows - 1,
+                    labelled=written.labelled,
+                    source=table.source,
+                )
+            )
+            length += len(written.text)
+            cursor = table.character_end
+
+        pieces.append(text[cursor:])
+        page.text = "".join(pieces)
+
+    return written_tables

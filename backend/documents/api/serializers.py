@@ -11,7 +11,6 @@ from documents.models import (
     DocumentChunkEmbedding,
     DocumentContent,
     DocumentFigure,
-    DocumentTable,
     DocumentThumbnail,
     DocumentVersion,
     ExtractedField,
@@ -290,14 +289,13 @@ class DocumentSerializer(DocumentFactsMixin, serializers.ModelSerializer):
         return authorization.can_manage_document(request.user, document)
 
     def get_counts(self, document):
-        counts = {"tables": 0, "figures": 0, "fields_found": 0}
+        # No table count: tables are text since ingestion-v4 (labelled rows in
+        # the page), and there is no Tables tab for a count to label.
+        counts = {"figures": 0, "fields_found": 0}
         version = document.current_version
         content_id = version.current_content_id if version else None
         if content_id is None:
             return counts
-        counts["tables"] = DocumentTable.objects.filter(
-            document_content_id=content_id
-        ).count()
         counts["figures"] = DocumentFigure.objects.filter(
             document_content_id=content_id
         ).count()
@@ -772,25 +770,6 @@ class DocumentChunkSerializer(serializers.ModelSerializer):
             "metadata",
             "created_at",
             "embeddings",
-        ]
-        read_only_fields = fields
-
-
-class DocumentTableSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DocumentTable
-        fields = [
-            "id",
-            "table_index",
-            "page_number",
-            "character_start",
-            "character_end",
-            "header",
-            "rows",
-            "row_count",
-            "column_count",
-            "detector",
-            "detector_version",
         ]
         read_only_fields = fields
 

@@ -44,12 +44,19 @@ class PageTable:
     character_start: int
     character_end: int
     rows: list
-    # Always rows[0] when set - the Tables tab drops the first row from the
-    # body when a header is present.
+    # Always rows[0] when set.
     header: list = field(default_factory=list)
-    # Which extractor found it, recorded as DocumentTable.detector (<= 50).
+    # Which extractor found it, reported in LAYOUT_ANALYSIS's metadata.
     source: str = ""
     source_version: str = ""
+    # The source said this is the header (an HTML <th>, a chart's series, a
+    # sheet's column names) rather than it being guessed from the cells. A
+    # guessed header is used as labels only if it reads as one; see
+    # tables/text_rows.py.
+    header_declared: bool = False
+    # The rest of the previous page's table (a long sheet split into pages):
+    # it keeps that table's number and goes on counting its rows.
+    continues: bool = False
 
 
 @dataclass
@@ -77,9 +84,9 @@ class IngestionContext:
     processing_job: object | None = None
     file_type: str | None = None
     pages: list[ExtractedPage] = field(default_factory=list)
-    # Tables found by LAYOUT_ANALYSIS, with offsets into the page text as
-    # it will be stored. Written by the pipeline in the same transaction as
-    # the pages, so structure and text can never disagree.
+    # Tables LAYOUT_ANALYSIS wrote into the page text as labelled rows
+    # (tables/text_rows.Region, spans into the text as it will be stored).
+    # Not stored on their own: the text is the table.
     tables: list = field(default_factory=list)
     # Images the document embeds, recorded so an answer can point at
     # content this pipeline cannot read rather than pretend it is absent.

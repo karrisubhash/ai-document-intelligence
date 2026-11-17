@@ -498,7 +498,14 @@ def validate(
 
 
 def citations_for(answer_text: str, context) -> list:
-    """Resolve an answer's markers to full citations, in cited order."""
+    """Resolve an answer's markers to full citations, in cited order.
+
+    A cited passage of labelled table rows names the rows the answer took
+    from it ("Table 2, row 4") when the sentences citing it say which; see
+    rag.tables.table_reference.
+    """
+    from .tables import table_reference
+
     by_marker = context.by_marker()
     citations = []
 
@@ -509,9 +516,25 @@ def citations_for(answer_text: str, context) -> list:
         citation = passage.citation
         citation["marker"] = marker
         citation["relevance"] = passage.relevance
+        if "table" in citation:
+            statement = _statement_citing(answer_text, marker)
+            reference = table_reference(passage.chunk, statement)
+            if reference is not None:
+                citation["table"] = reference
         citations.append(citation)
 
     return citations
+
+
+def _statement_citing(answer_text: str, marker: int) -> str:
+    """The sentences of an answer that carry `[marker]`, joined."""
+    token = f"[{marker}]"
+    return " ".join(
+        # The markers themselves are not figures the answer states.
+        _MARKER_TOKEN.sub(" ", sentence)
+        for sentence in _SENTENCE_BREAK.split(answer_text or "")
+        if token in sentence
+    )
 
 
 # At most this many figures are re-attributed in one answer. A repair that

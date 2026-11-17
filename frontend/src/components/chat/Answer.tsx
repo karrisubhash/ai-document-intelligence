@@ -138,7 +138,11 @@ export function answerAsMarkdown(answer: AnswerView): string {
   const notes = answer.citations
     .slice()
     .sort((a, b) => a.marker - b.marker)
-    .map((citation) => `[${citation.marker}] ${citation.document_title}, p. ${citation.page_number}`);
+    .map(
+      (citation) =>
+        `[${citation.marker}] ${citation.document_title}, p. ${citation.page_number}` +
+        (citation.table ? `, ${citation.table.label}` : ""),
+    );
   const label =
     answer.source === "general" ? "\n\n(General knowledge, not from your documents.)" : "";
   return `${answer.text.trim()}${label}${notes.length ? `\n\n${notes.join("\n")}` : ""}`;
@@ -188,6 +192,19 @@ export function SourceDialog({
             <Badge tone="neutral" icon="book-open">
               Page {source.data.page_number} of {source.data.page_count}
             </Badge>
+            {citation.table ? (
+              <Badge
+                tone="info"
+                icon="table"
+                title={
+                  citation.table.narrowed
+                    ? "The table rows this answer was taken from"
+                    : "The table rows in the cited passage"
+                }
+              >
+                {citation.table.label}
+              </Badge>
+            ) : null}
             <Badge tone="neutral" icon="layers">
               Version {source.data.version_number}
             </Badge>
@@ -448,7 +465,9 @@ export function Answer({
                 type="button"
                 className="citation"
                 onClick={() => onInspect(citation, answer.text)}
-                aria-label={`Source ${marker}: ${citation.document_title}, page ${citation.page_number}`}
+                aria-label={`Source ${marker}: ${citation.document_title}, page ${citation.page_number}${
+                  citation.table ? `, ${citation.table.label}` : ""
+                }`}
               >
                 {marker}
               </button>
@@ -504,7 +523,10 @@ export function Answer({
                     <span className="source-body">
                       <span className="source-head">
                         <span className="source-title">{citation.document_title}</span>
-                        <span className="source-page">Page {citation.page_number}</span>
+                        <span className="source-page">
+                          Page {citation.page_number}
+                          {citation.table ? ` · ${citation.table.label}` : ""}
+                        </span>
                       </span>
                       <span className="source-excerpt">
                         {window.text}

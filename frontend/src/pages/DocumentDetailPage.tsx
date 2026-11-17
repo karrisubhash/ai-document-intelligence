@@ -11,7 +11,6 @@ import {
   FiguresPanel,
   PreviewPanel,
   ProcessingPanel,
-  TablesPanel,
 } from "../components/document/Panels";
 import { usePageTrail } from "../components/Layout";
 import VersionsPanel from "../components/document/VersionsPanel";
@@ -46,21 +45,20 @@ const TABS: TabItem[] = [
   { id: "preview", label: "Preview", icon: "eye" },
   { id: "text", label: "Text", icon: "book-open" },
   { id: "fields", label: "Fields", icon: "list-checks" },
-  { id: "tables", label: "Tables", icon: "table" },
   { id: "figures", label: "Figures", icon: "image" },
   { id: "versions", label: "Versions", icon: "layers" },
   { id: "processing", label: "Processing", icon: "activity" },
 ];
 
-/** Which count belongs to which tab. */
-const COUNTED: Record<string, "fields_found" | "tables" | "figures"> = {
+/** Which count belongs to which tab. There is no Tables tab: a table is text
+ * (one labelled line per row, "Table 2, row 1: ..."), read in the Text tab. */
+const COUNTED: Record<string, "fields_found" | "figures"> = {
   fields: "fields_found",
-  tables: "tables",
   figures: "figures",
 };
 
 /**
- * The tabs this document has: Fields, Tables and Figures carry their count,
+ * The tabs this document has: Fields and Figures carry their count,
  * and are left out when it is zero - an empty tab is a click that finds
  * nothing. Kept while selected, so a deep link to one still opens it.
  * Before the counts are known (an older API), every tab is shown.
@@ -514,7 +512,6 @@ export default function DocumentDetailPage() {
             />
           ) : null}
           {tab === "fields" ? <FieldsPanel document={document} /> : null}
-          {tab === "tables" ? <TablesPanel document={document} /> : null}
           {tab === "figures" ? <FiguresPanel document={document} /> : null}
           {tab === "versions" ? (
             <VersionsPanel document={document} onChanged={resource.reload} />

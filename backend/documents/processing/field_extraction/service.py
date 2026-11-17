@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils.module_loading import import_string
 
 from documents.models import DocumentContent, ExtractedField, ExtractionResult
+from documents.processing.tables import text_rows
 
 from .base import ExtractionPrediction, FieldExtractor
 from .exceptions import ExtractorNotConfigured, FieldExtractionError
@@ -42,10 +43,20 @@ def get_extractor() -> FieldExtractor:
 
 
 def load_pages(content: DocumentContent) -> list:
-    """The (page_number, text) pairs an extractor is allowed to see."""
-    return list(
-        content.pages.order_by("page_number").values_list("page_number", "text")
-    )
+    """The (page_number, text) pairs an extractor is allowed to see.
+
+    Labelled table rows are blanked (same length, so every offset still
+    indexes the stored text). A document's field is one value of the whole
+    document; "Course Code: 23CS101" in row 1 of a table of twelve courses is
+    not the syllabus's course code. Written as " | " cells, before
+    ingestion-v4, no pattern could match inside a row either.
+    """
+    return [
+        (number, text_rows.mask(text or ""))
+        for number, text in content.pages.order_by("page_number").values_list(
+            "page_number", "text"
+        )
+    ]
 
 
 def _validate(prediction: ExtractionPrediction, pages: dict) -> None:

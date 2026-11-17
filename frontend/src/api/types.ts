@@ -145,7 +145,6 @@ export interface DocumentSummary {
 }
 
 export interface DocumentCounts {
-  tables: number;
   figures: number;
   /** FOUND fields of the newest extraction under the current type. */
   fields_found: number;
@@ -277,20 +276,6 @@ export interface ExtractionResult {
   metadata: Record<string, unknown>;
   created_at: string;
   extracted_fields: ExtractedField[];
-}
-
-export interface DocumentTable {
-  id: number;
-  table_index: number;
-  page_number: number;
-  character_start: number;
-  character_end: number;
-  header: string[];
-  rows: string[][];
-  row_count: number;
-  column_count: number;
-  detector: string;
-  detector_version: string;
 }
 
 export interface DocumentFigure {
@@ -438,6 +423,24 @@ export interface Citation {
   character_end: number;
   text: string;
   relevance: number;
+  /** For a passage of table rows: which table and rows of it were cited. The
+   * same reference the cited text opens each row with ("Table 2, row 4: ..."). */
+  table?: TableReference;
+}
+
+export interface TableReference {
+  number: number;
+  first_row: number;
+  last_row: number;
+  /** Present for up to 200 rows. */
+  rows?: number[];
+  /** True when the rows are the ones the answer's sentence was taken from,
+   * false when they are every row of the cited passage. */
+  narrowed: boolean;
+  /** "Table 2, row 4", "Table 2, rows 4-9". */
+  label: string;
+  /** The table's title and section, if it has them. */
+  context?: string;
 }
 
 export interface PlanStep {

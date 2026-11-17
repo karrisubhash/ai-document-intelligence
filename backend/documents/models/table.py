@@ -2,7 +2,14 @@ from django.db import models
 
 
 class DocumentTable(models.Model):
-    """One table found in one page of one extraction pass.
+    """One table found in one page of one extraction pass - before ingestion-v4.
+
+    NO LONGER WRITTEN. Since ingestion-v4 a table is kept only as text: its
+    rows are written into the page as labelled lines ("Table 2, row 1: Course
+    Code: 23CS101; ...", processing/tables/text_rows.py). This model stays so
+    the passes before that - and backups of them - remain readable and their
+    chunks can still be re-indexed; it can be dropped by a migration once no
+    live pass is older than ingestion-v4.
 
     Hangs off DocumentContent for the same reason chunks do: it is derived
     from a particular extraction, so a reprocess under a better extractor

@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from documents.processing.tables import text_rows
+
 from . import quoting
 
 ABSTENTION_TEXT = "I couldn't find enough information in the provided documents."
@@ -98,8 +100,8 @@ def declines_to_answer(text: str, question: str = "") -> bool:
 SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 
 # The separators a table row can use, matching the detector's set. Used only
-# to tell a header row from a data row, never to re-parse a table - the
-# parsed cells already live on the stored DocumentTable.
+# to tell a header row from a data row in a pass before ingestion-v4, whose
+# tables were " | " rows with their header held beside them.
 CELL_SEPARATOR = re.compile(r"\t+|\s{2,}|\s*\|\s*")
 
 
@@ -146,7 +148,10 @@ class LLMProvider(Protocol):
 
 
 def _looks_like_a_table_row(line: str) -> bool:
-    """A line whose cells are separated by tabs, pipes or a column gap."""
+    """A line whose cells are separated by tabs, pipes or a column gap - or a
+    labelled table row ("Table 2, row 1: Course Code: 23CS101; ...")."""
+    if text_rows.ROW_PREFIX.match(line.strip()):
+        return True
     return len([cell for cell in CELL_SEPARATOR.split(line.strip()) if cell]) >= 2
 
 
@@ -767,5 +772,11 @@ class ExtractiveAnswerer:
         """
         pieces = []
         for line in _unwrap(text):
+            if text_rows.ROW_PREFIX.match(line):
+                # A labelled table row is one statement: split at "Dr." or
+                # "No." inside a value, its second half would be quoted
+                # without the table, row and column it belongs to.
+                pieces.append(line)
+                continue
             pieces.extend(part for part in SENTENCE.split(line) if part.strip())
         return pieces

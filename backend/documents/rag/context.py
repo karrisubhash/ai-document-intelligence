@@ -68,6 +68,11 @@ class Passage:
     # spliced into it would be the one piece of a passage that is not on
     # the page where the citation says it is.
     table_header: tuple = ()
+    # The labels a passage of labelled table rows uses (ingestion-v4 onwards:
+    # "Table 2, row 1: Course Code: 23CS101; ..."). They are IN the text, so
+    # nothing is added to it or to the prompt; they are here for the rules
+    # that match a question's words against a table's columns.
+    table_columns: tuple = ()
     # The relevance reranker scored this below its floor and a generative
     # model was handed it to judge anyway (rag.judging). It is evidence for a
     # model that can say "this is not it", and NOT for anything that cannot:
@@ -127,9 +132,16 @@ class Passage:
 
     @property
     def citation(self) -> dict:
-        """The section 12.3 shape. `chunk_id` is what a marker resolves to."""
+        """The section 12.3 shape. `chunk_id` is what a marker resolves to.
+
+        A passage of labelled table rows also says which table and rows it
+        is ("table": {"number": 2, "rows": [4, 5, 6], "label": "Table 2,
+        rows 4-6"}), the same reference its text opens each row with.
+        """
+        from .tables import table_reference
+
         chunk = self.chunk
-        return {
+        citation = {
             "document_id": chunk.document_version.document_id,
             "document_title": chunk.document_version.document.title,
             "page_number": chunk.page_number,
@@ -138,6 +150,10 @@ class Passage:
             "character_end": chunk.character_end,
             "text": chunk.text,
         }
+        reference = table_reference(chunk)
+        if reference is not None:
+            citation["table"] = reference
+        return citation
 
 
 @dataclass
@@ -282,6 +298,7 @@ def build(
                 suspected_injection=bool(matches),
                 injection_matches=matches,
                 table_header=tuple(metadata.get("header") or ()),
+                table_columns=tuple(metadata.get("columns") or ()),
                 model_judged=bool(
                     (getattr(candidate, "signals", None) or {}).get("model_judged")
                 ),

@@ -10,7 +10,6 @@ from documents.models import (
     Document,
     DocumentContent,
     DocumentFigure,
-    DocumentTable,
     DocumentVersion,
     ExtractionResult,
     PageContent,
@@ -35,7 +34,6 @@ from .stages import (
     text_extraction,
     validation,
 )
-from .tables import detector as layout_detector
 
 logger = logging.getLogger("adi.pipeline")
 
@@ -51,7 +49,10 @@ logger = logging.getLogger("adi.pipeline")
 #       titles resolved; sideways cells), words broken by a line-end hyphen
 #       joined, words a PDF drew without spaces split on pages that show
 #       it, contents lines kept out of tables, symbol-font bullets.
-PROCESSING_VERSION = "ingestion-v3"
+#   v4  tables written into the page text as labelled rows ("Table 2, row 1:
+#       Course Code: 23CS101; ...") instead of " | " rows plus a stored grid;
+#       no DocumentTable rows are written.
+PROCESSING_VERSION = "ingestion-v4"
 
 # Stages that build the normalized representation from the raw file.
 CONTENT_STAGES = [
@@ -299,35 +300,9 @@ def _persist_content(job, context) -> DocumentContent:
             ]
         )
 
-        # Same transaction as the pages, deliberately. A table stores
-        # offsets into page text; committing it separately would allow a
-        # window in which a table points into a page that is not there
-        # yet, or survives a page that has been replaced.
-        DocumentTable.objects.bulk_create(
-            [
-                DocumentTable(
-                    document_version=document_version,
-                    document_content=content,
-                    processing_job=job,
-                    table_index=table.table_index,
-                    page_number=table.page_number,
-                    character_start=table.character_start,
-                    character_end=table.character_end,
-                    rows=table.rows,
-                    row_count=table.row_count,
-                    column_count=table.column_count,
-                    header=table.header,
-                    # An extractor that read real cells says so; a table the
-                    # text detector found is recorded as the layout detector's.
-                    detector=table.source or layout_detector.DETECTOR_NAME,
-                    detector_version=(
-                        table.source_version or layout_detector.DETECTOR_VERSION
-                    ),
-                    metadata={"separator": table.separator},
-                )
-                for table in context.tables
-            ]
-        )
+        # Tables are not written here: LAYOUT_ANALYSIS wrote them into the
+        # page text as labelled rows, the only form they are kept in.
+        # (DocumentTable holds the grids of passes before ingestion-v4.)
 
         DocumentFigure.objects.bulk_create(
             [

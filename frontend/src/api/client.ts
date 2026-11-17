@@ -31,7 +31,6 @@ import type {
   DocumentDetail,
   DocumentFigure,
   DocumentSummary,
-  DocumentTable,
   DocumentType,
   DocumentVersion,
   ExtractionResult,
@@ -642,7 +641,6 @@ export const api = {
   classification: (id: number) =>
     request<ClassificationResult[]>(doc(id, "classification/")),
   extraction: (id: number) => request<ExtractionResult[]>(doc(id, "extraction/")),
-  tables: (id: number) => request<DocumentTable[]>(doc(id, "tables/")),
   figures: (id: number) => request<DocumentFigure[]>(doc(id, "figures/")),
   source: (id: number, chunk: number) =>
     request<SourcePassage>(doc(id, `source/${query({ chunk })}`)),

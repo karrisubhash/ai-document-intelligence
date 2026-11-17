@@ -21,6 +21,7 @@ import re
 from dataclasses import dataclass, field
 
 from documents.processing import figure_markers as markers
+from documents.processing.tables import text_rows
 
 # Roughly 1000 characters is a few hundred tokens - large enough to carry a
 # self-contained clause or paragraph, small enough that a retrieved chunk is
@@ -139,6 +140,12 @@ def _split_table(text: str, region_start: int, region_end: int, chunk_size: int)
             cut = text.rfind("\n", position, limit)
             if cut > position:
                 limit = cut + 1
+            else:
+                # One row longer than a chunk (a very wide sheet): cut it
+                # between two of its values rather than inside one.
+                cut = text.rfind(text_rows.PAIR_SEPARATOR, position, limit)
+                if cut > position:
+                    limit = cut + len(text_rows.PAIR_SEPARATOR)
 
         raw = text[position:limit]
         stripped = raw.strip()
@@ -161,6 +168,51 @@ FIGURE = "FIGURE"
 FIGURE_CHUNK_SIZE = 1800
 
 
+def _row_at(text: str, offset: int):
+    """The row number of the row line that `offset` falls in, or None."""
+    line_start = text.rfind("\n", 0, offset) + 1
+    line_end = text.find("\n", offset)
+    if line_end == -1:
+        line_end = len(text)
+    parsed = text_rows.parse_line(text[line_start:line_end])
+    return parsed.row if parsed is not None else None
+
+
+def _row_metadata(text: str, span, region, part: int, parts: int) -> dict:
+    """What a chunk of labelled table rows says about itself.
+
+    The rows carry their own labels and reference in the text; this repeats
+    the reference (table number, first and last row) and the column labels in
+    metadata, so a citation can show "Table 2, rows 4-9" and the answerer can
+    match a question's words against the columns without re-reading text.
+    The rows are those of the lines the chunk starts and ends in, so a chunk
+    that holds only part of one very wide row still names that row.
+    """
+    start, end = span
+    chunk_text = text[start:end]
+    metadata = {
+        "kind": "TABLE",
+        "layout": "labelled",
+        "table_number": region.number,
+        # 0-based, as the grids of earlier passes were numbered, so code that
+        # groups the chunks of one table reads both alike.
+        "table_index": region.number - 1,
+    }
+    first = _row_at(text, start)
+    last = _row_at(text, max(start, end - 1))
+    metadata["first_row"] = first if first is not None else region.first_row
+    metadata["last_row"] = last if last is not None else metadata["first_row"]
+    columns = text_rows.columns_of(chunk_text)
+    if columns:
+        metadata["columns"] = columns
+    if region.context:
+        metadata["table_context"] = region.context
+    if parts > 1:
+        metadata["part"] = part
+        metadata["parts"] = parts
+    return metadata
+
+
 def _regions(text: str, tables) -> list:
     """The page as alternating prose, table and figure regions, in order.
 
@@ -169,11 +221,17 @@ def _regions(text: str, tables) -> list:
     and is not the place to adjudicate a bad span. A figure reading (the
     text between the figure markers, written by a vision model) is a region
     of its own, unless it falls inside a table.
+
+    `tables` are the stored grids of a pass before ingestion-v4. Since then a
+    table is its labelled row lines in the text (tables/text_rows.py), found
+    here as `text_rows.Region`s.
     """
     regions = []
     cursor = 0
 
     spans = [(table.character_start, table.character_end, table) for table in tables]
+    if not tables:
+        spans += [(found.start, found.end, found) for found in text_rows.regions(text)]
     spans += [(start, end, FIGURE) for start, end in markers.spans(text)]
 
     for start, end, owner in sorted(spans, key=lambda item: item[0]):
@@ -233,14 +291,14 @@ def split_page(
     for region_start, region_end, table in _regions(text, tables):
         if table is None:
             spans = _split_prose(text, region_start, region_end, chunk_size, overlap)
-            metadata_for = lambda part, parts: {}  # noqa: E731
+            metadata_for = lambda part, parts, span: {}  # noqa: E731
         elif table is FIGURE:
             spans = _split_table(
                 text, region_start, region_end, max(chunk_size, FIGURE_CHUNK_SIZE)
             )
             title = markers.title(text[region_start:region_end])
 
-            def metadata_for(part, parts, title=title):
+            def metadata_for(part, parts, span, title=title):
                 metadata = {"kind": FIGURE}
                 if title:
                     metadata["figure_title"] = title
@@ -248,10 +306,15 @@ def split_page(
                     metadata["part"] = part
                     metadata["parts"] = parts
                 return metadata
+        elif isinstance(table, text_rows.Region):
+            spans = _split_table(text, region_start, region_end, chunk_size)
+
+            def metadata_for(part, parts, span, region=table):
+                return _row_metadata(text, span, region, part, parts)
         else:
             spans = _split_table(text, region_start, region_end, chunk_size)
 
-            def metadata_for(part, parts, table=table):
+            def metadata_for(part, parts, span, table=table):
                 metadata = {"kind": "TABLE", "table_index": table.table_index}
                 header = list(getattr(table, "header", []) or [])
                 if header:
@@ -271,7 +334,7 @@ def split_page(
                     text=text[start:end],
                     character_start=start,
                     character_end=end,
-                    metadata=metadata_for(part, len(spans)),
+                    metadata=metadata_for(part, len(spans), (start, end)),
                 )
             )
             index += 1

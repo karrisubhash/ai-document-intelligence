@@ -206,17 +206,21 @@ def build_pages(
 
         # A table that runs on from the previous page has no header row here;
         # the first page's is repeated so a row still carries its columns.
+        # It also keeps that table's number and goes on counting its rows, so
+        # "row 612" of a long sheet is row 612 on every page it is cited from.
         continues = start > 0 and any(rows[start - 1])
         for position, block in enumerate(blocks):
+            joined = position == 0 and continues
             choice = _header_choice(block)
-            if position == 0 and continues and header is not None:
-                block = [header, *block]
-                choice = True
-            builder.add_table(block, header=choice)
-            if index == 0 and position == 0 and choice is True:
-                header = block[0]
-            elif index == 0 and position == 0:
-                header = None
+            if joined:
+                # Its first row is data, whatever it looks like: the header is
+                # the one the table had on the page before, or there is none.
+                if header is not None:
+                    block = [header, *block]
+                choice = header is not None
+            builder.add_table(block, header=choice, continues=joined)
+            # The header of the table still open at the end of this page.
+            header = block[0] if choice is True else None
 
         pages.append(builder)
 

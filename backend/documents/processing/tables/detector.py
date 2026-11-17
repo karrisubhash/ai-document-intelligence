@@ -85,6 +85,10 @@ class DetectedTable:
     # text detector. Empty means "found by this module in the page text".
     source: str = ""
     source_version: str = ""
+    # See context.PageTable: whether the source declared the header, and
+    # whether this continues the previous page's table.
+    header_declared: bool = False
+    continues: bool = False
 
     @property
     def row_count(self) -> int:

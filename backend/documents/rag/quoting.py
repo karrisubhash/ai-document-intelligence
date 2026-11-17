@@ -596,10 +596,19 @@ def _column_terms(passages) -> frozenset:
     "Tuition", "Exam Fee", "Hostel"): what a programme's row is named by and holds."""
     terms = set()
     for passage in passages:
-        header = tuple(getattr(passage, "table_header", ()) or ())
+        header = _columns(passage)
         if header:
             terms |= quote_terms(" ".join(header))
     return frozenset(terms)
+
+
+def _columns(passage) -> tuple:
+    """A table passage's column labels: the header held beside " | " rows (a
+    pass before ingestion-v4), or the labels its labelled rows use."""
+    return tuple(
+        getattr(passage, "table_header", ()) or getattr(passage, "table_columns", ())
+        or ()
+    )
 
 
 def _code_gap_is_visible(question: str, passages) -> bool:
@@ -619,7 +628,7 @@ def _code_gap_is_visible(question: str, passages) -> bool:
             continue
         if not getattr(passage, "is_table", False):
             return True
-        header = tuple(getattr(passage, "table_header", ()) or ())
+        header = _columns(passage)
         values = quote_terms(" ".join(header[1:] if len(header) > 1 else header))
         if not header or asked & values:
             return True
