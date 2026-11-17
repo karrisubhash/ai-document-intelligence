@@ -70,7 +70,7 @@ HEADER_MAX_WORDS = 6
 _FIGURE = re.compile(
     r"^[(+\-−]?(?:rs\.?|inr|usd|eur|gbp|[$€£₹¥])?\d[\d,.:/%\-–]*\)?$", re.IGNORECASE
 )
-_LABEL_VALUE = re.compile(r"[^\W\d_]{2}[^:]*:\s*\S")
+_LABEL_VALUE = re.compile(r"[^\W\d_]{2}[^:]{0,80}:\s*\S")
 _MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
 _DATE = re.compile(
     rf"\b\d{{1,2}}\s*{_MONTH}\b|\b{_MONTH}\.?\s+\d{{1,2}}\b"

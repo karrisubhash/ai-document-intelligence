@@ -11,14 +11,16 @@ of its lines.
 """
 
 import os
+import random
 import tempfile
+import time
 from unittest import mock
 
 import pdfplumber
 from django.test import SimpleTestCase
 
 from documents import pdf_fixtures as fx
-from documents.processing.extractors import geometry, pdf, rulings
+from documents.processing.extractors import compose, geometry, pdf, rulings
 
 BLACK = (0, 0, 0)
 
@@ -343,6 +345,10 @@ class MergedMeasureTests(SimpleTestCase):
             "(2 Hrs)",
             "3.5 Credits",
             "Rs. 5,000/-",
+            "Rs. 50",
+            "INR 75",
+            "Fee 5000",
+            "Cost 1,250",
             "INR 5,000/-",
             "Rs.5000/-",
             "10 Marks each",
@@ -473,3 +479,33 @@ class ContentsPageTests(SimpleTestCase):
 
         self.assertEqual([block.text.count("\n") for block in blocks], [2, 0, 2])
         self.assertEqual(blocks[1].text, "PLACED")
+
+
+# -- cost on odd inputs -----------------------------------------------------------
+
+
+class CostTests(SimpleTestCase):
+    def test_counting_boundaries_by_bisection_matches_a_scan(self):
+        rng = random.Random(7)
+        for _ in range(300):
+            boundaries = sorted(
+                round(rng.uniform(0, 100), 1) for _ in range(rng.randint(0, 30))
+            )
+            start = rng.uniform(0, 100)
+            end = start + rng.uniform(0, 60)
+            scan = sum(
+                1 for b in boundaries if start - rulings.SNAP <= b < end - rulings.SNAP
+            )
+            self.assertEqual(rulings._count(boundaries, start, end), scan)
+
+    def test_a_header_cell_of_a_long_unbroken_run_is_judged_in_linear_time(self):
+        """The label before a colon is looked for within 80 characters, not
+        across the whole run from every letter (40,000 letters took 7 s)."""
+        started = time.perf_counter()
+        looked = compose.looks_like_value("a" * 40_000)
+        took = time.perf_counter() - started
+
+        self.assertFalse(looked)
+        self.assertLess(took, 1.0)
+        self.assertTrue(compose.looks_like_value("Name: Asha"))
+        self.assertTrue(compose.looks_like_value("Date of birth: 12 May"))

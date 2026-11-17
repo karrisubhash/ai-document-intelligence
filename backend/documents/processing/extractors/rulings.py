@@ -45,7 +45,7 @@ a header's are; a form's first rows beside a merged photo cell are rows.
 """
 
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 
 from documents.processing.extractors import compose
@@ -322,7 +322,7 @@ def _snapped(values) -> list:
 
 def _count(boundaries, start, end) -> int:
     """How many of `boundaries` fall in [start, end)."""
-    return sum(1 for b in boundaries if start - SNAP <= b < end - SNAP)
+    return bisect_left(boundaries, end - SNAP) - bisect_left(boundaries, start - SNAP)
 
 
 def _cells(table) -> tuple:
