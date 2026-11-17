@@ -651,16 +651,30 @@ carry the table, the row and every column's name, so "85000" in the fourth chunk
 table still says it is the CSE tuition. A citation of table rows names them
 ("Syllabus, p. 5, Table 2, row 1"), narrowed to the rows the answer's sentence was taken
 from when that can be told. A long sheet split over pages keeps one table number and goes
-on counting rows. A wrong label would be worse than none, so a header the source did not
-declare (HTML `<th>`, a sheet's column names, a chart's series and a ruled PDF's merged
-header are declared) is used only if it reads as column names - no value, date, code or
-clause in it, nothing repeated in its own column, no column mixing names with numbers, and,
-for a table read from layout alone, a name over every column; otherwise rows are written
-without labels. A two-column form is written as labels and values ("Roll No:
-21A91A0501"), two columns of running text side by side are not. Field extraction does not
-read inside table rows (a course code in row 1 of twelve is not the syllabus's).
+on counting rows. A wrong label would be worse than none, so labels are given only on
+evidence. A header the source declared (HTML `<th>`, a Markdown rule, JSON/XML keys, a
+chart's series, a ruled PDF's merged header) is used as it is. A guessed one must show
+positive evidence: column-naming words in two thirds of its cells ("Programme | Fee",
+"Command | Description | Syntax"), or - for three or more short cells - half of them naming
+columns over rows with numbers, or capitals over plain words, or names without digits over
+cells with digits, or short names over sentences; and it must not hold a value, a person's
+name, a clause, a cell repeated in its own column, a column mixing words with figures, or
+(for a table read from layout alone) leave a column unnamed. Otherwise rows are written
+without labels, every cell in its place ("23CS104; Workshop; ; ; 2"). A form - labels with
+their values beside them ("Roll No: 21A91A0501") - is written as pairs only on evidence too
+(colons, field-name words, values of different kinds), so "Student | Ravi Kumar" over
+"Tuition Fee | 85000" is a form and never a header. A row with only its first cell filled is a
+section (named in the reference of the rows under it) only if it reads as one ("Semester II",
+"Theory", "Monday", "Undergraduate", capitals, a colon); it keeps its column's label only if
+it is a value of that column ("CS102" among course codes); a note, a total or a legend is
+written as it is, under no label. A long sheet split over pages goes on under the same
+number, labels and columns. Field extraction reads a table written as text as a form
+(`text_rows.field_view`, a same-length view like the one that turns cell pipes into spaces):
+the rows of a table whose labels recur are not read - a course code in row 1 of twelve is not
+the syllabus's - while the rows of a form are, each pair ending where its cell ends.
 `processing/tables/text_rows.py` writes and reads the form; `DocumentTable` stays only for
-passes made before `ingestion-v4`.
+passes made before `ingestion-v4`. One thing to know: "Table N" is this system's own
+numbering, in reading order, and may differ from a document's own captions.
 Pages are read in **reading order** — a two-column page is read one column after the other,
 and a numbered-clause list is left as the lines it is, never cut into cells.
 

@@ -217,6 +217,19 @@ class FormsAreNotHeadersTests(SimpleTestCase):
         for measure in ("10cm/s", "20ns", "10-20m", "2nd"):
             self.assertEqual(text_rows._kind(measure), "text", measure)
 
+    def test_a_header_with_a_blank_corner_over_figures_is_a_header(self):
+        """ "" | Standard GPS | Differential GPS" over errors in metres; and its
+        twin of two names over the same rows, which is not."""
+        header = ["", "Standard GPS", "Differential GPS"]
+        body = [["Satellite Clocks", "1.5", "0"], ["Orbit Errors", "2.5", "0"]]
+        written = text_rows.write(1, [header, *body], [])
+        self.assertEqual(
+            lines_of(written)[0],
+            "Table 1, row 1: Satellite Clocks; Standard GPS: 1.5; Differential GPS: 0",
+        )
+        names = text_rows.write(1, [["", "Ravi Kumar", "Asha Rao"], *body], [])
+        self.assertFalse(names.labelled)
+
 
 class NotesAndSectionsTests(SimpleTestCase):
     HEADER = ["Course Code", "Course Title", "Credits"]

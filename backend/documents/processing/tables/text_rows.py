@@ -522,7 +522,11 @@ def _header_evidence(row, body) -> bool:
     named = sum(map(_names_a_column, cells))
     if named >= 2 and named * 3 >= len(cells) * 2:
         return True
-    if len(cells) < 3:
+    # Two names over a wider table with a blank corner ("" | "Standard GPS" |
+    # "Differential GPS" over "Orbit Errors | 2.5 | 0") are a header; two cells
+    # of a two-column table are as likely a label and its value.
+    corner = len(cells) == 2 and len(row) >= 3 and not row[0]
+    if len(cells) < 3 and not corner:
         return False
     short = all(
         len(cell.split()) <= 4 and len(cell) <= 30 and not _PROSE.search(cell)
