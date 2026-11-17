@@ -60,6 +60,8 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 
+from documents.processing.tables import text_rows
+
 from . import facts as fact_forms
 from . import tables
 from .llm import is_abstention
@@ -258,9 +260,11 @@ def _answer_facts(answer_text: str) -> set:
     Citation markers are removed first - "[1]" is a reference, not a claim
     that the number one appears in the document - and so are markdown list
     ordinals and emphasis, which are numbering and typography rather than
-    content.
+    content. So are table references ("Table 2, row 3"): where a value is,
+    not a value.
     """
     stripped = MARKER.sub(" ", _tidy(answer_text))
+    stripped = text_rows.answer_without_references(stripped)
     stripped = ORDINAL_LINE.sub(" ", stripped)
     prepared = fact_forms.amounts(fact_forms.prepare(stripped))
     # A date the answer states is ONE fact, compared whole against the dates
@@ -285,8 +289,12 @@ def _support_facts(text: str) -> set:
     ("2024-25" supports 2024 and 2025) and each range the text states
     ("range:65-75"). Only this side is widened: an answer's own wording is never
     turned into a figure it did not state.
+
+    A labelled table row's reference ("Table 2, row 3:") supports nothing:
+    "row 3" is where a value is, and a "3 credits" it matched is not in the
+    document. The table's title and section in it still count.
     """
-    cleaned = fact_forms.clean(text)
+    cleaned = fact_forms.clean(text_rows.without_references(text))
     prepared = fact_forms.prepare(cleaned)
     # A dashed pair of figures is fused for the academic-year equivalences
     # ("2024-25"), and fused it lost both ends ("Batch 2020-2024"): the figures

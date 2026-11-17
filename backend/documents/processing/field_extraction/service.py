@@ -45,14 +45,16 @@ def get_extractor() -> FieldExtractor:
 def load_pages(content: DocumentContent) -> list:
     """The (page_number, text) pairs an extractor is allowed to see.
 
-    Labelled table rows are blanked (same length, so every offset still
-    indexes the stored text). A document's field is one value of the whole
-    document; "Course Code: 23CS101" in row 1 of a table of twelve courses is
-    not the syllabus's course code. Written as " | " cells, before
-    ingestion-v4, no pattern could match inside a row either.
+    Same length as the stored text, so every offset still indexes it. A
+    document's field is one value of the whole document: the rows of a table
+    whose labels recur on every row are blanked ("Course Code: 23CS101" in
+    row 1 of twelve courses is not the syllabus's course code), while a form's
+    rows ("Course Code: CS101", "Credits: 4") stay readable, as a label beside
+    its value in a " | " row was before ingestion-v4. See
+    tables/text_rows.field_view.
     """
     return [
-        (number, text_rows.mask(text or ""))
+        (number, text_rows.field_view(text or ""))
         for number, text in content.pages.order_by("page_number").values_list(
             "page_number", "text"
         )

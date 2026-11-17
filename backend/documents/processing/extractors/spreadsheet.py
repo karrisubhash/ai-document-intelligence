@@ -189,7 +189,9 @@ def build_pages(
     """One sheet's rows as pages: tables as structure, the sheet named."""
     paged = len(rows) > ROWS_PER_PAGE
     pages: list = []
-    header = None
+    # Whether the previous page ended inside a table: its last block was
+    # stored as a table and ran to the page's last row.
+    open_table = False
 
     for start in range(0, max(len(rows), 1), ROWS_PER_PAGE):
         window = rows[start : start + ROWS_PER_PAGE]
@@ -197,31 +199,32 @@ def build_pages(
 
         label = f"Sheet: {name}" if name else ""
         if paged:
-            span = f"rows {start + 1}-{start + len(window)}"
+            span = f"sheet rows {start + 1}-{start + len(window)}"
             label = f"{label} ({span})" if label else f"({span})"
         if label:
             builder.add_text(label)
 
         blocks = _blocks(window)
 
-        # A table that runs on from the previous page has no header row here;
-        # the first page's is repeated so a row still carries its columns.
-        # It also keeps that table's number and goes on counting its rows, so
-        # "row 612" of a long sheet is row 612 on every page it is cited from.
-        continues = start > 0 and any(rows[start - 1])
+        # A table that runs on from the previous page keeps its number, its
+        # labels and its row count (LAYOUT_ANALYSIS carries them over), so
+        # its rows here read like its rows there. It runs on only if the
+        # previous page ended inside it AND this page starts with it: a blank
+        # first row here, or a note that ended the page before, starts anew.
+        starts_here = bool(window) and any(window[0])
+        stored = False
         for position, block in enumerate(blocks):
-            joined = position == 0 and continues
-            choice = _header_choice(block)
+            joined = position == 0 and open_table and starts_here
             if joined:
-                # Its first row is data, whatever it looks like: the header is
-                # the one the table had on the page before, or there is none.
-                if header is not None:
-                    block = [header, *block]
-                choice = header is not None
-            builder.add_table(block, header=choice, continues=joined)
-            # The header of the table still open at the end of this page.
-            header = block[0] if choice is True else None
+                # Its first row is data, whatever it looks like.
+                stored = builder.add_table(block, header=False, continues=True)
+            else:
+                choice = _header_choice(block)
+                # A sheet's first row taken for its header is a guess, and is
+                # checked as one.
+                stored = builder.add_table(block, header=choice, header_declared=False)
 
+        open_table = bool(blocks) and stored and bool(window) and any(window[-1])
         pages.append(builder)
 
     out = []

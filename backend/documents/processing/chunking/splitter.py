@@ -168,14 +168,13 @@ FIGURE = "FIGURE"
 FIGURE_CHUNK_SIZE = 1800
 
 
-def _row_at(text: str, offset: int):
-    """The row number of the row line that `offset` falls in, or None."""
+def _line_at(text: str, offset: int):
+    """The row line that `offset` falls in, parsed, or None."""
     line_start = text.rfind("\n", 0, offset) + 1
     line_end = text.find("\n", offset)
     if line_end == -1:
         line_end = len(text)
-    parsed = text_rows.parse_line(text[line_start:line_end])
-    return parsed.row if parsed is not None else None
+    return text_rows.parse_line(text[line_start:line_end])
 
 
 def _row_metadata(text: str, span, region, part: int, parts: int) -> dict:
@@ -198,15 +197,18 @@ def _row_metadata(text: str, span, region, part: int, parts: int) -> dict:
         # groups the chunks of one table reads both alike.
         "table_index": region.number - 1,
     }
-    first = _row_at(text, start)
-    last = _row_at(text, max(start, end - 1))
-    metadata["first_row"] = first if first is not None else region.first_row
-    metadata["last_row"] = last if last is not None else metadata["first_row"]
+    first = _line_at(text, start)
+    last = _line_at(text, max(start, end - 1))
+    metadata["first_row"] = first.row if first is not None else region.first_row
+    metadata["last_row"] = last.row if last is not None else metadata["first_row"]
     columns = text_rows.columns_of(chunk_text)
     if columns:
         metadata["columns"] = columns
-    if region.context:
-        metadata["table_context"] = region.context
+    # The title and section of this chunk's own first row: a table's
+    # "Practical" rows are not filed under the section its first rows had.
+    context = first.context if first is not None else region.context
+    if context:
+        metadata["table_context"] = context
     if parts > 1:
         metadata["part"] = part
         metadata["parts"] = parts

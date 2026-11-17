@@ -89,6 +89,7 @@ class DetectedTable:
     # whether this continues the previous page's table.
     header_declared: bool = False
     continues: bool = False
+    column_ids: tuple = ()
 
     @property
     def row_count(self) -> int:

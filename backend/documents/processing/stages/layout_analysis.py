@@ -31,6 +31,7 @@ SKIPPED when neither ran.
 
 from dataclasses import dataclass, replace
 
+from documents.processing import figure_markers
 from documents.processing.context import StageResult
 from documents.processing.figures.exceptions import (
     FigureDetectionError,
@@ -115,11 +116,17 @@ def _run_tables(context):
             if not text.strip():
                 continue
 
+            # A vision model's reading of a figure is kept as it wrote it,
+            # inside its markers: its " | " lines describe a chart, and are
+            # not a table of the document's to number.
+            readings = figure_markers.spans(text)
             for table in detector.detect(page.page_number, text):
                 # The extractor already read this region as cells. Its
                 # reading wins: it saw the document's own structure, where
                 # this saw only whitespace.
                 if _overlaps(table, taken.get(page.page_number, ())):
+                    continue
+                if _overlaps(table, readings):
                     continue
 
                 # Verified per table, on every run. A detector that returns a
@@ -205,6 +212,7 @@ def _structured_tables(context):
                 source_version=recorded.source_version,
                 header_declared=getattr(recorded, "header_declared", False),
                 continues=getattr(recorded, "continues", False),
+                column_ids=tuple(getattr(recorded, "column_ids", ()) or ()),
             )
             if not verify_table(table, text):
                 rejected += 1
@@ -333,6 +341,8 @@ def _write_as_text(context, tables) -> list:
     written_tables = []
     number = 0
     rows_in = {}
+    # The last table written: (its number, its layout, its page).
+    last = None
 
     for page in context.pages:
         mine = by_page.get(page.page_number)
@@ -349,26 +359,36 @@ def _write_as_text(context, tables) -> list:
                 # Overlaps one already written; verification makes this
                 # unreachable, and the text is left as it was if it happens.
                 continue
-            if table.continues and number:
-                table_number, first_row = number, rows_in[number] + 1
+            carry = None
+            if table.continues and last is not None and last[2] == page.page_number - 1:
+                # The rest of the table the page before ended with: its
+                # number, its labels and title, and its row count go on.
+                table_number, carry = last[0], last[1]
+                first_row = rows_in[table_number] + 1
             else:
                 table_number, first_row = number + 1, 1
 
-            written = text_rows.write(
-                table_number,
-                table.rows,
-                table.header,
-                header_declared=table.header_declared,
-                first_row=first_row,
+            options = {
+                "header_declared": table.header_declared,
+                "first_row": first_row,
                 # Read from where words sit on the page, with no ruling or
                 # markup to say where the cells are: a guessed header must
                 # name every column before its words become labels.
-                strict=_from_layout(table.source),
-            )
+                "strict": _from_layout(table.source),
+                "column_ids": table.column_ids or None,
+                "carry": carry,
+            }
+            written = text_rows.write(table_number, table.rows, table.header, **options)
+            if not written.lines:
+                # Nothing read as a row under the header it was given: its
+                # cells are still written, as values, never left as "a | b".
+                options.update(carry=None, plain=True)
+                written = text_rows.write(table_number, table.rows, (), **options)
             if not written.lines:
                 continue
-            number = table_number
-            rows_in[number] = first_row - 1 + written.rows
+            number = max(number, table_number)
+            rows_in[table_number] = first_row - 1 + written.rows
+            last = (table_number, written.layout, page.page_number)
 
             before = text[cursor : table.character_start]
             pieces.append(before)
@@ -377,7 +397,7 @@ def _write_as_text(context, tables) -> list:
             written_tables.append(
                 WrittenTable(
                     page_number=page.page_number,
-                    number=number,
+                    number=table_number,
                     character_start=length,
                     character_end=length + len(written.text),
                     first_row=first_row,

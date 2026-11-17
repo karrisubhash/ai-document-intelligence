@@ -17,7 +17,6 @@ READ_ONLY_ACTIONS = {
     "classification",
     "extraction",
     "chunks",
-    "tables",
     "figures",
     "source",
     # The brief, its related documents and the first-page picture. Read on
@@ -50,7 +49,6 @@ ACTION_TO_AUDIT_EVENT = {
     "classification": AuditLog.Action.DOCUMENT_VIEW,
     "extraction": AuditLog.Action.DOCUMENT_VIEW,
     "chunks": AuditLog.Action.DOCUMENT_VIEW,
-    "tables": AuditLog.Action.DOCUMENT_VIEW,
     "figures": AuditLog.Action.DOCUMENT_VIEW,
     "source": AuditLog.Action.DOCUMENT_VIEW,
     "archive": AuditLog.Action.DOCUMENT_ARCHIVE,

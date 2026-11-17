@@ -123,16 +123,21 @@ def clean_cell(text) -> str:
 
 def _grid(rows) -> list:
     """Cleaned, rectangular, with empty rows and empty columns removed."""
+    return _grid_and_columns(rows)[0]
+
+
+def _grid_and_columns(rows) -> tuple:
+    """(grid, the positions in `rows` of the columns the grid kept)."""
     cleaned = [[clean_cell(cell) for cell in row] for row in rows]
     cleaned = [row for row in cleaned if any(row)]
     if not cleaned:
-        return []
+        return [], []
 
     width = max(len(row) for row in cleaned)
     cleaned = [row + [""] * (width - len(row)) for row in cleaned]
 
     keep = [column for column in range(width) if any(row[column] for row in cleaned)]
-    return [[row[column] for column in keep] for row in cleaned]
+    return [[row[column] for column in keep] for row in cleaned], keep
 
 
 def _row_text(cells: list) -> str:
@@ -194,25 +199,30 @@ class PageBuilder:
         source: str | None = None,
         source_version: str | None = None,
         continues: bool = False,
+        header_declared: bool | None = None,
     ) -> bool:
         """Write a table and record where it landed.
 
         `header`: "auto" (the same narrow guess the text detector makes),
         True (the first row is the header), or False (none). The header is
-        always the first row: the Tables tab, the chunks and the answerer's
-        notes all take it to be, and a table whose first row is its title
-        ("IIIrd Year - Semester II") has the title for its header, which is
-        what tells its chunks apart from the next semester's.
+        always the first row. `header_declared` says whether the source
+        declared it; by default a header passed as True is declared, but a
+        caller whose True is its own guess (a sheet's first row) says False,
+        so the guess is checked like any other (tables/text_rows.py).
+
+        `continues`: the rest of the table the previous page ended with (a
+        long sheet). One row is enough for that: it is a row of a table.
 
         Returns whether it was stored as a table. A grid with one row or
         one column is not one - it is a label, or a list - so it is written
         as plain text instead and returns False. Nothing is dropped.
         """
-        grid = _grid(rows)
+        grid, column_ids = _grid_and_columns(rows)
         if not grid:
             return False
 
-        if len(grid) < MIN_ROWS or len(grid[0]) < MIN_COLUMNS:
+        too_few_rows = len(grid) < MIN_ROWS and not continues
+        if too_few_rows or len(grid[0]) < MIN_COLUMNS:
             self._add_degenerate(rows, grid)
             return False
 
@@ -238,8 +248,11 @@ class PageBuilder:
                     if source_version is not None
                     else self.source_version
                 ),
-                header_declared=header is True,
+                header_declared=(
+                    header is True if header_declared is None else header_declared
+                ),
                 continues=continues,
+                column_ids=tuple(column_ids),
             )
         )
         return True

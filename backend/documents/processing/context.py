@@ -57,6 +57,10 @@ class PageTable:
     # The rest of the previous page's table (a long sheet split into pages):
     # it keeps that table's number and goes on counting its rows.
     continues: bool = False
+    # Where each of `rows`' columns was in what the extractor read, before
+    # columns empty in this block were dropped: how a continuation's values
+    # are matched to the labels of the page before.
+    column_ids: tuple = ()
 
 
 @dataclass
