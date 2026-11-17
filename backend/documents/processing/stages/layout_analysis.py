@@ -311,6 +311,12 @@ class WrittenTable:
         return self.last_row - self.first_row + 1
 
 
+def _from_layout(source: str) -> bool:
+    """A table found by where its words sit rather than by ruling or markup:
+    the text detector's (no source), a borderless PDF table, an OCR'd one."""
+    return not source or source.endswith(":layout")
+
+
 def _write_as_text(context, tables) -> list:
     """Replace every table's span in its page with its labelled rows.
 
@@ -354,6 +360,10 @@ def _write_as_text(context, tables) -> list:
                 table.header,
                 header_declared=table.header_declared,
                 first_row=first_row,
+                # Read from where words sit on the page, with no ruling or
+                # markup to say where the cells are: a guessed header must
+                # name every column before its words become labels.
+                strict=_from_layout(table.source),
             )
             if not written.lines:
                 continue

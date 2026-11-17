@@ -49,6 +49,7 @@ LABELLED = "labelled"
 def is_labelled(chunk) -> bool:
     return (getattr(chunk, "metadata", None) or {}).get("layout") == LABELLED
 
+
 # How many below-floor table passages may be shown to the model. Two is a
 # table and its neighbour; more is the floor not being applied at all.
 MAX_ADMITTED_TABLES = 2
@@ -378,9 +379,7 @@ def _mentions(folded: str, numbers: set, value: str) -> bool:
     wanted = " ".join(value.split()).casefold()
     if not wanted:
         return False
-    return (
-        re.search(rf"(?<![\w]){re.escape(wanted)}(?![\w])", folded) is not None
-    )
+    return re.search(rf"(?<![\w]){re.escape(wanted)}(?![\w])", folded) is not None
 
 
 def rows_supporting(text: str, statement: str) -> list:
@@ -438,10 +437,12 @@ def table_reference(chunk, statement: str = "") -> dict | None:
     first = int(metadata.get("first_row") or 1)
     last = max(first, int(metadata.get("last_row") or first))
 
+    every = list(range(first, last + 1))
     rows = rows_supporting(chunk.text or "", statement) if statement else []
-    narrowed = bool(rows)
-    if not rows:
-        rows = list(range(first, last + 1))
+    # Narrowed only when the statement picks out some rows and not all of them.
+    narrowed = bool(rows) and rows != every
+    if not narrowed:
+        rows = every
 
     reference = {
         "number": number,

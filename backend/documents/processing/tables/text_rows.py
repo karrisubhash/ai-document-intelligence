@@ -42,7 +42,12 @@ and the brief all read and write the one format.
 import re
 from dataclasses import dataclass, field
 
-from documents.processing.extractors.compose import clean_cell, looks_like_value
+from documents.processing.extractors.compose import (
+    _DATE,
+    _is_identifier,
+    clean_cell,
+    looks_like_value,
+)
 from documents.processing.tables.detector import NUMERIC, guess_header
 
 PAIR_SEPARATOR = "; "
@@ -131,6 +136,7 @@ def _is_spanning_label(row, width: int) -> bool:
         bool(re.search(r"[^\W\d_]", text))
         and len(text.split()) <= MAX_SECTION_WORDS
         and not NUMERIC.match(text)
+        and _clean_label(text)
     )
 
 
@@ -138,20 +144,27 @@ def _label(text: str) -> str:
     return text.strip().rstrip(":").strip()
 
 
-def _reads_as_header(row, body) -> bool:
+def _reads_as_header(row, body, *, strict: bool = False) -> bool:
     """Whether a guessed first row really names the columns below it.
 
     Column names are not values (no figure, date, identifier or "label:
-    value"), are all different, and do not turn up again in their own column:
-    "Professor" in the first row of a staff list that has more professors
-    below it is a row of data, not the name of a column.
+    value"), are nearly all different, and do not turn up again in their own
+    column: "Professor" in the first row of a staff list that has more
+    professors below it is a row of data, not the name of a column. Under
+    real column names each column holds one kind of thing; a column of two
+    names and a roll number is a form whose first row was guessed as its
+    header ("Certified that | KARRI SUBHASH").
+
+    `strict` is for a table read from layout alone (no ruling, no markup):
+    every column with values in it must be named, other than the first.
     """
     labels = [cell for cell in row if cell]
     if len(labels) < 2:
         return False
-    if any(looks_like_value(cell) for cell in labels):
+    if any(looks_like_value(cell) or _SENTENCE.search(cell) for cell in labels):
         return False
-    if len({cell.casefold() for cell in labels}) != len(labels):
+    distinct = len({cell.casefold() for cell in labels})
+    if (len(labels) - distinct) * 3 > len(labels):
         return False
     for index, cell in enumerate(row):
         if not cell:
@@ -163,18 +176,108 @@ def _reads_as_header(row, body) -> bool:
                 continue
             if index < len(other) and other[index].casefold() == wanted:
                 return False
+    if _mixed_column(row, body):
+        return False
+    if strict and any(
+        not row[index] and any(other[index] for other in body)
+        for index in range(1, len(row))
+    ):
+        return False
+    if strict and not all(_clean_label(cell) for cell in labels):
+        return False
     return bool(guess_header([row, *body])) or _all_text_header(row, body)
+
+
+# A cell with no letters or digits, or a short word for "none" ("-", "NA",
+# "Nil", "AB"), says nothing about what kind of column it is in.
+_NEUTRAL = re.compile(r"^(?:[^\w]*|[A-Za-z]{1,3}\.?)$")
+
+
+def _mixed_column(row, body, *, share: int = 3) -> bool:
+    """Whether some column below `row` mixes words with figures, dates or
+    codes: at least 1/`share` of its cells each way (three cells at least).
+    Rows that are a section label ("Practical") are not cells of a column."""
+    width = len(row)
+    cells_of = [
+        other for other in body if not (width >= 3 and _is_spanning_label(other, width))
+    ]
+    for index in range(width):
+        kinds = [
+            _kind(other[index])
+            for other in cells_of
+            if index < len(other) and other[index] and not _NEUTRAL.match(other[index])
+        ]
+        if len(kinds) < 3:
+            continue
+        words = kinds.count("text")
+        values = len(kinds) - words
+        if words and values and min(words, values) * share >= len(kinds):
+            return True
+    return False
+
+
+# Punctuation that ends or joins clauses: a cell with it is a piece of prose.
+_PROSE = re.compile(r"[,;，。；、]|[.!?](?:\s|$)")
+# The same, in any guessed column name: a sentence's full stop or a CJK
+# clause mark, or a comma or semicolon at its end ("而网站，", "students,").
+_SENTENCE = re.compile(r"[，。；]|[,;]$|[.!?]\s")
+
+# Brackets, the full-width ones too: a PDF can open with "（" and close
+# with ")".
+_OPENING = "([{（［｛"
+_CLOSING = ")]}）］｝"
 
 
 def _all_text_header(row, body) -> bool:
     """A header over text columns, which the narrow figure-based guess cannot
-    see: three or more columns, every one named, and a body below it."""
-    return len(row) >= 3 and all(row) and len(body) >= 1
+    see: three or more columns, every one named with a short label (at most
+    four words and thirty characters, no clause punctuation), and a body
+    below it. Fragments of running text laid out in columns are not labels."""
+    if len(row) < 3 or not all(row) or not body:
+        return False
+    return all(
+        len(cell.split()) <= 4 and len(cell) <= 30 and not _PROSE.search(cell)
+        for cell in row
+    )
 
 
-def _figures(cells) -> bool:
-    values = [cell for cell in cells if cell]
-    return bool(values) and all(_FIGURE.match(cell.replace(" ", "")) for cell in values)
+def _clean_label(text: str) -> bool:
+    """A title, section or guessed column name must not be a fragment cut out
+    of a line: no opening bracket left unclosed, none closed that was never
+    opened, and not starting with a bracket or a bullet."""
+    if _BULLET.match(text) or text[:1] in _OPENING:
+        return False
+    depth = 0
+    for ch in text:
+        if ch in _OPENING:
+            depth += 1
+        elif ch in _CLOSING:
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _kind(cell: str) -> str:
+    """ "figure", "date", "code" (a roll number, a course code) or "text"."""
+    if _FIGURE.match(cell.replace(" ", "")):
+        return "figure"
+    if len(cell.split()) <= 4 and _DATE.search(cell):
+        return "date"
+    if len(cell.split()) == 1 and _is_identifier(cell):
+        return "code"
+    return "text"
+
+
+def _one_column_of_values(cells) -> bool:
+    """Whether a two-column table's second column is one kind of value under
+    a header that names it: figures (even one), or two or more dates or two or
+    more codes. A column of mixed kinds - a name, a roll number, a date - is
+    the values of a form, each named by its own row."""
+    kinds = [_kind(cell) for cell in cells if cell]
+    if not kinds or len(set(kinds)) != 1 or kinds[0] == "text":
+        return False
+    return kinds[0] == "figure" or len(kinds) >= 2
 
 
 @dataclass
@@ -187,7 +290,39 @@ class _Plan:
     header_row: list | None = None
 
 
-def _plan(grid, header, header_declared: bool) -> _Plan:
+_FUNCTION_WORDS = frozenset(
+    "a an the of and or to in on at for with by from as is are be".split()
+)
+_BULLET = re.compile(r"^[•·▪◦‣○●■□➢➤✓✔*\-–]")
+
+
+def _label_like(key: str) -> bool:
+    """Whether a two-column table's first cell reads as the name of the value
+    beside it ("Roll No", "Date of birth", "CO-1"), rather than half of a line
+    of text that runs across both columns ("relative positions of"), a bullet,
+    or a figure."""
+    words = key.split()
+    if not words or len(words) > 6:
+        return False
+    if _BULLET.match(key) or NUMERIC.match(key) or looks_like_value(key):
+        return False
+    if sum(ch.isdigit() for ch in key) >= 2:
+        return False
+    if not (key[0].isupper() or key[0].isdigit()):
+        return False
+    return words[-1].casefold().strip(".,") not in _FUNCTION_WORDS
+
+
+def _is_form(rows) -> bool:
+    """A two-column table of labels and values: in most rows that have both
+    cells, the first reads as a label."""
+    both = [row for row in rows if row[0] and row[1]]
+    if not both:
+        return False
+    return sum(_label_like(row[0]) for row in both) * 5 >= len(both) * 3
+
+
+def _plan(grid, header, header_declared: bool, strict: bool = False) -> _Plan:
     width = len(grid[0])
 
     # Titles: spanning rows at the very top, above at least one more row.
@@ -210,28 +345,45 @@ def _plan(grid, header, header_declared: bool) -> _Plan:
         return _Plan(title, [_label(cell) for cell in first], False, body, first)
 
     declared = (
-        header_declared
-        and top == 0
-        and header == grid[0]
-        and len(_filled(first)) >= 2
+        header_declared and top == 0 and header == grid[0] and len(_filled(first)) >= 2
     )
     if declared and body:
         return labelled()
 
     if width == 2:
-        # A label and its value, unless the second column is a column of
-        # figures under a header that names it ("Programme | Fee").
-        if body and _reads_as_header(first, body) and _figures(r[1] for r in body):
+        # A label and its value, unless the second column is one kind of
+        # value under a header that names it ("Programme | Fee"). Written as
+        # pairs, no value can be given the wrong label: each line pairs the
+        # two cells of its own row.
+        if (
+            body
+            and _reads_as_header(first, body, strict=strict)
+            and _one_column_of_values(r[1] for r in body)
+        ):
             return labelled()
-        return _Plan(title, None, True, rows)
+        # Two columns of text side by side, or a numbered list, are written
+        # as they are; only a form is written as labels and values.
+        return _Plan(title, None, _is_form(rows), rows)
 
     # A header the source did not declare must read as one. What the
     # extractor guessed is not trusted on its own: under a title, its guess
     # was the title.
-    if body and _reads_as_header(first, body):
+    if body and _reads_as_header(first, body, strict=strict):
         return labelled()
 
-    return _Plan(title, None, False, rows)
+    # A wider form: labels down the first column, and beside them values of
+    # every kind - a name, a roll number - which no column of a table holds.
+    form = _is_form(rows) and (
+        _mixed_column([""], [[row[1]] for row in rows], share=len(rows))
+        or _colons(rows)
+    )
+    return _Plan(title, None, form, rows)
+
+
+def _colons(rows) -> bool:
+    """Most first cells end with a colon ("Name:", "Roll No:")."""
+    keys = [row[0] for row in rows if row[0]]
+    return bool(keys) and sum(key.endswith(":") for key in keys) * 2 > len(keys)
 
 
 def _pair(key: str, value: str) -> list:
@@ -240,9 +392,9 @@ def _pair(key: str, value: str) -> list:
         return [("", value)] if value else []
     if not value:
         return [("", key)]
-    if NUMERIC.match(key) or looks_like_value(key):
-        # "1 | Introduction", "2024-25 | 85000": the first column is not a
-        # label, so it is not written as one.
+    if not _label_like(key):
+        # "1 | Introduction", "Intermediate (MPC) 94.5% | 2022 - 2024": this
+        # row's first cell is not a label, so it is not written as one.
         return [("", key), ("", value)]
     return [(_label(key), value)]
 
@@ -261,19 +413,21 @@ def write(
     *,
     header_declared: bool = False,
     first_row: int = 1,
+    strict: bool = False,
 ) -> Written:
     """Table `number`'s rows as labelled lines, numbered from `first_row`.
 
     `header` is what the extractor recorded (always its first row, or empty);
     `header_declared` says whether the source declared it, rather than it being
-    guessed. Empty cells are left out of a row; a row that only repeats the
-    header (a header printed again on a continuation page) is not a row.
+    guessed. `strict` asks more of a guessed header, for a table read from
+    layout alone. Empty cells are left out of a row; a row that only repeats
+    the header (a header printed again on a continuation page) is not a row.
     """
     grid = _cells(rows)
     if not grid:
         return Written(lines=[], rows=0, labelled=False)
 
-    plan = _plan(grid, header, header_declared)
+    plan = _plan(grid, header, header_declared, strict)
     width = len(grid[0])
     section = ""
     lines = []
@@ -284,13 +438,16 @@ def write(
         if plan.header_row is not None and row == plan.header_row:
             # The header printed again, on a continuation page.
             continue
-        if _is_spanning_label(row, width):
-            # A section inside the table: it names the rows under it.
+        if plan.labels is not None and _is_spanning_label(row, width):
+            # A section of a table with named columns ("Practical" among the
+            # courses of a semester): it names the rows under it. In a table
+            # without them it is just a row - a syllabus's "UNIT - II" row
+            # would otherwise be filed under the unit before it.
             section = row[0]
             continue
 
         if plan.pairs:
-            pairs = _pair(row[0], row[1])
+            pairs = _pair(row[0], row[1]) + [("", cell) for cell in row[2:] if cell]
         elif plan.labels is not None:
             pairs = [
                 (plan.labels[index], cell) for index, cell in enumerate(row) if cell
@@ -312,12 +469,7 @@ def write(
         )
         lines.append(_prefix(number, [*plan.title, section], number_in_table) + body)
 
-    return Written(
-        lines=lines,
-        rows=count,
-        labelled=plan.labels is not None or plan.pairs,
-        columns=columns,
-    )
+    return Written(lines=lines, rows=count, labelled=bool(columns), columns=columns)
 
 
 # -- reading ----------------------------------------------------------------
@@ -434,7 +586,7 @@ def mask(text: str) -> str:
 
 
 def reference(first_row: int, last_row: int, number: int) -> str:
-    """"Table 2, row 4" or "Table 2, rows 4-9", as a citation shows it."""
+    """ "Table 2, row 4" or "Table 2, rows 4-9", as a citation shows it."""
     if first_row == last_row:
         return f"Table {number}, row {first_row}"
     return f"Table {number}, rows {first_row}-{last_row}"

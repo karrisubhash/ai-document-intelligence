@@ -252,7 +252,7 @@ class StructuredTableStageTests(SimpleTestCase):
         text, tables = builder.build()
         return ExtractedPage(page_number=number, text=text, tables=tables)
 
-    def test_an_extractor_table_is_stored_once_with_its_source(self):
+    def test_an_extractor_table_is_written_once_as_labelled_rows(self):
         context = _context(self._page())
 
         note, metadata = layout_analysis._run_tables(context)
@@ -260,8 +260,22 @@ class StructuredTableStageTests(SimpleTestCase):
         self.assertEqual(len(context.tables), 1, "the text detector duplicated it")
         table = context.tables[0]
         self.assertEqual(table.source, "demo-extractor")
-        self.assertEqual(table.rows[2], ["B.Tech ECE", ""])
+        self.assertEqual((table.number, table.first_row, table.last_row), (1, 1, 2))
+        page = context.pages[0]
+        self.assertEqual(
+            page.text,
+            "Fee structure\n\n"
+            "Table 1, row 1: Programme: B.Tech CSE; Tuition: 85000\n"
+            "Table 1, row 2: Programme: B.Tech ECE",
+        )
+        self.assertEqual(
+            page.text[table.character_start : table.character_end],
+            "Table 1, row 1: Programme: B.Tech CSE; Tuition: 85000\n"
+            "Table 1, row 2: Programme: B.Tech ECE",
+        )
+        self.assertEqual(page.tables, [], "the grid was kept beside the text")
         self.assertEqual(metadata["table_sources"], ["demo-extractor"])
+        self.assertEqual(metadata["table_rows"], 2)
         self.assertIn("1 table", note)
 
     @override_settings(DOCUMENT_TABLE_DETECTOR="")
@@ -281,7 +295,13 @@ class StructuredTableStageTests(SimpleTestCase):
 
         sources = [table.source for table in context.tables]
         self.assertEqual(sources, ["demo-extractor", ""])
-        self.assertEqual(context.tables[1].rows[0], ["Course", "Marks"])
+        text = context.pages[0].text
+        found = context.tables[1]
+        self.assertEqual(
+            text[found.character_start : found.character_end],
+            "Table 2, row 1: Course: CS301; Marks: 84\n"
+            "Table 2, row 2: Course: CS302; Marks: 69",
+        )
 
     def test_tables_are_numbered_in_reading_order_across_pages(self):
         context = _context(self._page(1), self._page(2))
@@ -289,8 +309,40 @@ class StructuredTableStageTests(SimpleTestCase):
         layout_analysis._run_tables(context)
 
         self.assertEqual(
-            [(t.page_number, t.table_index) for t in context.tables],
-            [(1, 0), (2, 1)],
+            [(t.page_number, t.number) for t in context.tables],
+            [(1, 1), (2, 2)],
+        )
+        self.assertIn("Table 2, row 1: Programme: B.Tech CSE", context.pages[1].text)
+
+    def test_the_rest_of_a_sheet_keeps_its_table_number_and_row_count(self):
+        """A long sheet split across pages is one table: its second page goes
+        on from the row the first page ended at, under the same number."""
+        first = compose.PageBuilder(source="sheet")
+        first.add_table(
+            [["Name", "Marks", "Grade"], ["Asha", "91", "O"], ["Ravi", "78", "A"]],
+            header=True,
+        )
+        second = compose.PageBuilder(source="sheet")
+        second.add_table(
+            [["Name", "Marks", "Grade"], ["Priya", "88", "A+"]],
+            header=True,
+            continues=True,
+        )
+        pages = []
+        for number, builder in enumerate((first, second), start=1):
+            text, tables = builder.build()
+            pages.append(ExtractedPage(page_number=number, text=text, tables=tables))
+        context = _context(*pages)
+
+        layout_analysis._run_tables(context)
+
+        self.assertEqual(
+            context.pages[1].text,
+            "Table 1, row 3: Name: Priya; Marks: 88; Grade: A+",
+        )
+        self.assertEqual(
+            [(t.number, t.first_row, t.last_row) for t in context.tables],
+            [(1, 1, 2), (1, 3, 3)],
         )
 
     def test_a_span_that_does_not_hold_its_cells_is_refused(self):

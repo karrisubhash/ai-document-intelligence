@@ -19,6 +19,8 @@ from documents.processing.tables import detector
 from documents.processing.tables import service as table_service
 from documents.tests import MEDIA_ROOT, make_user
 
+NL, TAB, NUL = chr(10), chr(9), chr(0)
+
 FEE_TABLE = (
     "FEE STRUCTURE 2024\n"
     "Programme\tTuition\tExam Fee\n"
@@ -160,46 +162,70 @@ class PipelineTableTests(TestCase):
         run_pipeline(job.id)
         return version, job
 
-    def test_a_table_is_stored_with_the_content(self):
+    def page_text(self, version) -> str:
+        content = DocumentContent.objects.get(document_version=version)
+        return content.pages.get(page_number=1).text
+
+    def test_a_table_is_written_into_the_page_as_labelled_rows(self):
         version, _ = self.process(FEE_TABLE.encode())
 
-        tables = DocumentTable.objects.filter(document_version=version)
-        self.assertEqual(tables.count(), 1)
-        table = tables.first()
-        self.assertEqual(table.header, ["Programme", "Tuition", "Exam Fee"])
-        self.assertEqual(table.row_count, 3)
-        self.assertEqual(table.column_count, 3)
+        self.assertEqual(
+            self.page_text(version),
+            NL.join(
+                [
+                    "FEE STRUCTURE 2024",
+                    "Table 1, row 1: Programme: B.Tech CSE; Tuition: 85000; "
+                    "Exam Fee: 2500",
+                    "Table 1, row 2: Programme: B.Tech ECE; Tuition: 82000; "
+                    "Exam Fee: 2500",
+                    "",
+                    "All fees are payable before the semester begins.",
+                    "",
+                ]
+            ),
+        )
+        self.assertFalse(
+            DocumentTable.objects.filter(document_version=version).exists(),
+            "a grid was stored beside the text",
+        )
 
-    def test_stored_spans_index_the_stored_page_text(self):
-        """The bug this exists to catch: detection runs on the in-memory
-        page text and the pipeline stores a NUL-stripped copy. If the two
-        normalizations ever diverge, every span after the first NUL points
-        a few characters left and verification rejects real rows."""
+    def test_table_chunks_reslice_and_carry_their_reference(self):
+        """Every chunk of a table is a slice of the stored page that opens with
+        its table and row, and says so in its metadata. The bug the old form
+        of this test caught still applies: detection runs on the in-memory
+        text and the pipeline stores a NUL-stripped copy."""
         version, _ = self.process(FEE_TABLE.encode())
 
         content = DocumentContent.objects.get(document_version=version)
         page = content.pages.get(page_number=1)
+        chunks = [c for c in content.chunks.all() if c.metadata.get("kind") == "TABLE"]
 
-        for table in content.tables.all():
-            region = page.text[table.character_start : table.character_end]
-            for row in table.rows:
-                for cell in row:
-                    self.assertIn(cell, region)
+        self.assertEqual(len(chunks), 1)
+        chunk = chunks[0]
+        self.assertEqual(
+            page.text[chunk.character_start : chunk.character_end], chunk.text
+        )
+        self.assertTrue(chunk.text.startswith("Table 1, row 1: "))
+        self.assertEqual(chunk.metadata["table_number"], 1)
+        self.assertEqual(
+            (chunk.metadata["first_row"], chunk.metadata["last_row"]), (1, 2)
+        )
+        self.assertEqual(
+            chunk.metadata["columns"], ["Programme", "Tuition", "Exam Fee"]
+        )
 
     def test_a_nul_byte_in_the_page_does_not_shift_spans(self):
-        body = FEE_TABLE.replace("FEE STRUCTURE", "FEE\x00STRUCTURE").encode()
+        body = FEE_TABLE.replace("FEE STRUCTURE", "FEE" + NUL + "STRUCTURE").encode()
         version, _ = self.process(body)
 
-        content = DocumentContent.objects.get(document_version=version)
-        page = content.pages.get(page_number=1)
-        self.assertNotIn("\x00", page.text)
+        text = self.page_text(version)
+        self.assertNotIn(NUL, text)
+        self.assertIn(
+            "Table 1, row 1: Programme: B.Tech CSE; Tuition: 85000; Exam Fee: 2500",
+            text,
+        )
 
-        tables = list(content.tables.all())
-        self.assertEqual(len(tables), 1)
-        region = page.text[tables[0].character_start : tables[0].character_end]
-        self.assertIn("85000", region)
-
-    def test_reprocessing_replaces_tables_rather_than_duplicating_them(self):
+    def test_a_retry_of_one_job_does_not_write_its_rows_twice(self):
         version, _ = self.process(FEE_TABLE.encode())
         job = ProcessingJob.objects.create(document_version=version)
         run_pipeline(job.id)
@@ -210,10 +236,13 @@ class PipelineTableTests(TestCase):
         # accumulating copies.
         run_pipeline(job.id)
 
+        contents = DocumentContent.objects.filter(processing_job=job)
+        self.assertEqual(contents.count(), 1)
+        text = contents.get().pages.get(page_number=1).text
         self.assertEqual(
-            DocumentTable.objects.filter(processing_job=job).count(),
+            text.count("Table 1, row 1: "),
             1,
-            "a retry of one job accumulated duplicate tables",
+            "a retry of one job wrote its table twice",
         )
 
     def test_the_stage_is_skipped_only_when_neither_detector_is_set(self):
@@ -222,8 +251,9 @@ class PipelineTableTests(TestCase):
             figure_service.reset_detector_cache()
             version, job = self.process(FEE_TABLE.encode())
 
-        self.assertEqual(
-            DocumentTable.objects.filter(document_version=version).count(), 0
+        # Nothing read the table, so its text is left as the file had it.
+        self.assertIn(
+            TAB.join(["B.Tech CSE", "85000", "2500"]), self.page_text(version)
         )
         event = job.events.get(stage=ProcessingJob.Stage.LAYOUT_ANALYSIS)
         self.assertEqual(event.status, "SKIPPED")
@@ -235,9 +265,7 @@ class PipelineTableTests(TestCase):
             table_service.reset_detector_cache()
             version, job = self.process(FEE_TABLE.encode())
 
-        self.assertEqual(
-            DocumentTable.objects.filter(document_version=version).count(), 0
-        )
+        self.assertNotIn("Table 1, row", self.page_text(version))
         event = job.events.get(stage=ProcessingJob.Stage.LAYOUT_ANALYSIS)
         self.assertEqual(event.status, "SUCCEEDED")
         self.assertIn("figure", event.message.lower())
@@ -245,9 +273,7 @@ class PipelineTableTests(TestCase):
     def test_a_document_with_no_tables_still_processes(self):
         version, job = self.process(PROSE.encode(), name="minutes.txt")
 
-        self.assertEqual(
-            DocumentTable.objects.filter(document_version=version).count(), 0
-        )
+        self.assertNotIn("Table 1, row", self.page_text(version))
         job.refresh_from_db()
         self.assertEqual(job.status, ProcessingJob.Status.COMPLETED)
 
@@ -262,11 +288,9 @@ class PipelineTableTests(TestCase):
             table_service.reset_detector_cache()
             liar_version, liar_job = self.process(FEE_TABLE.encode())
 
-        self.assertEqual(
-            DocumentTable.objects.filter(document_version=liar_version).count(),
-            0,
-            "a fabricated table was stored",
-        )
+        text = self.page_text(liar_version)
+        self.assertNotIn("Table 1, row", text, "a fabricated table was written")
+        self.assertNotIn("95000", text)
         event = liar_job.events.get(stage=ProcessingJob.Stage.LAYOUT_ANALYSIS)
         self.assertIn("rejected 1", event.message.lower())
 

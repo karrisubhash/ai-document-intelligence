@@ -136,13 +136,15 @@ class NewFormatPipelineTests(AuthenticatedAPITestCase):
         self.assertEqual(page.metadata["sheet"], "Fees")
         self.assertEqual(page.metadata["extractor"], "openpyxl")
 
-        table = DocumentTable.objects.get(document_version=document.current_version)
-        self.assertEqual(table.detector, "openpyxl:sheet")
-        self.assertEqual(table.rows[2], ["B.Tech ECE", "", "2500"])
-        self.assertEqual(table.header, ["Programme", "Tuition", "Exam Fee"])
-        self.assertEqual(
-            page.text[table.character_start : table.character_end].split("\n")[2],
-            "B.Tech ECE |  | 2500",
+        # The sheet's table is its labelled rows; the blank tuition cell is
+        # left out of its row rather than shifting the exam fee into it.
+        self.assertFalse(
+            DocumentTable.objects.filter(
+                document_version=document.current_version
+            ).exists()
+        )
+        self.assertIn(
+            "Table 1, row 2: Programme: B.Tech ECE; Exam Fee: 2500", page.text
         )
 
     def test_the_table_reaches_the_search_index_as_a_table_chunk(self):
@@ -190,11 +192,12 @@ class NewFormatPipelineTests(AuthenticatedAPITestCase):
         self.assertEqual(
             page.extraction_method, PageContent.ExtractionMethod.SPREADSHEET
         )
-        table = DocumentTable.objects.get(document_version=document.current_version)
-        self.assertEqual(table.detector, "csv:sheet")
         self.assertEqual(
-            table.rows,
-            [["Course", "Fee", "Seats"], ["CS101", "5000", "60"], ["CS102", "", "45"]],
+            page.text.split(chr(10))[-2:],
+            [
+                "Table 1, row 1: Course: CS101; Fee: 5000; Seats: 60",
+                "Table 1, row 2: Course: CS102; Seats: 45",
+            ],
         )
 
     def test_a_tsv_is_read_as_a_table(self):
@@ -204,8 +207,9 @@ class NewFormatPipelineTests(AuthenticatedAPITestCase):
             "text/tab-separated-values",
         )
 
-        table = DocumentTable.objects.get(document_version=document.current_version)
-        self.assertEqual(table.rows[1], ["CS101", "5000"])
+        (page,) = self.pages(document)
+        self.assertIn("Table 1, row 1: Course: CS101; Fee: 5000", page.text)
+        self.assertIn("Table 1, row 2: Course: CS102; Fee: 6000", page.text)
 
     def test_a_binary_file_renamed_csv_is_not_parsed_into_noise(self):
         document, job = self.upload_expecting_failure(
@@ -228,12 +232,11 @@ class NewFormatPipelineTests(AuthenticatedAPITestCase):
         self.assertIn("Notes: Remind them about the hall tickets.", first.text)
         self.assertNotIn("Notes:", second.text)
 
-        tables = DocumentTable.objects.filter(
-            document_version=document.current_version
-        ).order_by("table_index")
-        self.assertEqual([t.page_number for t in tables], [1, 2])
-        self.assertEqual(tables[0].detector, "python-pptx:table")
-        self.assertEqual(tables[0].rows, [["Paper", "Date"], ["Maths", "2024-05-03"]])
+        # One table per slide, numbered across the deck. A two-column table
+        # with one row under its first is read as labels and values: no value
+        # can be given another row's label that way.
+        self.assertIn("Table 1, row 2: Maths: 2024-05-03", first.text)
+        self.assertIn("Table 2, row 2: Maths: 2024-05-03", second.text)
 
     @override_settings(MAX_DOCUMENT_PAGES=2)
     def test_a_deck_over_the_page_limit_is_refused(self):

@@ -191,7 +191,7 @@ def build_pages(
     pages: list = []
     header = None
 
-    for index, start in enumerate(range(0, max(len(rows), 1), ROWS_PER_PAGE)):
+    for start in range(0, max(len(rows), 1), ROWS_PER_PAGE):
         window = rows[start : start + ROWS_PER_PAGE]
         builder = compose.PageBuilder(source=source, source_version=source_version)
 

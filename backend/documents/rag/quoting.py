@@ -606,7 +606,8 @@ def _columns(passage) -> tuple:
     """A table passage's column labels: the header held beside " | " rows (a
     pass before ingestion-v4), or the labels its labelled rows use."""
     return tuple(
-        getattr(passage, "table_header", ()) or getattr(passage, "table_columns", ())
+        getattr(passage, "table_header", ())
+        or getattr(passage, "table_columns", ())
         or ()
     )
 

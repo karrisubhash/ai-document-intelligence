@@ -371,17 +371,22 @@ class DocxPipelineTests(AuthenticatedAPITestCase):
             ),
         )
         document = Document.objects.get(id=response.data["id"])
-        table = DocumentTable.objects.get(document_version=document.current_version)
         page = PageContent.objects.get(
             content__document_version=document.current_version
         )
 
-        self.assertEqual(
-            table.rows, [["Course", "Fee"], ["CS101", "5000"], ["CS102", ""]]
+        # Kept as text: each row with its labels, the blank fee left out of
+        # its row rather than shifting anything into the Fee column.
+        self.assertFalse(
+            DocumentTable.objects.filter(
+                document_version=document.current_version
+            ).exists()
         )
-        self.assertEqual(table.header, ["Course", "Fee"])
-        self.assertEqual(table.detector, "python-docx:table")
-        self.assertEqual(
-            page.text[table.character_start : table.character_end],
-            "Course | Fee\nCS101 | 5000\nCS102 |",
+        self.assertTrue(
+            page.text.endswith(
+                "Table 1, row 1: Course: CS101; Fee: 5000"
+                + chr(10)
+                + "Table 1, row 2: Course: CS102"
+            ),
+            page.text,
         )

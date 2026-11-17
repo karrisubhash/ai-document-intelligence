@@ -483,7 +483,8 @@ class DocumentShapeTests(InsightsApiTestCase):
         self.assertIsNone(data["current_stage"])
         self.assertEqual(data["document_type_source"], "auto")
         self.assertIsNotNone(data["type_confidence"])
-        self.assertEqual(data["counts"]["tables"], 0)
+        # No table count: tables are labelled rows in the page text.
+        self.assertNotIn("tables", data["counts"])
         self.assertGreater(data["counts"]["fields_found"], 0)
         self.assertEqual(
             data["collections"], [{"id": collection.pk, "name": "Transport"}]
