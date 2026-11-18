@@ -30,7 +30,7 @@ from documents.observability import telemetry, tracing
 from documents.search import service as search_service
 
 from . import context as context_builder
-from . import grounding, judging, reranking, streaming, tables
+from . import grounding, judging, reranking, sections, streaming, tables
 from .history import recent_turns, user_words
 from .llm import ABSTENTION_TEXT
 
@@ -617,15 +617,25 @@ def _ask(
     # anywhere else.
     streaming.status(streaming.RETRIEVING)
     stage_started = time.monotonic()
+    # An abbreviation the asker's documents define ("Managerial Economics and
+    # Financial Accountancy (MEFA)") is searched, ranked and matched to
+    # sections by its full form as well. The answerer still reads the
+    # question as it was asked.
+    search_question, expansions = sections.with_expansions(user, question)
     retrieval = search_service.search(
         user,
-        question,
+        search_question,
         limit=depth,
         document_type=document_type,
         department=department,
         document_id=document_id,
         collection_id=collection_id,
+        # Twenty candidates that are seven passages said three times each are
+        # not twenty candidates; see search_service.search.
+        collapse_duplicates=True,
     )
+    # The table title each passage is under, before the reranker reads it.
+    sections.annotate(retrieval.hits)
     timings["retrieval"] = _elapsed_ms(stage_started)
 
     if not retrieval.hits:
@@ -645,7 +655,7 @@ def _ask(
     # A score remembered while reranking serves only this user's later
     # questions; see reranking.cache_scope.
     with reranking.cache_scope(getattr(user, "pk", None)):
-        reranked = reranker.rerank(question, retrieval.hits)
+        reranked = reranker.rerank(search_question, retrieval.hits)
     timings["rerank"] = _elapsed_ms(stage_started)
 
     # Notes that describe how THIS answer was produced, as opposed to what
@@ -653,6 +663,11 @@ def _ask(
     # still produce a normal-looking response, so unless they are named here
     # a reader has no way to know the answer came from the baseline.
     notes = list(retrieval.notes)
+    if expansions:
+        notes.append(
+            "searched with the full form of an abbreviation the documents "
+            "define: " + "; ".join(expansions)
+        )
 
     degraded = was_degraded(reranked)
     if degraded:
@@ -674,7 +689,9 @@ def _ask(
     retrieval_ranks = {
         hit.chunk.id: rank for rank, hit in enumerate(retrieval.hits, start=1)
     }
-    admitted = tables.admit_below_floor(question, reranked, floor, retrieval_ranks)
+    admitted = tables.admit_below_floor(
+        search_question, reranked, floor, retrieval_ranks
+    )
     if admitted:
         admitted_ids = {id(item) for item in admitted}
         relevant = [
@@ -700,6 +717,7 @@ def _ask(
     # beside the best passages and the corrective retry follow from that;
     # handing it the passages the floor rejects is a separate switch.
     model_writes = judging.model_will_answer(answerer)
+    named = []
     if model_writes:
         judged = []
         leading = []
@@ -712,12 +730,36 @@ def _ask(
             leading = judging.leading_chunks(user, document_id, in_context)
         judged_ids = {id(item) for item in judged}
         evidence_ids = {id(item) for item in evidence}
+        # The whole of a section the question names ("the syllabus for
+        # dynamics of machinery"): the passages that answer it do not say
+        # what they are part of, so they score low one by one.
+        named = sections.expand(user, search_question, reranked)
+        named_ids = {item.chunk.id for item in named}
+        if named:
+            notes.append(
+                f"{len(named)} passage(s) of the section the question names "
+                f"({named[0].signals.get('section', '')}) were added so the "
+                f"answerer reads it whole"
+            )
+        if judged or leading or named:
+            # The section comes first and in the order the document has it:
+            # read in that order it is the answer, and what scored well for
+            # some other reason follows it.
+            relevant = (
+                named
+                + [
+                    item
+                    for item in reranked
+                    if id(item) in evidence_ids and item.chunk.id not in named_ids
+                ]
+                + [
+                    item
+                    for item in reranked
+                    if id(item) in judged_ids and item.chunk.id not in named_ids
+                ]
+                + [item for item in leading if item.chunk.id not in named_ids]
+            )
         if judged or leading:
-            relevant = [
-                item
-                for item in reranked
-                if id(item) in evidence_ids or id(item) in judged_ids
-            ] + leading
             notes.append(
                 f"{len(judged) + len(leading)} passage(s) below the relevance "
                 f"floor ({floor:.3f}) were passed to the generative model to "
@@ -736,11 +778,16 @@ def _ask(
             user, evidence, {item.chunk.id for item in relevant}
         )
         if beside:
+            sections.annotate(beside)
             relevant = [*relevant, *beside]
             notes.append(
                 f"{len(beside)} neighbouring passage(s) were added beside the "
                 f"best-ranked ones"
             )
+        if leading:
+            sections.annotate(leading)
+        # What the question names is evidence of where its answer is.
+        evidence = [*evidence, *named]
 
     if not relevant:
         # No relevant_document_ids: nothing passed the floor, so no figure
@@ -776,6 +823,10 @@ def _ask(
             getattr(settings, "RAG_MAX_PASSAGES", 8),
         )
     )
+    # A section the question names is read whole, and its passages are not
+    # twelve of the room: the character budget is what bounds it.
+    if named:
+        max_passages = max(max_passages, len(named) + 4)
     built = context_builder.build(
         relevant,
         budget=budget,

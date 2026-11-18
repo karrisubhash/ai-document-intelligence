@@ -86,11 +86,24 @@ def scoring_text(chunk) -> str:
     are rows of.
     """
     text = (chunk.text or "").strip()
-    if not is_table(chunk) or not text:
+    if not text:
         return text
 
     document = getattr(getattr(chunk, "document_version", None), "document", None)
     title = " ".join(str(getattr(document, "title", "") or "").split())
+
+    # The heading this passage sits under (rag.sections), when it is not in
+    # the passage's own words: the units of a course do not repeat the
+    # course's name, and a reranker that cannot see it scores them 0.01.
+    section = " ".join(str(getattr(chunk, "section_title", "") or "").split())
+    if section and section.lower() in text.lower():
+        section = ""
+    if section:
+        title = f"{title.rstrip('.')}. Section: {section}" if title else section
+
+    if not is_table(chunk):
+        return f"{title.rstrip('.')}.\n{text}" if section else text
+
     if is_labelled(chunk):
         # The rows name their own columns; only the document is missing.
         return f"{title.rstrip('.')}.\n{text}" if title else text

@@ -98,6 +98,9 @@ class SearchResponse:
     reranker: str = ""
     reranker_degraded: bool = False
     relevance_floor: float | None = None
+    # Candidates left out because another one, better ranked, said exactly the
+    # same thing (see `collapse_duplicates` on `search`).
+    collapsed: int = 0
     reranked: int = 0
     below_floor: int = 0
 
@@ -358,7 +361,19 @@ def search(
     department: str = "",
     document_id: int | None = None,
     collection_id: int | None = None,
+    collapse_duplicates: bool = False,
 ) -> SearchResponse:
+    """Hybrid search over the chunks `user` may read.
+
+    `collapse_duplicates` keeps one of several candidates with identical text
+    before the result is cut to `limit`. The same file uploaded three times is
+    three documents with the same passages, and each passage came back three
+    times: twenty candidates were seven passages, and the ones that answered
+    the question were ranked 21st to 28th and never reached the answerer
+    (measured on the live site, 2026-11-18). A question is answered from
+    passages, so the answering path asks for this; a search page that lists
+    documents does not.
+    """
     query = (query or "").strip()
     if not query:
         return SearchResponse(query=query, notes=["empty query"])
@@ -500,11 +515,25 @@ def search(
                 response.vector_candidates = len(vector_hits)
 
     # --- Fusion -----------------------------------------------------------
-    response.hits = _fuse(lexical, vector_hits, limit)
+    response.hits = _fuse(
+        lexical, vector_hits, limit, collapse=collapse_duplicates, response=response
+    )
+    if response.collapsed:
+        response.notes.append(
+            f"{response.collapsed} candidate(s) repeated a better-ranked "
+            f"passage word for word (the same file in more than one "
+            f"document) and were left out"
+        )
     return response
 
 
-def _fuse(lexical, vector_hits, limit: int) -> list:
+def _same_text(text: str) -> str:
+    return " ".join((text or "").lower().split())
+
+
+def _fuse(
+    lexical, vector_hits, limit: int, *, collapse: bool = False, response=None
+) -> list:
     """Reciprocal-rank fusion.
 
     Ranks rather than raw scores, because a BM25-ish rank and a cosine
@@ -534,6 +563,18 @@ def _fuse(lexical, vector_hits, limit: int) -> list:
         entry["matched"].append("vector")
 
     ordered = sorted(scores.items(), key=lambda item: (-item[1]["score"], item[0]))
+
+    if collapse:
+        kept, seen = [], set()
+        for chunk_id, entry in ordered:
+            same = _same_text(chunks[chunk_id].text)
+            if same in seen:
+                if response is not None:
+                    response.collapsed += 1
+                continue
+            seen.add(same)
+            kept.append((chunk_id, entry))
+        ordered = kept
 
     return [
         SearchHit(
