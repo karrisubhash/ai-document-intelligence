@@ -357,7 +357,7 @@ if AWS_STORAGE_BUCKET_NAME:
 
 # Ingestion limits, enforced by the VALIDATION pipeline stage.
 MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
-MAX_DOCUMENT_PAGES = 500
+MAX_DOCUMENT_PAGES = 2000
 OCR_DPI = 200
 
 # Dotted path to a DocumentClassifier implementation. Empty means the
@@ -864,7 +864,8 @@ CELERY_TASK_ACKS_LATE = True
 # is left PROCESSING, and `manage.py recover_stalled_jobs` is what finds it.
 #
 # 15 minutes is generous for the documents this platform bounds at ingest
-# (50 MB, 500 pages); measure before raising it.
+# (50 MB, 2000 pages) when they carry a text layer. A long scanned PDF that
+# needs OCR on every page can outrun it; measure, and raise it per deploy.
 CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "900"))
 CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "960"))
 

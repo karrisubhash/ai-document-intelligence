@@ -49,19 +49,19 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f141c;
-    --surface: #161c26;
-    --surface-2: #1b2230;
-    --surface-3: #232b3a;
-    --border: #2c3545;
-    --border-strong: #3b4659;
-    --text: #e6eaf1;
-    --text-2: #b4bccb;
-    --text-3: #8e98aa;
+    --bg: #131313;
+    --surface: #1a1a1a;
+    --surface-2: #202020;
+    --surface-3: #282828;
+    --border: #333333;
+    --border-strong: #444444;
+    --text: #ececec;
+    --text-2: #bdbdbd;
+    --text-3: #969696;
     --accent: #7c9cff;
     --accent-hover: #9ab3ff;
     --accent-soft: #1f2a47;
-    --accent-text: #0f141c;
+    --accent-text: #131313;
     --focus: #9ab3ff;
 
     --success: #5fd08f;
@@ -72,7 +72,7 @@
     --danger-soft: #3a1a18;
     --info: #7fb3ff;
     --info-soft: #172a45;
-    --muted-soft: #232b3a;
+    --muted-soft: #282828;
 
     --evidence: #5c4d0f;
     --evidence-border: #d9b23a;
@@ -1232,7 +1232,7 @@ a.table-title:hover {
 }
 
 .dialog::backdrop {
-  background: rgba(15, 20, 28, 0.5);
+  background: rgba(0, 0, 0, 0.5);
 }
 
 .dialog-drawer {
@@ -2218,7 +2218,7 @@ mark.evidence {
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(15, 20, 28, 0.45);
+    background: rgba(0, 0, 0, 0.45);
     z-index: 35;
   }
 
