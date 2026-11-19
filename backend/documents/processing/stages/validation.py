@@ -63,19 +63,14 @@ def run(context) -> StageResult:
                 code=ErrorCode.CORRUPT_DOCUMENT,
             )
 
-        if count > settings.MAX_DOCUMENT_PAGES:
-            raise StageError(
-                f"PDF has {count} pages, over the "
-                f"{settings.MAX_DOCUMENT_PAGES} page limit.",
-                code=ErrorCode.TOO_MANY_PAGES,
-            )
+        _check_page_limit(count, "PDF", "pages")
 
         metadata["page_count"] = count
 
     if context.file_type == FileType.DOCX:
-        # Cheap structural checks only. The page limit is not applied here:
-        # a DOCX has no page count until the whole document has been walked,
-        # so enforcing it would mean parsing the file twice. The
+        # Cheap structural checks only. A page limit is not applied here: a
+        # DOCX has no page count until the whole document has been walked,
+        # so enforcing one would mean parsing the file twice. The
         # decompression-bomb guard inside the extractor is what bounds the
         # work, and it runs before any parsing happens.
         metadata.update(docx.check_expansion(context.file_path))
@@ -95,12 +90,7 @@ def run(context) -> StageResult:
                     "Presentation contains no slides.",
                     code=ErrorCode.CORRUPT_DOCUMENT,
                 )
-            if count > settings.MAX_DOCUMENT_PAGES:
-                raise StageError(
-                    f"Presentation has {count} slides, over the "
-                    f"{settings.MAX_DOCUMENT_PAGES} page limit.",
-                    code=ErrorCode.TOO_MANY_PAGES,
-                )
+            _check_page_limit(count, "Presentation", "slides")
             metadata["page_count"] = count
 
     if context.file_type == FileType.PPTX:
@@ -113,26 +103,30 @@ def run(context) -> StageResult:
                 code=ErrorCode.CORRUPT_DOCUMENT,
             )
 
-        if count > settings.MAX_DOCUMENT_PAGES:
-            raise StageError(
-                f"Presentation has {count} slides, over the "
-                f"{settings.MAX_DOCUMENT_PAGES} page limit.",
-                code=ErrorCode.TOO_MANY_PAGES,
-            )
+        _check_page_limit(count, "Presentation", "slides")
 
         metadata["page_count"] = count
 
     if context.file_type == FileType.IMAGE:
-        # A multi-page TIFF is one page per frame, so it has a page limit too.
+        # A multi-page TIFF is one page per frame, so a page limit, when one
+        # is set, applies to it too.
         frames = ocr_extractor.image_frame_count(context.file_path)
-
-        if frames > settings.MAX_DOCUMENT_PAGES:
-            raise StageError(
-                f"Image has {frames} frames, over the "
-                f"{settings.MAX_DOCUMENT_PAGES} page limit.",
-                code=ErrorCode.TOO_MANY_PAGES,
-            )
+        _check_page_limit(frames, "Image", "frames")
 
         metadata["page_count"] = frames
 
     return StageResult(message="Validated.", metadata=metadata)
+
+
+def _check_page_limit(count: int, kind: str, unit: str) -> None:
+    """Refuse a document longer than MAX_DOCUMENT_PAGES, when one is set.
+
+    0, the default, is no limit: a document of any length is read, bounded
+    by its size (MAX_DOCUMENT_SIZE_BYTES) and the task time limit instead.
+    """
+    limit = settings.MAX_DOCUMENT_PAGES
+    if limit and count > limit:
+        raise StageError(
+            f"{kind} has {count} {unit}, over the {limit} page limit.",
+            code=ErrorCode.TOO_MANY_PAGES,
+        )

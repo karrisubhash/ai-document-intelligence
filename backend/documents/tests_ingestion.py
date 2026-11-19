@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from celery.exceptions import Retry
@@ -26,6 +27,7 @@ from documents.models import (
 from documents.processing.context import FileType
 from documents.processing.errors import ErrorCode, StageError, TransientError
 from documents.processing.pipeline import PROCESSING_VERSION
+from documents.processing.stages import validation
 from documents.processing.stages.ingestion import detect_file_type
 from documents.services import create_document_version
 from documents.tasks import is_retryable
@@ -372,6 +374,41 @@ class FileValidationTests(IngestionTestCase):
 
         self.assertEqual(document.status, Document.Status.FAILED)
         self.assertEqual(document.versions.count(), 1)
+
+
+class PageLimitTests(SimpleTestCase):
+    """No page limit by default; MAX_DOCUMENT_PAGES sets one when wanted."""
+
+    def validate(self, page_count):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "long.pdf"
+            path.write_bytes(make_pdf_bytes(["page"] * page_count))
+            context = SimpleNamespace(
+                file_type=FileType.PDF,
+                file_path=str(path),
+                metadata={"size_bytes": path.stat().st_size},
+                document_version=SimpleNamespace(file_name="long.pdf"),
+            )
+            return validation.run(context)
+
+    def test_a_pdf_of_any_length_is_accepted_by_default(self):
+        # Far past the 500 pages that used to be the ceiling.
+        self.assertEqual(settings.MAX_DOCUMENT_PAGES, 0)
+        result = self.validate(1200)
+
+        self.assertEqual(result.metadata["page_count"], 1200)
+
+    @override_settings(MAX_DOCUMENT_PAGES=1000)
+    def test_a_limit_when_set_refuses_a_longer_pdf(self):
+        with self.assertRaises(StageError) as caught:
+            self.validate(1001)
+
+        self.assertEqual(caught.exception.code, ErrorCode.TOO_MANY_PAGES)
+        self.assertIn("1001 pages, over the 1000 page limit", str(caught.exception))
+
+    @override_settings(MAX_DOCUMENT_PAGES=1000)
+    def test_a_pdf_exactly_at_the_limit_is_accepted(self):
+        self.assertEqual(self.validate(1000).metadata["page_count"], 1000)
 
 
 class FailureTaxonomyTests(IngestionTestCase):

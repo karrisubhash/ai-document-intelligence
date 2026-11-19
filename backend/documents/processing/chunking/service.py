@@ -8,6 +8,7 @@ from django.utils.module_loading import import_string
 
 from documents.models import DocumentChunk, DocumentChunkEmbedding, DocumentContent
 from documents.models.chunk import EMBEDDING_DIMENSIONS
+from documents.processing import heartbeat
 
 from . import splitter
 from .exceptions import (
@@ -217,15 +218,24 @@ def _chunk_content(content_id: int, *, processing_job=None) -> dict:
         summary["skipped_reason"] = str(exc)
         return summary
 
-    summary.update(embed_chunks(rows, provider))
+    # Embedding a long document takes hours, not minutes: the job reports in
+    # after every batch so it is not taken for a stalled one meanwhile.
+    summary.update(
+        embed_chunks(rows, provider, on_batch=lambda: heartbeat.beat(processing_job))
+    )
     return summary
 
 
-def embed_chunks(chunks, provider) -> dict:
-    """Embed stored chunks and write the vectors."""
+def embed_chunks(chunks, provider, on_batch=None) -> dict:
+    """Embed stored chunks and write the vectors.
+
+    `on_batch`, if given, is called before each batch - for progress.
+    """
     embedded = 0
 
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
+        if on_batch is not None:
+            on_batch()
         batch = chunks[start : start + EMBED_BATCH_SIZE]
         try:
             result = provider.embed([chunk.text for chunk in batch])

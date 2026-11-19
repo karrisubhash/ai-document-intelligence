@@ -3,6 +3,7 @@ import time
 from django.conf import settings
 
 from documents.models import PageContent
+from documents.processing import heartbeat
 from documents.processing.context import FileType, StageResult
 from documents.processing.errors import ErrorCode, StageError
 from documents.processing.extractors import ocr as ocr_extractor
@@ -39,6 +40,7 @@ def run(context) -> StageResult:
     reduced_from = None
 
     for position, page in enumerate(pending):
+        heartbeat.beat(context.processing_job)
         page_started = time.monotonic()
         if context.file_type == FileType.IMAGE:
             # One page per frame: a multi-page TIFF is a scanned document.

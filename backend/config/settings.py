@@ -470,7 +470,12 @@ if AWS_STORAGE_BUCKET_NAME:
 
 # Ingestion limits, enforced by the VALIDATION pipeline stage.
 MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
-MAX_DOCUMENT_PAGES = 500
+# Pages a document may have (slides in a deck, frames in a TIFF). 0, the
+# default, is no limit: a PDF of any length is read. What bounds the work
+# instead is the size limit above and the task time limits below
+# (CELERY_TASK_SOFT_TIME_LIMIT). A positive number refuses longer documents
+# at VALIDATION as TOO_MANY_PAGES, before any page is read.
+MAX_DOCUMENT_PAGES = int(os.getenv("MAX_DOCUMENT_PAGES", "0"))
 
 # OCR resolution for rendering a scanned PDF page. Chosen by measurement, not
 # by theory: seven real pages rendered at 150, 200, 250 and 300 DPI and read
@@ -1337,14 +1342,43 @@ CELERY_TASK_ACKS_LATE = True
 # limit kills the process for a task that ignored the soft one; that job
 # is left PROCESSING, and `manage.py recover_stalled_jobs` is what finds it.
 #
-# 15 minutes is generous for the documents this platform bounds at ingest
-# (50 MB, 500 pages); measure before raising it.
+# These two are the BASE limits - what a document of unknown length gets, and
+# the floor for every other. A PDF is given more in proportion to its pages
+# (see documents/processing/limits.py): measured on one CPU, a 600-page text
+# PDF takes 993 s and a scan takes 8 s a page, so one fixed 15 minutes cannot
+# serve a platform with no page ceiling.
 CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "900"))
 CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "960"))
 
+# Seconds a PDF is allowed per page on top of the base limit. Measured at
+# 1.7 s a page for text and 8 s for a scan on one CPU of a fast machine; 5
+# leaves a text PDF 3x room, for a burstable VM that is throttled. (A scan's
+# OCR lowers its own resolution to fit OCR_TIME_BUDGET_SECONDS, so it needs
+# less than 8 s a page once it is long.)
+INGEST_SECONDS_PER_PAGE = float(os.getenv("INGEST_SECONDS_PER_PAGE", "5"))
+
+# The most any one task may be given, however long the document. Six hours is
+# some 4,000 pages at the allowance above and ~13,000 at the speed measured -
+# past what 50 MB of PDF holds. Beyond it a document ends as TIMEOUT.
+INGEST_MAX_TASK_SECONDS = int(os.getenv("INGEST_MAX_TASK_SECONDS", str(6 * 3600)))
+
+# Redis hands a task that was not acknowledged within this long to another
+# worker. With acks_late a task is unacknowledged for as long as it runs, so
+# this MUST exceed the longest limit above or a long document is processed
+# twice at once - the default is one hour. A task whose worker dies is
+# redelivered after this long instead; `recover_stalled_jobs` reclaims it
+# sooner (STALLED_JOB_MINUTES), and a stalled job's late message is skipped.
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "visibility_timeout": INGEST_MAX_TASK_SECONDS + 3600,
+}
+
 # A PROCESSING job whose row has not been touched for this long is presumed
-# lost. Above the hard limit plus Redis's one-hour visibility timeout, so
-# recovery never races a redelivery that is about to finish the job.
+# lost. A job that is working touches it - at each stage, and every 30 s
+# inside the OCR and embedding loops (documents/processing/heartbeat.py) - so
+# this is time WITHOUT progress, however long the document. It no longer has
+# to exceed the task time limit, which is now hours for a long PDF; a late
+# redelivery of a job marked stalled is skipped (pipeline._is_terminal), so
+# recovery never races one.
 STALLED_JOB_MINUTES = int(os.getenv("STALLED_JOB_MINUTES", "120"))
 
 

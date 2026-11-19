@@ -16,13 +16,16 @@ logger = logging.getLogger(__name__)
 ACTIVE_JOB_STATUSES = (ProcessingJob.Status.QUEUED, ProcessingJob.Status.PROCESSING)
 
 # A PROCESSING job whose row has not moved for this long is presumed dead.
-# Set well above the Celery hard time limit plus Redis's one-hour
-# visibility timeout: when a whole WORKER dies with a task in hand, acks_late
-# leaves the message to be redelivered after that hour, and declaring the
-# job dead sooner would race the redelivery that is about to finish it. A
-# pool child killed by the hard limit or the OOM killer is NOT redelivered
-# (Celery acknowledges it as failed - see CELERY_TASK_ACKS_LATE); this
-# threshold and recover_stalled_jobs are what reclaim that job.
+# A live job moves its row at every stage and, inside the long OCR and
+# embedding loops, every 30 s (processing/heartbeat.py), so this is time
+# without progress and holds for a document of any length. When a whole
+# WORKER dies with a task in hand, acks_late leaves the message to be
+# redelivered after the broker's visibility timeout (hours - see
+# CELERY_BROKER_TRANSPORT_OPTIONS); a job declared stalled before then is
+# terminal, so that late message is skipped rather than racing the
+# replacement. A pool child killed by the hard limit or the OOM killer is NOT
+# redelivered (Celery acknowledges it as failed - see CELERY_TASK_ACKS_LATE);
+# this threshold and recover_stalled_jobs are what reclaim that job.
 DEFAULT_STALLED_JOB_MINUTES = 120
 
 

@@ -22,7 +22,9 @@ Signals worth alerting on (all bounded-label metrics):
 - `adi_rerank_degraded_total` > 0 — the cross-encoder is failing; ranking is lexical.
 - `adi_queue_depth{queue="ingest"}` growing for more than a few minutes — add `worker`s.
 - `adi_pipeline_failures_total{error_code="TIMEOUT"}` — documents exceeding
-  `CELERY_TASK_SOFT_TIME_LIMIT` (15 min). A timeout is recorded as TIMEOUT and not retried
+  their time limit: `CELERY_TASK_SOFT_TIME_LIMIT` (15 min) plus `INGEST_SECONDS_PER_PAGE` (5 s)
+  for each page of a PDF, up to `INGEST_MAX_TASK_SECONDS` (6 h). A timeout is recorded as
+  TIMEOUT and not retried
   even when the code it interrupted wrapped it (the embedder, the OCR extractors).
 
 The pipeline metrics (`adi_pipeline_*`, `adi_pages_processed_total`,
@@ -61,8 +63,10 @@ error code and a Retry button (current versions only; quarantined files are neve
 A run is **stalled** when it is `PROCESSING` and its row has not changed for
 `STALLED_JOB_MINUTES` (120): its worker was killed — OOM, a hard time limit, a node loss —
 and nothing marked it finished. A whole worker that dies (a stopped container, a host
-reboot) leaves its task in Redis, which redelivers it after the visibility timeout (one
-hour); a pool child killed by the hard time limit or the OOM killer does **not** - Celery
+reboot) leaves its task in Redis, which redelivers it after the visibility timeout (7 hours,
+so that a long document is not redelivered while it runs - a skipped late message for a job
+already marked stalled does nothing). A job that is working touches its row every 30 s
+during OCR and embedding, so a document that takes hours is not taken for a stalled one; a pool child killed by the hard time limit or the OOM killer does **not** - Celery
 acknowledges it as failed - so this command is what reclaims it. From cron, every 15
 minutes:
 

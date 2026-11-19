@@ -107,7 +107,7 @@ const FAQ: [string, ReactNode][] = [
   ],
   [
     "Which files can it read?",
-    "PDF, Word (.docx, .doc), Excel (.xlsx, .xls), PowerPoint (.pptx, .ppt), OpenDocument (.odt, .ods, .odp), RTF, web pages (.html), CSV, JSON, XML, Markdown and plain text, and images (PNG, JPEG, TIFF, WebP or BMP), up to 50 MB and 500 pages each. Tables are read into the text row by row, every value beside its column's name and each row numbered ('Table 2, row 4'), so an answer cites the exact row; charts in Word and PowerPoint are read as the numbers they were drawn from, scanned pages and pictures of text are read by OCR, and with a vision model switched on charts, flowcharts and diagrams are read too.",
+    "PDF, Word (.docx, .doc), Excel (.xlsx, .xls), PowerPoint (.pptx, .ppt), OpenDocument (.odt, .ods, .odp), RTF, web pages (.html), CSV, JSON, XML, Markdown and plain text, and images (PNG, JPEG, TIFF, WebP or BMP), up to 50 MB each, with no limit on the number of pages. Tables are read into the text row by row, every value beside its column's name and each row numbered ('Table 2, row 4'), so an answer cites the exact row; charts in Word and PowerPoint are read as the numbers they were drawn from, scanned pages and pictures of text are read by OCR, and with a vision model switched on charts, flowcharts and diagrams are read too.",
   ],
   [
     "Can it make things up?",

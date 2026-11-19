@@ -293,7 +293,10 @@ Pipeline limits, in `backend/config/settings.py`:
 | Setting | Default | Meaning |
 |---|---|---|
 | `MAX_DOCUMENT_SIZE_BYTES` | 50 MB | Rejected at the VALIDATION stage |
-| `MAX_DOCUMENT_PAGES` | 500 | PDF page ceiling |
+| `MAX_DOCUMENT_PAGES` | 0 (no limit) | Page ceiling for a PDF (slides in a deck, frames in a TIFF); a positive number refuses longer documents as TOO_MANY_PAGES |
+| `CELERY_TASK_SOFT_TIME_LIMIT` / `CELERY_TASK_TIME_LIMIT` | 900 / 960 | Base task time limits, in seconds: what any document gets, and the floor for a long PDF |
+| `INGEST_SECONDS_PER_PAGE` | 5 | Seconds added to a PDF's time limit for each page, so a long PDF is not ended as TIMEOUT by a limit set for a short one. Measured on one CPU: a 600-page text PDF took 993 s (827 s of it embedding), a scan 8 s a page. The worker reads the page count and sends the job again with the larger limit before doing any work |
+| `INGEST_MAX_TASK_SECONDS` | 21600 | The most one task may be given (6 h, thousands of pages); beyond it a document ends as TIMEOUT. The Redis visibility timeout is set to this plus an hour, so a long task is never redelivered while it runs |
 | `OCR_DPI` | 250 | Render DPI for OCR of PDF pages. Measured, not assumed: 250 scored best across real pages (more is not better - very small print read worse at 300) |
 | `OCR_LANGUAGES` | `eng` | Tesseract packs joined with `+` (`eng+hin`); packs that are not installed are dropped, `eng` is the floor. More packs: build arg `TESSERACT_LANGS` |
 | `OCR_MIN_WORD_CONFIDENCE` | 30 | Words Tesseract is less sure of than this are dropped as speckle |
@@ -560,7 +563,7 @@ Stages:  INGESTION → SCANNING → VALIDATION → TEXT_EXTRACTION → OCR
   (`word/document.xml`, `xl/workbook.xml`, `ppt/presentation.xml`).
 - **SCANNING** — runs *before* validation, deliberately. See
   [Scanning runs before validation](#scanning-runs-before-validation-and-that-order-is-deliberate).
-- **VALIDATION** — enforces supported type, size and page limits (slides in a deck, frames
+- **VALIDATION** — enforces supported type, size and, when one is set, a page limit (slides in a deck, frames
   in a TIFF), proves the PDF parses, and refuses decompression bombs in any Office file.
 - **TEXT_EXTRACTION** — reads the text layer per page (see
   [How each format is read](#how-each-format-is-read)). A page whose layer is absent, or
@@ -1582,7 +1585,8 @@ index-only worker then drained `index` 8→0 while `ingest` stayed at 5, untouch
 
 `acks_late` with `prefetch_multiplier=1`: a worker that dies with a task in hand (a stopped
 container, a host reboot) leaves the message in Redis to be redelivered after the visibility
-timeout, no worker sits on a minute-long OCR job another could have started, and queue depth
+timeout (`INGEST_MAX_TASK_SECONDS` + 1 h, 7 h by default, so that a long document is not
+redelivered while it is still being read), no worker sits on a minute-long OCR job another could have started, and queue depth
 reflects what is actually waiting rather than what has been quietly reserved. A pool *child*
 killed by the hard time limit or the OOM killer is acknowledged as failed by Celery, not
 redelivered; `recover_stalled_jobs` reclaims that job (see the runbook).
