@@ -73,8 +73,9 @@ test("a user uploads several files and a zip of more in one go", async ({ page }
           data: "Batch upload notice. Route 4 now stops at the north gate.",
           stored: true,
         },
-        // A legacy binary Excel file: the modern .xlsx is read now, this is not.
-        { name: "circulars/timetable.xls", data: "not a format the platform reads" },
+        // A macro-enabled workbook: .xlsx and the old .xls are both read now
+        // (the .xls through LibreOffice), this is not.
+        { name: "circulars/timetable.xlsm", data: "not a format the platform reads" },
         { name: "__MACOSX/circulars/._batch-library-hours.txt", data: "Finder metadata" },
       ]),
     },
@@ -82,7 +83,7 @@ test("a user uploads several files and a zip of more in one go", async ({ page }
 
   await expect(dialog.getByText("4 files to upload · 1 skipped")).toBeVisible();
   await expect(dialog.getByText("in batch-circulars.zip › circulars").first()).toBeVisible();
-  const skipped = dialog.locator(".upload-row", { hasText: "timetable.xls" });
+  const skipped = dialog.locator(".upload-row", { hasText: "timetable.xlsm" });
   await expect(skipped.getByText("Skipped")).toBeVisible();
   await expect(dialog.getByText("._batch-library-hours.txt")).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/40-batch-chosen.png`, fullPage: true });
