@@ -21,7 +21,7 @@ import os
 import re
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -85,6 +85,47 @@ def resolve_relevance_floor(reranker, override=None, *, degraded=False) -> float
 def was_degraded(reranked) -> bool:
     """Whether a cross-encoder handed back lexical scores instead of its own."""
     return any(item.signals.get("reranker_degraded") for item in reranked)
+
+
+def pooled_retrieval(first, second):
+    """Two searches' candidates as one: alternately from each, first wins a tie.
+
+    Interleaved rather than appended, so a passage either reading ranked near
+    the top keeps a high retrieval rank (later stages admit by it), and each
+    chunk appears once.
+    """
+    hits, seen = [], set()
+    for pair in zip(first.hits, second.hits, strict=False):
+        for hit in pair:
+            if hit.chunk.id not in seen:
+                seen.add(hit.chunk.id)
+                hits.append(hit)
+    longer = first.hits if len(first.hits) > len(second.hits) else second.hits
+    for hit in longer[min(len(first.hits), len(second.hits)) :]:
+        if hit.chunk.id not in seen:
+            seen.add(hit.chunk.id)
+            hits.append(hit)
+    return replace(
+        first,
+        hits=hits,
+        semantic=first.semantic or second.semantic,
+        notes=list(dict.fromkeys([*first.notes, *second.notes])),
+    )
+
+
+def better_scores(first, second) -> list:
+    """Each passage at the better of the scores two rerankings gave it,
+    best first. Ties keep the first ranking's order."""
+    best = {item.chunk.id: item for item in first}
+    for item in second:
+        current = best.get(item.chunk.id)
+        if current is None or item.score > current.score:
+            best[item.chunk.id] = item
+    order = {item.chunk.id: position for position, item in enumerate(first)}
+    return sorted(
+        best.values(),
+        key=lambda item: (-item.score, order.get(item.chunk.id, len(order))),
+    )
 
 
 class Abstention:
@@ -593,8 +634,14 @@ def _ask(
     relevance_floor: float = None,
     answerer=None,
     history=(),
+    search_also: str = "",
 ) -> RagAnswer:
-    """`answerer` replaces the configured one for this question: how the
+    """`search_also` is a second reading of the question to retrieve on (a
+    one-word follow-up's bare word, rag.followup.Contextualized.search_also):
+    both are searched, the candidates pooled, and each passage keeps the
+    better of its two reranker scores.
+
+    `answerer` replaces the configured one for this question: how the
     planner answers the parts of a question by quoting, after the whole
     question went to a model that failed (agents.runner).
 
@@ -634,6 +681,22 @@ def _ask(
         # not twenty candidates; see search_service.search.
         collapse_duplicates=True,
     )
+    also_question = ""
+    also = (search_also or "").strip()
+    if also and also.casefold() != question.casefold():
+        also_question, also_expansions = sections.with_expansions(user, also)
+        also_retrieval = search_service.search(
+            user,
+            also_question,
+            limit=depth,
+            document_type=document_type,
+            department=department,
+            document_id=document_id,
+            collection_id=collection_id,
+            collapse_duplicates=True,
+        )
+        retrieval = pooled_retrieval(retrieval, also_retrieval)
+        expansions = list(dict.fromkeys([*expansions, *also_expansions]))
     # The table title each passage is under, before the reranker reads it.
     sections.annotate(retrieval.hits)
     timings["retrieval"] = _elapsed_ms(stage_started)
@@ -656,6 +719,10 @@ def _ask(
     # questions; see reranking.cache_scope.
     with reranking.cache_scope(getattr(user, "pk", None)):
         reranked = reranker.rerank(search_question, retrieval.hits)
+        if also_question:
+            reranked = better_scores(
+                reranked, reranker.rerank(also_question, retrieval.hits)
+            )
     timings["rerank"] = _elapsed_ms(stage_started)
 
     # Notes that describe how THIS answer was produced, as opposed to what

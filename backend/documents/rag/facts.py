@@ -141,6 +141,15 @@ _MONTH_DAY_NO_YEAR = re.compile(
 _ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b", re.ASCII)
 _NUMERIC_DATE = re.compile(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", re.ASCII)
 
+# A date written with no spaces, as tables and file names write them:
+# "22Feb.1978", "28Dec,2005", "01Oct2026". Read as one token it was neither the
+# date nor its year, and a correct answer ("launched on 22 February 1978")
+# was refused as stating figures the passage lacks (live, 2026-10-24).
+_GLUED_DATE = re.compile(
+    r"(?<![A-Za-z0-9])(\d{1,2})(" + _MONTH + r")(?![a-z])([.,]?)\s*(\d{4})(?!\d)",
+    _FLAGS,
+)
+
 # "2024-25" and "2024-2025" are one academic year, and a range typed with an
 # en dash ("2024\N{EN DASH}25") is the same range as one typed with a hyphen.
 _YEAR_RANGE_DASH = re.compile(
@@ -410,8 +419,10 @@ def clean(text: str) -> str:
 
 
 def prepare(text: str) -> str:
-    """Text with year ranges written one way, before figures are read from it."""
-    return _YEAR_RANGE_DASH.sub(r"\1-\2", clean(text))
+    """Text with year ranges written one way and glued dates spaced out
+    ("22Feb.1978" as "22 Feb. 1978"), before figures are read from it."""
+    spaced = _GLUED_DATE.sub(r"\1 \2\3 \4", clean(text))
+    return _YEAR_RANGE_DASH.sub(r"\1-\2", spaced)
 
 
 def amounts(text: str) -> str:

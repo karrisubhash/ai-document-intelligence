@@ -77,6 +77,11 @@ DEFAULT_HISTORY_TURNS = 2
 # So the bar is a single term ("Weekends?").
 MAX_DEPENDENT_TERMS = 1
 
+# The reason looks_dependent gives when a question is dependent ONLY because it
+# is short. Every other reason is a word that refers back ("that", "what
+# about"), and those rewrites are not guesses.
+SHORT_REASON_PREFIX = "only "
+
 # Openings and words that refer to something already said. A question
 # containing one of these is dependent however long it is - "Does that
 # apply to part-time students enrolled before 2019 as well?" is eleven
@@ -153,6 +158,24 @@ class Contextualized:
     rewritten: bool = False
     reason: str = ""
     borrowed_terms: tuple = field(default_factory=tuple)
+    # Rewritten only because the question was short, with nothing in it that
+    # refers back. Such a question may as well be a NEW topic ("EUROCONTROL"
+    # after two questions about GAGAN was searched as "EUROCONTROL gagan error
+    # budget", and the passage that defines it was outranked - live,
+    # 2026-11-18). Retrieval searches both readings; see `search_also`.
+    ambiguous: bool = False
+
+    @property
+    def search_also(self) -> str:
+        """A second string retrieval should search on, or "".
+
+        The user's own words, when the rewrite is a guess. Retrieval then
+        searches both the widened and the bare question and keeps each
+        passage's better score, so a follow-up still finds what it continues
+        and a new topic still finds itself; the model that writes the answer
+        is shown the conversation and tells which was meant.
+        """
+        return self.original if (self.rewritten and self.ambiguous) else ""
 
     @property
     def as_metadata(self) -> dict:
@@ -163,6 +186,7 @@ class Contextualized:
             "resolved_question": self.question if self.rewritten else "",
             "reason": self.reason,
             "borrowed_terms": list(self.borrowed_terms),
+            "searched_both": bool(self.search_also),
         }
 
 
@@ -176,8 +200,12 @@ class Contextualized:
 # parses, and a failing match tried all of them: 200 characters of
 # "thank you thank you ... x" held a worker for over a second, and each
 # further repetition doubled it.
+# "hai", "hlo" and "namaste" are how many users here greet: "Hai" was not
+# recognised, was read as a one-term follow-up, searched as "Hai eurocontrol"
+# and answered "I couldn't find enough information" (live, 2026-11-18).
 _SMALL_TALK_PHRASE = (
-    r"(?:h+i+|hel+o+|he+y+|hiya|yo|howdy|greetings"
+    r"(?:h+i+|h+a+i+|hel+o+|hlo+|he+y+|hiya|yo|howdy|greetings"
+    r"|namaste|namaskar(?:am)?|vanakkam"
     r"|good (?:morning|afternoon|evening|night|day)"
     r"|thanks?|thx|ty|cheers|ok(?:ay)?|cool|great|nice|awesome|perfect"
     r"|got it|bye|goodbye|see you|how are you(?: doing)?|how's it going"
@@ -251,7 +279,7 @@ def looks_dependent(question: str) -> tuple:
 
     terms = _content_terms(stripped)
     if len(terms) <= MAX_DEPENDENT_TERMS:
-        return True, f"only {len(terms)} content term(s) to retrieve on"
+        return True, f"{SHORT_REASON_PREFIX}{len(terms)} content term(s) to retrieve on"
 
     return False, ""
 
@@ -333,4 +361,8 @@ def contextualize(
         rewritten=True,
         reason=reason,
         borrowed_terms=tuple(borrowed),
+        # A one-word question may be a new topic as well as a follow-up. With
+        # no content word at all ("tell me more") it can only be a follow-up:
+        # there is nothing of its own to search on.
+        ambiguous=reason.startswith(SHORT_REASON_PREFIX) and bool(already),
     )

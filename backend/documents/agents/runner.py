@@ -207,11 +207,13 @@ def answer(user, question: str, **kwargs) -> PlannedAnswer:
             timings[stage] = timings.get(stage, 0) + milliseconds
 
     for part in parts:
+        # A part is searched on its own words; the second reading a one-word
+        # question carries (search_also) belongs to the question as a whole.
         if focus:
             query = f"{part} {widening}".strip()
-            result = ask(user, query, **{**kwargs, "focus": part})
+            result = ask(user, query, **{**kwargs, "focus": part, "search_also": ""})
         else:
-            result = ask(user, part, **kwargs)
+            result = ask(user, part, **{**kwargs, "search_also": ""})
         if _model_failed(result) and not isinstance(
             kwargs.get("answerer"), ExtractiveAnswerer
         ):

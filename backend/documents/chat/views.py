@@ -24,7 +24,7 @@ from documents.audit import record_event
 from documents.authorization import get_profile
 from documents.models import AuditLog, Conversation, Message
 from documents.observability import telemetry
-from documents.rag import followup, gateway, general, labels, streaming
+from documents.rag import followup, gateway, general, labels, library, streaming
 from documents.rag.engine import Abstention, llm_metadata
 from documents.rag.llm import ABSTENTION_TEXT
 from documents.throttling import BurstUserThrottle, ShortWindowUserThrottle
@@ -111,7 +111,33 @@ class ChatView(APIView):
             # documents.rag.followup.
             resolved = followup.contextualize(data["question"], history)
             small_talk = followup.is_small_talk(data["question"]) and general.enabled()
-            if small_talk:
+            # "What documents are uploaded?", "Recently uploaded document
+            # summary": answered from the catalogue and the documents' briefs,
+            # which no retrieved passage can do (documents.rag.library).
+            shelf = (
+                None
+                if small_talk
+                else library.answer(
+                    request.user,
+                    data["question"],
+                    document_type=data.get("document_type", ""),
+                    department=data.get("department", ""),
+                    document_id=data.get("document_id"),
+                    collection_id=data.get("collection_id"),
+                )
+            )
+            if shelf is not None:
+                answer = PlannedAnswer(
+                    question=data["question"],
+                    answer=shelf.text,
+                    abstained=False,
+                    citations=shelf.citations,
+                    model_name=library.MODEL_NAME,
+                    model_version=library.MODEL_VERSION,
+                    support_ratio=1.0,
+                    notes=list(shelf.notes),
+                )
+            elif small_talk:
                 # A greeting needs no document search. Recorded as a clean
                 # "nothing in the documents", which the general-knowledge
                 # reply below answers.
@@ -138,6 +164,9 @@ class ChatView(APIView):
                     # a follow-up: retrieval searched on the widened form,
                     # the answer must still be about what was actually asked.
                     focus=resolved.original if resolved.rewritten else "",
+                    # A one-word question is searched as typed too: it may be
+                    # a new topic rather than a follow-up.
+                    search_also=resolved.search_also,
                     # The turns before this one, for a model writing the
                     # answer to read ("what does that cost?" needs to know
                     # what "that" was). Not a source: see documents.rag.history.

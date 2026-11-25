@@ -17,6 +17,10 @@ import re
 from .providers import CUSTOM, GEMINI, MISTRAL, OLLAMA, OPENAI, OPENROUTER, display_name
 
 QUOTED = "Quoted from your documents"
+# A library answer (documents.rag.library): the catalogue and the documents'
+# briefs, not a passage quoted for this question.
+LIBRARY = "From your document library"
+LIBRARY_MODEL_NAME = "document-library"
 
 # Tokens with a fixed spelling. Anything else is capitalised, and a size
 # such as "120b" is upper-cased ("120B").
@@ -158,6 +162,8 @@ def answer_display(
     author to name. Quoted when the extractive answerer produced it.
     """
     if not generative:
+        if model_name == LIBRARY_MODEL_NAME:
+            return LIBRARY
         return QUOTED if model_name else ""
     llm = llm or {}
     if llm.get("model"):

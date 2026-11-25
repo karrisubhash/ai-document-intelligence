@@ -243,6 +243,10 @@ class _Candidate:
     # Every term the sentence has (a row's include its column labels), not only
     # those the question asked about.
     terms: frozenset = frozenset()
+    # A labelled row ("Table 1, row 3: Programme: B.Tech MECH; Tuition: 78000")
+    # that the question matched only through its column names. Like a header
+    # row, it says the table HAS that column, not which row answers.
+    labels_only: bool = False
 
     @property
     def order(self):
@@ -414,6 +418,22 @@ class ExtractiveAnswerer:
                     score = coverage + bonus
                     meets_floor = coverage >= self.MIN_COVERAGE
 
+                # A labelled row carries its column names in its own text, so
+                # every row of a table matched a question that named a column
+                # ("the lowest tuition"), and the first three rows were quoted
+                # as the answer - without the one that answered it (v3 gate,
+                # 2026-11-25). The rule above, for rows under a stored header,
+                # applies to them too: only a match IN the values makes a row a
+                # candidate answer; a match on labels alone is the table's.
+                labels_only = False
+                if looks_like_a_row and not is_row:
+                    line = text_rows.parse_line(sentence.strip())
+                    if line is not None:
+                        values = quoting.quote_terms(
+                            " ".join(value for _, value in line.pairs)
+                        )
+                        labels_only = not (values & asked)
+
                 heading = quoting.is_heading(sentence, is_row=looks_like_a_row)
                 candidate = _Candidate(
                     score=score,
@@ -429,6 +449,7 @@ class ExtractiveAnswerer:
                     and quoting.ends_cut(sentence),
                     row=looks_like_a_row and not is_header,
                     terms=frozenset(terms),
+                    labels_only=labels_only,
                 )
                 # A sentence that matches enough terms but not enough of the
                 # WHOLE question may still answer one part of it (below).
@@ -461,7 +482,8 @@ class ExtractiveAnswerer:
         data = [
             candidate
             for candidate in eligible
-            if not self._is_header_row(candidate.passage, candidate.sentence)
+            if not candidate.labels_only
+            and not self._is_header_row(candidate.passage, candidate.sentence)
         ]
 
         if not data:
@@ -568,6 +590,7 @@ class ExtractiveAnswerer:
                 candidate
                 for candidate in partial
                 if not candidate.demoted
+                and not candidate.labels_only
                 and not self._is_header_row(candidate.passage, candidate.sentence)
             ]
             # "Last day" and "deadline" say what KIND of answer is wanted, not

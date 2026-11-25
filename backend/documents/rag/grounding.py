@@ -317,18 +317,71 @@ def _support_facts(text: str) -> set:
 # A year, or an academic year, as a title states one.
 YEAR_LIKE = re.compile(r"(?:19|20)\d{2}(?:-(?:19|20)\d{2})?")
 
+# A token of letters AND digits ("1600hrs", "23ME4119", "v2"): a name or a code,
+# which an answer can only repeat, never arrive at by coincidence.
+MIXED_TOKEN = re.compile(r"(?=[^a-z]*[a-z])(?=\D*\d)[a-z0-9./\-:]+")
+
 
 def _title_facts(text: str) -> set:
-    """The years a document's title states, as whole figures."""
+    """The figures a document's title states, as whole figures only.
+
+    Its years, its dates ("01Oct2026"), and its tokens of letters and digits
+    ("1600hrs"): an answer that names the document repeats them ("the lecture
+    'Lecture IV GNSS 01Oct2026 1600hrs'"), and was refused for it (live,
+    2026-11-18). Not its bare numbers: "Revision 3" does not support "3
+    instalments".
+    """
     cleaned = fact_forms.clean(text)
-    years = {
+    prepared = fact_forms.prepare(cleaned)
+    figures = {
         fact
-        for fact in _facts(fact_forms.prepare(cleaned)) | _facts(cleaned)
-        if YEAR_LIKE.fullmatch(fact)
+        for fact in _facts(prepared) | _facts(cleaned)
+        if YEAR_LIKE.fullmatch(fact) or MIXED_TOKEN.fullmatch(fact)
     }
-    for fact in list(years):
-        years |= fact_forms.range_years(fact)
-    return years
+    for fact in list(figures):
+        figures |= fact_forms.range_years(fact)
+    dates = fact_forms.extract_dates(prepared)[1]
+    return figures | dates | fact_forms.year_less(dates)
+
+
+# A word hyphenated onto a code: "APV1-certified" is the code "APV1", which the
+# passage writes "APV1 Certified". Only onto a code of letters AND digits, and
+# only a word of three letters or more that is not a month: "15-Sep" is a date
+# and "Form 12-A" an identifier, and neither is the bare number in front.
+_WORD_TAIL = re.compile(r"(?:-[a-z]{3,})+$")
+
+
+def _code_without_word_tail(fact: str) -> str:
+    """`fact` without a hyphenated word after a code, or "" if it has none."""
+    match = _WORD_TAIL.search(fact)
+    if match is None:
+        return ""
+    stem = fact[: match.start()]
+    words = match.group(0).strip("-").split("-")
+    if any(word in fact_forms.MONTH_NUMBER for word in words):
+        return ""
+    return stem if MIXED_TOKEN.fullmatch(stem) else ""
+
+
+# "page 22", "p. 22", "pp. 12-13", "pages 4 and 5": where something is. Passages
+# are shown to the model headed "[1] Title, page 22", and an answer that says
+# "(page 22)" was refused for stating a 22 the passage text lacks.
+_PAGE_REFERENCE = re.compile(
+    r"\b(?:pages?|pg|pp?)\.?\s*(\d{1,4})"
+    r"(?:\s*(?:-|\N{EN DASH}|to|and|&|,)\s*(\d{1,4}))?\b",
+    re.I,
+)
+
+
+def _without_page_references(text: str, pages: set) -> str:
+    """The answer without its references to pages it was shown. A page number
+    no passage came from stays, and is checked like any other figure."""
+
+    def drop(match):
+        numbers = {int(group) for group in match.groups() if group}
+        return " " if numbers <= pages else match.group(0)
+
+    return _PAGE_REFERENCE.sub(drop, text)
 
 
 def _fact_supported(fact: str, supported: set, cores: set) -> bool:
@@ -344,6 +397,9 @@ def _fact_supported(fact: str, supported: set, cores: set) -> bool:
     """
     if fact in supported or _numeric_core(fact) in cores:
         return True
+    stem = _code_without_word_tail(fact)
+    if stem:
+        return _fact_supported(stem, supported, cores)
     if fact.startswith("time:"):
         time, _, written = fact.partition("|")
         return time in supported or (
@@ -448,13 +504,19 @@ def validate(
     # is recomputed here, from the cells, rather than taken on the model's word.
     derived = tables.derived_figures(cited_passages)
     supported_facts |= derived
-    stated_facts = _answer_facts(answer_text)
+    # A page the answer points at ("see page 22") is where, not what - when a
+    # passage it was shown came from that page.
+    shown_pages = {
+        getattr(passage.chunk, "page_number", None) for passage in context.passages
+    }
+    stated_facts = _answer_facts(_without_page_references(answer_text, shown_pages))
     supported_cores = {_numeric_core(fact) for fact in supported_facts} - {None}
     # The year a document's title states ("Fee Structure 2024-25") is on the
-    # page the reader checks against, and is the year of every figure in it. It
-    # counts as a whole figure and nothing else: not through the bare-number
-    # equivalence above ("Hostel Rules v2" does not support "2 weeks"), and
-    # not a title's other digits.
+    # page the reader checks against, and is the year of every figure in it.
+    # So are its dates and codes ("01Oct2026", "1600hrs"). They count as whole
+    # figures and nothing else: not through the bare-number equivalence above
+    # ("Hostel Rules v2" does not support "2 weeks"), and not a title's bare
+    # numbers ("Revision 3" does not support "3 instalments").
     supported_facts |= _title_facts(titles)
 
     unsupported_facts = sorted(
