@@ -2,13 +2,16 @@
 
 Engineering documentation for the AI Document Intelligence Platform. Every page describes
 what the code in this repository **does today**; anything that has not been exercised is
-labelled as such. The top-level [README](../README.md) is the long-form project history and
-design rationale; these pages are the working reference.
+labelled as such. The top-level [README](../README.md) is the onboarding overview of the whole
+project; these pages are the working reference for each area, and
+[architecture/design-history.md](architecture/design-history.md) is the long-form record of why
+the system is built the way it is.
 
 | Area | Page | What it answers |
 |---|---|---|
 | Architecture | [architecture/overview.md](architecture/overview.md) | Components, data flow, boundaries, and why it is one Django service |
 | Spec traceability | [architecture/spec-traceability.md](architecture/spec-traceability.md) | Every FR/NFR of the specification mapped to code and tests; adaptations and role mapping |
+| Design history | [architecture/design-history.md](architecture/design-history.md) | The former top-level README: the reasoning, defects and measurements behind each design decision (kept verbatim, not maintained as a reference) |
 | Development | [development/setup.md](development/setup.md) | Running the stack locally |
 | | [development/testing.md](development/testing.md) | The four test layers and how to run each, including the browser suite |
 | | [development/design-system.md](development/design-system.md) | Frontend foundations: design tokens, the data cache, error boundaries, toasts, shortcuts, bundle size |

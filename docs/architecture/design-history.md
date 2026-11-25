@@ -1,0 +1,2095 @@
+# Design history
+
+> **What this page is.** Until 2026-11-25 this was the repository's top-level README:
+> the long-form record of how the platform was built — the reasoning behind each
+> design decision, the defects found along the way, and the measurements that justified
+> each change, up to and including the removal of the PDF page limit (2026-11-19). It is
+> kept verbatim for that rationale, with only its links adjusted to this folder. It is
+> **not** maintained as a reference, and earlier sections describe the system as it was
+> when they were written. For how the system works today, start at the
+> [README](../../README.md) and the [documentation index](../README.md).
+
+An enterprise-oriented system for ingesting, understanding, extracting information from,
+searching, and eventually reasoning over heterogeneous business documents — PDFs, Word
+documents, scanned pages, images, and plain text.
+
+The capability chain the platform is built around:
+
+```
+seeing → understanding → extracting → searching → reasoning → answering → evaluating
+```
+
+This repository implements that chain incrementally. The full target design lives in the
+project's enterprise specification, *AI Document Intelligence Platform — Enterprise-Level
+Technical Documentation* v1.0, which is **not committed to this repository** (`docs/` is
+where it belongs if you want it alongside the code). Section references below (§7, §11.2,
+§25 …) point into that document. This README describes both **what the specification calls
+for** and **what is actually built today**, and never conflates the two.
+
+---
+
+## Status at a glance
+
+| Capability | Spec § | State |
+|---|---|---|
+| Authentication + roles | 5, 14 | ✅ Built — browser sessions (httpOnly, CSRF-protected login), expiring API tokens, audited login/logout/password change |
+| Administration | 5, 14 | ✅ Built — users, department registry, audit log, processing monitor with retry, system status; department admins scoped to their department |
+| Document upload, versioning, metadata | 5, 10 | ✅ Built — row-locked versioning, archival, per-version download, 404 (not 403) to non-readers |
+| Async processing (queue + worker) | 17 | ✅ Built (Celery + Redis) — time limits, stalled-run recovery, duplicate-run refusal |
+| Validation, ingestion, integrity checks | 5, 10 | ✅ Built |
+| PDF/DOCX/XLSX/PPTX/ODF/RTF/HTML/CSV/JSON/XML/TXT/image parsing + OCR, old .doc/.xls/.ppt, tables written as labelled text rows with table/row references, charts and diagrams read | 11.3 | ✅ Built (pdfplumber, python-docx, openpyxl, python-pptx, lxml, LibreOffice for the old formats, pdf2image, Tesseract, an optional vision model for figures) |
+| Per-page normalized content store | 15 | ✅ Built (`DocumentContent` / `PageContent`) |
+| Classification pipeline stage + contract | 11.1 | ✅ Built — pluggable |
+| Trained document classifier + inference adapter | 11.1 | ✅ Built — text baseline, 71.9% test accuracy ([results](../../ai/classification/README.md#results)) |
+| Permission-aware access + audit log | 13, 14 | ✅ Built (department boundary, `AuditLog`) |
+| Extraction benchmark harness | 19 | ✅ Built (`benchmark_extraction`) |
+| Vision classifier (Kaggle GPU path) | 11.1 | 🟡 Path proven end to end, **untrained** |
+| Information extraction (structured fields) | 11.2 | ✅ Built — schema-driven, span-verified |
+| Chunking, embeddings, pgvector index | 11.4, 15 | ✅ Built — page-bounded chunks, span-verified |
+| Hybrid search + reranking | 12.2 | ✅ Built — RRF fusion + pluggable reranker |
+| RAG, citations, abstention, guardrails | 12 | ✅ Built — extractive by default, generative via one setting, same guardrails |
+| Product frontend (React + Vite) | 26 | ✅ Built — dashboard, documents, document viewer, search, cited chat with source inspection, administration ([frontend/](../../frontend/)); browser e2e suite 7/7 against the live production stack over TLS |
+| Metrics, structured logs, AI telemetry | 20 | ✅ Built — `/metrics`, redaction enforced at the formatter |
+| Production deploy, HTTPS, backups, CI/CD | 21 | ✅ Built — gunicorn + nginx, verified backups, 10-job pipeline; every gate now passes locally, none has run in GitHub Actions |
+| Horizontal scale, queue routing, re-indexing | 22 | ✅ Built — measured, not assumed ([details](#scale-22-nfr-02)) |
+| Table detection + table-aware retrieval | 11.3 | ✅ Built — span-verified cells, columns travel with the rows |
+| Figures located (not described) | 11.3 | ✅ Built — an abstention that says which page to look at |
+| Multi-part question planning | 12 | ✅ Built — 4-part questions went from a flat abstention to 4 of 4 |
+| Object storage (S3-compatible) | 15 | ✅ Built — opt-in; the pipeline is storage-agnostic either way |
+| Prometheus + Grafana, multiprocess metrics | 20 | ✅ Built — `/metrics` now aggregates across gunicorn workers |
+| Governed evaluation dataset + regression gate | 19 | ✅ Built — 13 cases, a committed baseline, and it can fail |
+| Versioned API (`/api/v1/`), idempotent uploads | 16 | ✅ Built — `/api/` kept as an alias; `Idempotency-Key` on document and version uploads |
+| Streaming chat, general-knowledge replies | 12, 16 | ✅ Built — answers stream as they are written (`/api/v1/chat/stream/`); opt-in labelled general-knowledge replies when the documents have nothing ([setup](../../.env.example)) |
+| Collections | 14, 15.2 | ✅ Built — department-scoped document sets that narrow search and chat, never widen them |
+| Distributed tracing, alert rules, dashboards as code | 20 | ✅ Built — OpenTelemetry opt-in (`INSTALL_OTEL`), 11 Prometheus alerts, provisioned Grafana overview |
+| Separate FastAPI AI services | 26 | ⬜ Deliberately not built — see [docs/architecture](../../docs/architecture/overview.md#why-one-service) |
+
+Every requirement of the specification, mapped to code and tests:
+[docs/architecture/spec-traceability.md](../../docs/architecture/spec-traceability.md).
+
+**Start with [docs/](../../docs/README.md)** — the working reference for architecture, API,
+deployment, operations, security, AI and evaluation, with a single table of what is
+verified and what is not. This README is the long-form history and design rationale.
+`infrastructure/` holds the nginx edge image and deployment configuration; `frontend/` is
+the product web application.
+
+---
+
+## Architecture
+
+Target architecture from the specification (§7):
+
+```
+Users → Frontend → API Gateway → Application API
+                                   ├── Auth / RBAC
+                                   ├── Document Service
+                                   ├── Search Service
+                                   └── Chat Service
+                                          ↓
+                        PostgreSQL + Redis + Object Storage
+                                          ↓
+                              Message Broker / Task Queue
+                                          ↓
+              OCR · Parser · Classifier · Extraction workers
+                                          ↓
+                     Chunking → Embeddings → Vector Index
+                                          ↓
+              Hybrid Retrieval → Reranking → Context Builder
+                                          ↓
+                    LLM Gateway → Guardrails → Answer + Sources
+                                          ↓
+                        Evaluation + Observability
+```
+
+**Architectural principle (§7.1):** start as a modular monolith with explicit domain
+boundaries; extract services only when scale, ownership or failure isolation justifies the
+operational cost.
+
+### What runs today
+
+```
+Client
+  │  Session (browser) or expiring token (scripts)
+  ▼
+Django API  ──────────────────────────────►  PostgreSQL (metadata, jobs, events, audit)
+  │  ProcessingJob queued on commit          Local media storage (original artifacts)
+  ▼
+Redis (broker)
+  │
+  ▼
+Celery worker
+  └── run_pipeline()
+        INGESTION → SCANNING → VALIDATION → TEXT_EXTRACTION → OCR
+                        │
+                        ▼
+                 LAYOUT_ANALYSIS                 → tables written into the page text
+                        │                          as labelled rows; DocumentFigure
+                        ▼
+                 DocumentContent + PageContent   (the internal representation)
+                        │
+                        ▼
+                 CLASSIFICATION                  → ClassificationResult
+                        │                        (SKIPPED when unconfigured)
+                        ▼
+                 EXTRACTION                      → ExtractionResult
+                        │                          + ExtractedField
+                        ▼
+                 INDEXING                        → DocumentChunk
+                                                   + DocumentChunkEmbedding
+                                                 (chunks always; embeddings
+                                                  only when a provider is set)
+```
+
+Search runs outside the pipeline, over what INDEXING wrote:
+
+```
+POST /api/search/  →  authorization filter FIRST
+                          ↓
+              ┌───────────┴───────────┐
+        lexical (tsvector)      vector (pgvector, cosine)
+              └───────────┬───────────┘
+                    RRF fusion
+                          ↓
+                  ranked chunks + citations
+```
+
+Every stage writes a `ProcessingEvent` with status, message, duration and structured
+metadata, so a document's history is inspectable rather than inferred.
+
+---
+
+## Project structure
+
+```
+ai-document-intelligence/
+├── backend/                        Django project (modular monolith)
+│   ├── config/                     settings, URLs, Celery app, health check
+│   ├── accounts/                   UserProfile, roles, /api/auth/me
+│   └── documents/
+│       ├── models/                 Document, DocumentVersion, DocumentContent,
+│       │                           PageContent, ClassificationResult,
+│       │                           ExtractionResult, ExtractedField,
+│       │                           DocumentChunk, DocumentChunkEmbedding,
+│       │                           ProcessingJob, ProcessingEvent, AuditLog
+│       ├── api/                    DRF viewset, serializers, routes
+│       ├── processing/
+│       │   ├── pipeline.py         stage orchestration + content persistence
+│       │   ├── stages/             ingestion, validation, text_extraction, ocr,
+│       │   │                       classification, field_extraction, chunking
+│       │   ├── extractors/         pdf (pdfplumber), docx (python-docx XML walk),
+│       │   │                       ocr (tesseract, word positions),
+│       │   │                       spreadsheet (openpyxl, csv), presentation
+│       │   │                       (python-pptx), geometry (reading order,
+│       │   │                       borderless tables), compose (page builder),
+│       │   │                       plain_text
+│       │   ├── classification/     DocumentClassifier protocol, service,
+│       │   │                       trained text-baseline adapter
+│       │   ├── field_extraction/   FieldExtractor protocol, schema packs,
+│       │   │                       pure matching core, rule extractor
+│       │   ├── chunking/           page-bounded splitter + indexing service
+│       │   └── embedding/          EmbeddingProvider protocol + hashing baseline
+│       ├── search/                 hybrid retrieval service + /api/search/
+│       ├── benchmarks/             extraction benchmark harness
+│       ├── authorization.py        access rules as plain, reusable functions
+│       ├── permissions.py          DRF policy + audit logging
+│       ├── services.py             version creation, checksum, job enqueue
+│       └── tasks.py                Celery task + retry classification
+├── ai/                             training + evaluation (does NOT import Django)
+│   ├── common/                     download + Kaggle helpers
+│   └── classification/
+│       ├── datasets/               QS-OCR / RVL-CDIP adapters, manifests, integrity
+│       ├── preprocessing/          text normalization (travels with the artifact)
+│       ├── training/               text trainer, vision trainer, Kaggle submitter
+│       ├── evaluation/             pure-Python classification metrics
+│       ├── configs/                text_baseline.yaml, vision_baseline.yaml
+│       └── artifacts/              model artifacts (git-ignored)
+├── frontend/                       React + Vite product web application
+│   └── src/
+│       ├── api/                    typed client, response shapes, load/poll hooks
+│       ├── auth/                   session state (httpOnly cookie + CSRF)
+│       ├── components/             layout, upload dialog, chat/ and document/ panels
+│       └── pages/                  dashboard, documents, document detail, search, ask,
+│                                   account, login, admin/ (users, departments, audit,
+│                                   processing, system)
+├── infrastructure/
+│   ├── nginx/                      reverse proxy, TLS termination, rate limits
+│   ├── init-letsencrypt.sh         first-issuance TLS bootstrap
+│   └── check_deployment_config.py  asserts the prod overlay really overrides
+├── .github/workflows/ci.yml        ten-job pipeline (never executed on GitHub)
+├── docs/                           the working reference: architecture, API, deployment,
+│                                   operations, security, AI, evaluation
+├── Dockerfile
+└── docker-compose.yml
+```
+
+---
+
+## Quick start
+
+### With Docker (recommended)
+
+```bash
+cp .env.example .env          # then edit the secrets
+docker compose up --build
+```
+
+This starts PostgreSQL 16, Redis 7, the Django API (migrations run on boot) and a Celery
+worker. The API listens on `http://localhost:${APP_PORT}` (default `8000`).
+
+The image installs `poppler-utils` and `tesseract-ocr`, which the OCR path requires.
+
+```bash
+docker compose exec backend python manage.py createsuperuser
+curl http://localhost:8000/health/
+```
+
+### The web application
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://localhost:5173, proxied same-origin to the API on :8000
+```
+
+Sign in with a Django user (the superuser above is a system administrator). See
+[frontend/README.md](../../frontend/README.md) for the screens and
+[docs/development](../../docs/development/setup.md) for the optional AI layers. It replaced the
+earlier testing console; the backend behaviours that console made visible — `SKIPPED`
+stages, `NOT_FOUND` fields, abstentions, lexical-vs-semantic retrieval — are all still
+shown, in plainer language.
+
+### Locally without Docker
+
+Requires Python 3.12, PostgreSQL, Redis, plus `poppler` and `tesseract` on `PATH`.
+
+```bash
+python -m venv backend/venv
+source backend/venv/Scripts/activate      # Windows Git Bash
+pip install -r backend/requirements.txt -c backend/constraints.txt
+
+cp .env.example .env                      # set POSTGRES_HOST=localhost, REDIS_HOST=localhost,
+                                          # CELERY_BROKER_URL=redis://localhost:6379/0,
+                                          # CELERY_RESULT_BACKEND=redis://localhost:6379/1
+cd backend
+python manage.py migrate
+python manage.py runserver
+```
+
+In a second shell:
+
+```bash
+cd backend
+celery -A config worker --loglevel=INFO --queues=ingest,index   # both queues: re-indexing runs on `index`
+```
+
+---
+
+## Configuration
+
+Environment variables (see `.env.example`):
+
+| Variable | Purpose |
+|---|---|
+| `DJANGO_SECRET_KEY`, `DJANGO_DEBUG` | Django core |
+| `POSTGRES_DB/USER/PASSWORD/HOST/PORT` | Database connection |
+| `REDIS_HOST`, `REDIS_PORT` | Redis |
+| `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` | Task queue |
+| `APP_PORT` | Host port for the API |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Empty means same-origin only; under `DJANGO_DEBUG` the Vite dev server (`:5173`) is allowed automatically. Credentials stay off, so the browser never attaches session cookies to a cross-origin call |
+
+Pipeline limits, in `backend/config/settings.py`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `MAX_DOCUMENT_SIZE_BYTES` | 50 MB | Rejected at the VALIDATION stage |
+| `MAX_DOCUMENT_PAGES` | 0 (no limit) | Page ceiling for a PDF (slides in a deck, frames in a TIFF); a positive number refuses longer documents as TOO_MANY_PAGES |
+| `CELERY_TASK_SOFT_TIME_LIMIT` / `CELERY_TASK_TIME_LIMIT` | 900 / 960 | Base task time limits, in seconds: what any document gets, and the floor for a long PDF |
+| `INGEST_SECONDS_PER_PAGE` | 5 | Seconds added to a PDF's time limit for each page, so a long PDF is not ended as TIMEOUT by a limit set for a short one. Measured on one CPU: a 600-page text PDF took 993 s (827 s of it embedding), a scan 8 s a page. The worker reads the page count and sends the job again with the larger limit before doing any work |
+| `INGEST_MAX_TASK_SECONDS` | 21600 | The most one task may be given (6 h, thousands of pages); beyond it a document ends as TIMEOUT. The Redis visibility timeout is set to this plus an hour, so a long task is never redelivered while it runs |
+| `OCR_DPI` | 250 | Render DPI for OCR of PDF pages. Measured, not assumed: 250 scored best across real pages (more is not better - very small print read worse at 300) |
+| `OCR_LANGUAGES` | `eng` | Tesseract packs joined with `+` (`eng+hin`); packs that are not installed are dropped, `eng` is the floor. More packs: build arg `TESSERACT_LANGS` |
+| `OCR_MIN_WORD_CONFIDENCE` | 30 | Words Tesseract is less sure of than this are dropped as speckle |
+| `OCR_DETECT_ROTATION` | True | A poorly read scan is checked for being sideways or upside down and read again if that reads better |
+| `OCR_TIME_BUDGET_SECONDS` | 540 | If the pages left would not fit in this, later pages of a long scan are read at the next resolution down (250 → 200 → 150 → 100) rather than the document timing out |
+| `OCR_EMBEDDED_IMAGES` / `OCR_EMBEDDED_IMAGES_MAX` | True / 20 | Pictures inside a PDF page, DOCX or slide are OCR'd when they read like a document, up to this many per file |
+| `DOCUMENT_CLASSIFIER` | `""` | Dotted path to a `DocumentClassifier`; empty means classification is **skipped**, never guessed |
+| `DOCUMENT_CLASSIFIER_ARTIFACT` | `ai/.../v0.1.0/model.joblib` | Trained artifact the text classifier loads |
+| `DOCUMENT_FIELD_EXTRACTOR` | `""` | Dotted path to a `FieldExtractor`; empty means extraction is **skipped**, never invented |
+| `DOCUMENT_FIELD_SCHEMA_PACK` | `""` | Schema pack the rule extractor matches; empty uses the bundled institutional pack |
+| `DOCUMENT_EMBEDDING_PROVIDER` | `""` | Dotted path to an `EmbeddingProvider`; empty means chunks are still indexed for **lexical** search, just not embedded |
+| `DOCUMENT_SCANNER` | `""` | Dotted path to a `DocumentScanner`; empty means the SCANNING stage records that the file was **not scanned** |
+| `THROTTLE_LOGIN` / `_UPLOAD` / `_SEARCH` / `_CHAT` | 10/min, 60/h, 120/h, 60/h | Per-endpoint rate limits |
+| `THROTTLE_SEARCH_BURST` | 20/min | How fast the hourly search budget may be spent: a search that reranks costs seconds of CPU |
+| `THROTTLE_CHAT_BURST` | 10/min | How fast the hourly chat budget may be spent: a question reranks too, and a streamed answer holds a server thread until it ends |
+| `SIGNUP_ENABLED` | True | Anyone may *request* an account from the sign-in page; an administrator approves each (institutional decision I7) |
+| `SIGNUP_MAX_PENDING` / `THROTTLE_SIGNUP` | 500 / 100/h | Waiting requests accepted at once; sign-up attempts per address |
+| `SIGNUP_EMAIL_DOMAINS` | `""` | Email domains a request must use (subdomains count); empty accepts any |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1000 / 150 | Chunking; changing either requires re-indexing |
+| `SEARCH_CANDIDATES` | 50 | Candidates each retrieval half returns before fusion |
+| `SEARCH_RERANK_DEPTH` | 20 | With a cross-encoder `RAG_RERANKER`, how many fused candidates the Search endpoint reranks (at least the requested `limit`); the per-search CPU cost. `15` is cheaper; `0` returns the fused order, as does the bundled lexical reranker — see [search relevance](../../docs/evaluation/search-relevance.md) |
+| `SEARCH_RELEVANCE_FLOOR` | per model | Passages scoring below it are left off the Search page (one request away with `include_below_floor`, which appends every one of them after up to `limit` matches). Unset uses the floor calibrated for search for the configured cross-encoder, or **no floor** for an uncalibrated one. Not `RAG_RELEVANCE_FLOOR`: chat's floor hid paraphrased answers in search |
+| `SEARCH_FALLBACK_RESULTS` | 3 | When no passage clears the floor, how many of the best-ranked are still returned, marked `below_floor`, beside a "no close match" note. `0` returns none |
+| `SEARCH_DEFAULT_LIMIT` / `SEARCH_MAX_LIMIT` | 10 / 50 | Results per search when the client gives no `limit` (the Search page's page size), and the most it may ask for |
+| `DOCUMENT_TABLE_DETECTOR` | bundled layout detector | Dotted path to a `TableDetector`. The one capability that defaults **on**, because it is the only one with nothing to configure — it reads structure out of text already extracted. Empty skips LAYOUT_ANALYSIS' table half |
+| `DOCUMENT_FIGURE_DETECTOR` | bundled image detector | Dotted path to a `FigureDetector`. Also on by default, and also nothing to configure: it reads the image dictionary a PDF already carries. It does **not** look at the images |
+| `RAG_MAX_PLAN_STEPS` | 4 | How many parts a question may be planned into. `1` disables planning; each step is a full retrieval, so this is a bound, not a budget |
+
+Both are also readable from the environment. Enabling the trained classifier:
+
+```bash
+pip install -r backend/requirements-ml.txt -c backend/constraints.txt   # sklearn + joblib, optional
+export DOCUMENT_CLASSIFIER=documents.processing.classification.text_classifier.TextDocumentClassifier
+```
+
+Once `DOCUMENT_CLASSIFIER` is set, a missing or unloadable artifact **fails**
+the stage rather than skipping it — configuring a classifier is a statement
+that classification is expected to happen, and skipping would hide a broken
+deployment.
+
+Secrets stay out of source control — `.env`, `media/`, `db.sqlite3`, datasets, model
+artifacts and training runs are all git-ignored.
+
+---
+
+## API
+
+Base URL: `http://localhost:8000`. All document endpoints require authentication. The
+complete, current reference — including administration, archival, conversations and the
+citation source endpoint — is [docs/api/reference.md](../../docs/api/reference.md); the table
+below is the original core.
+(Spec §16 calls for a `/api/v1` prefix; the current routes are unversioned and will be moved
+when the public surface is frozen.)
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/auth/token/` | Obtain a DRF auth token |
+| `GET` | `/api/auth/me/` | Current user, role and department |
+| `POST` | `/api/documents/` | Upload a document — returns **202 Accepted**, processing queued |
+| `GET` | `/api/documents/` | List documents the caller is authorized to see — searchable, filterable, orderable; see [Document discovery](#document-discovery) |
+| `GET` | `/api/documents/{id}/` | Document metadata and status |
+| `PATCH` | `/api/documents/{id}/` | Update title / type |
+| `DELETE` | `/api/documents/{id}/` | Delete a document |
+| `GET` `POST` | `/api/documents/{id}/versions/` | List versions, or upload a new one |
+| `GET` | `/api/documents/{id}/processing/` | Jobs with their full stage-event history |
+| `POST` | `/api/documents/{id}/reprocess/` | Re-run the pipeline on the current version |
+| `GET` | `/api/documents/{id}/content/` | Page-level extracted text for the current version |
+| `GET` | `/api/documents/{id}/classification/` | Every classification verdict on the current version, with its model |
+| `GET` | `/api/documents/{id}/extraction/` | Every extraction pass, with one row per declared field |
+| `GET` | `/api/documents/{id}/chunks/` | Indexed chunks with page, span and embedding identity (paginated) |
+| `GET` | `/api/documents/{id}/download/` | Original file — authenticated and audited |
+| `POST` | `/api/search/` | Hybrid search over authorized chunks |
+| `POST` | `/api/chat/` | Ask a grounded question; returns answer + citations or an abstention |
+| `GET` | `/api/evaluations/` | Evaluation runs, each with the configuration that produced it |
+| `GET` | `/api/evaluations/{id}/results/` | Per-case results, for tracing a bad aggregate |
+| `GET` | `/api/evaluations/{a}/compare/{b}/` | Regression check between two runs |
+| `POST` | `/api/messages/{id}/feedback/` | Rate one answer (online quality signal) |
+| `GET` | `/api/chat/conversations/{id}/` | Retrieve a conversation (owner only) |
+| `GET` | `/health/` | Liveness + database check |
+| `GET` | `/metrics` | Prometheus scrape endpoint. **Ungated by default** — `METRICS_ALLOWED_IPS` is empty unless set, and the allowlist only applies when it is non-empty. In production nginx answers 404 for it, so it is never reachable through the edge; Prometheus scrapes the backend directly inside the compose network |
+| — | `/django-admin/` | Django admin (superusers). `/admin/*` belongs to the application's administration screens |
+
+
+
+### Example
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/token/ \
+  -d "username=alice&password=secret" \
+  | python -c "import sys, json; print(json.load(sys.stdin)['token'])")
+
+curl -X POST http://localhost:8000/api/documents/ \
+  -H "Authorization: Token $TOKEN" \
+  -F "title=Exam Regulations 2024" \
+  -F "document_type=REGULATION" \
+  -F "file=@regulations.pdf"
+
+curl -H "Authorization: Token $TOKEN" http://localhost:8000/api/documents/1/processing/
+curl -H "Authorization: Token $TOKEN" http://localhost:8000/api/documents/1/content/
+```
+
+---
+
+## Document discovery
+
+Pagination on `GET /api/documents/` has existed since M2; what did not was any way to narrow
+the list before paging through it. At the scale this platform targets, paging through
+hundreds of pages by hand is not discovery. `documents/api/discovery.py` is the
+implementation; this section is the query-parameter contract.
+
+### Query parameters
+
+All of the following are optional and compose with each other and with `page`:
+
+| Parameter | Matches | Notes |
+|---|---|---|
+| `search` | `title` or the current version's `file_name`, case-insensitive substring | A document mid-processing (no current version yet) is still matched by title |
+| `status` | exact `Document.status` | `UPLOADED`, `QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`, `QUARANTINED` |
+| `document_type` | exact `Document.document_type` | `GENERAL`, `REGULATION`, `POLICY`, `SYLLABUS`, `CIRCULAR`, `FORM`, `OTHER` |
+| `department` | exact `Document.department` | Free text, matching what `POST /api/documents/` accepted |
+| `owner` | exact `Document.owner_id` | An integer id, or the literal `me` |
+| `created_after`, `created_before` | `Document.created_at` range | A bare date (`2025-01-31`) or a full ISO-8601 datetime; a bare date is read as the *whole named day* — `created_before=2025-01-31` includes documents created on the 31st, not up to its exclusive edge |
+| `updated_after`, `updated_before` | `Document.updated_at` range | Same rules as above, independently |
+| `ordering` | — | Comma-separated, each optionally prefixed `-`; allowlisted to `id`, `title`, `status`, `document_type`, `created_at`, `updated_at` (at most 3). Default is `-created_at`, matching the endpoint's behavior before this existed |
+
+An invalid value — an unrecognised `status`, an unparseable date, an `ordering` field not in
+the allowlist, `created_before` earlier than `created_after` — is a **400** naming the field,
+in the same `{"field": ["..."]}` shape every other endpoint uses. `ordering` is never handed
+to the ORM as a raw string: each token is resolved against a fixed allowlist before
+`.order_by()` ever sees it, so a value like `ordering=owner__profile__department` is refused
+rather than silently executed.
+
+**Ordering is deterministic.** `created_at` has microsecond precision but is not guaranteed
+unique — a bulk import or two uploads in the same tick can tie — so every ordering, including
+the default, has `id` appended as a tiebreak. Without it, a tied group's internal order is
+whatever Postgres feels like on a given execution, and a page boundary landing inside one can
+skip or repeat a row between fetches.
+
+### Authorization
+
+Discovery narrows what `authorization.visible_documents` already returns; it can only make
+the result set smaller. A search term, a filter value, or an ordering choice can never widen
+it back past the department/ownership boundary the plain list already enforces — that
+boundary is structural (successive `.filter()` calls on the same queryset always AND
+together), not a value any of these features could get wrong.
+
+Concretely: filtering by a department the caller does not belong to, or by another user's
+`owner` id, returns the same empty list the endpoint would return without the filter — never
+an error, which would itself confirm the department or user exists. A department's document
+*count* does not change when another department gains or loses documents, so a caller cannot
+infer another department's size without ever seeing a row. `tests_discovery.py`'s
+`AuthorizationScopingTests` covers this directly, including through search and every filter.
+
+### Response shape
+
+The `list` action returns a narrower shape than the detail endpoint does — `current_version`
+has no storage key (`file`) and no `checksum`, neither of which a browsing list needs, and
+the per-document `can_manage` hint is detail-only. Each result also carries `owner_username`,
+`is_archived` and `archived_at`, which the abbreviated example below leaves out:
+
+```json
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 42,
+      "title": "Exam Regulations 2024",
+      "document_type": "REGULATION",
+      "department": "Registrar",
+      "owner": 7,
+      "status": "COMPLETED",
+      "current_version": {
+        "id": 42,
+        "version_number": 1,
+        "file_name": "regulations.pdf",
+        "file_size": 481200,
+        "mime_type": "application/pdf",
+        "uploaded_by": 7,
+        "created_at": "2025-01-15T09:00:00Z"
+      },
+      "created_at": "2025-01-15T09:00:00Z",
+      "updated_at": "2025-01-15T09:05:00Z"
+    }
+  ]
+}
+```
+
+`GET /api/documents/{id}/` and `GET /api/documents/{id}/versions/` are unchanged — a consumer
+that needs the storage key or checksum still has both there.
+
+### Indexes, measured
+
+`Document` had no indexes beyond its primary key and the two Django creates automatically for
+its foreign keys (`owner_id`, `current_version_id`). `department` sits on the authorization
+boundary itself — `visible_documents` ORs it with `owner_id` on *every* listing request from
+a non-admin user, not only when a caller filters by it — so it is unindexed on the path every
+discovery request takes, not an edge case.
+
+Measured on a realistic fixture (tens of thousands of rows; `tests_discovery.py` has the
+construction) with `EXPLAIN (ANALYZE, BUFFERS)` against the real Postgres container, not
+estimated:
+
+| Query shape | Before (no index) | After (`department, -created_at` + `status`) |
+|---|---|---|
+| Plain authorization-scoped listing | 44–76 ms (parallel sequential scan) | ~8 ms (bitmap index scan) |
+| `+ status` filter | 35 ms | ~4 ms |
+| `+ department` filter | 45 ms | ~7 ms |
+| `+ search` | 28 ms | ~3 ms |
+| `ordering=title` | 60 ms | ~8 ms |
+| Default ordering | 76 ms | ~8 ms |
+| `SYSTEM_ADMIN`, `status` filter, no department scope | — | ~6 ms, uses the `status` index directly |
+| `SYSTEM_ADMIN`, explicit `?department=` filter, no OR | — | ~1.8 ms — an `Index Scan` walking `department, -created_at` directly in the order `ORDER BY` wants, no separate sort |
+
+Two indexes, for two different access paths: `department` sits first in a composite index
+with `-created_at` because that pair is what the authorization OR and the default ordering
+both touch; `status` is separate because a `SYSTEM_ADMIN`'s listing carries no
+department/owner restriction at all, so "every `FAILED` document across the institution" has
+no department in its `WHERE` clause for the first index to help.
+
+**What the composite index does not do:** for the dominant case — the authorization OR still
+present, as it is on every non-admin request — a plain single-column `department` index
+measured about the same or, at low department cardinality (a handful of departments, each a
+large share of the table), measurably *better* than the composite one, because Postgres's
+planner weighs the composite index's larger per-entry size against a sequential scan and
+sometimes prefers the scan. At realistic cardinality (dozens of departments, each a small
+share) the two were close either way. The composite index earns its place on the
+`SYSTEM_ADMIN`-department-filter case above, which is a clean, repeatable win with no
+measured downside — not on the theory that "wider index, sorted output" is free.
+
+No index was added for `search`. `ILIKE '%term%'` cannot use a plain B-tree regardless of
+which columns it covers, and every measured case above already runs `search` *inside* an
+authorization-narrowed set — the department/owner index does the narrowing, and the `ILIKE`
+filter only has to scan what is left. The one case that does not benefit is a `SYSTEM_ADMIN`
+searching with no other filter, which is a full sequential scan over the whole table:
+measured at ~57 ms at ~86,000 rows. Acceptable at the scale this platform targets today; a
+trigram (`pg_trgm`) or full-text index is the natural next step if admin-wide free-text search
+at much larger scale becomes a real bottleneck — not built pre-emptively against a case that
+is not yet slow.
+
+---
+
+## Document processing
+
+Upload is **never** synchronous with extraction. The API stores the artifact, records a
+`ProcessingJob`, returns `202 Accepted`, and the worker does the long-running work (§10).
+
+### Lifecycle
+
+```
+Document:      UPLOADED → QUEUED → PROCESSING → COMPLETED | FAILED
+ProcessingJob:            QUEUED → PROCESSING → COMPLETED | FAILED
+
+Stages:  INGESTION → SCANNING → VALIDATION → TEXT_EXTRACTION → OCR
+                   → LAYOUT_ANALYSIS → [DocumentContent persisted]
+                   → CLASSIFICATION → EXTRACTION → INDEXING
+```
+
+- **INGESTION** — sniffs the file type from magic bytes rather than trusting the uploaded
+  extension (only text formats — `.txt`, and a `.csv`/`.tsv` that really is text — may fall
+  back to the extension, since they have no signature). DOCX, XLSX and PPTX share one ZIP
+  signature with any `.zip`, so the archive is opened and asked which main part it holds
+  (`word/document.xml`, `xl/workbook.xml`, `ppt/presentation.xml`).
+- **SCANNING** — runs *before* validation, deliberately. See
+  [Scanning runs before validation](#scanning-runs-before-validation-and-that-order-is-deliberate).
+- **VALIDATION** — enforces supported type, size and, when one is set, a page limit (slides in a deck, frames
+  in a TIFF), proves the PDF parses, and refuses decompression bombs in any Office file.
+- **TEXT_EXTRACTION** — reads the text layer per page (see
+  [How each format is read](#how-each-format-is-read)). A page whose layer is absent, or
+  unreadable (unmapped glyphs, replacement characters), is left unclaimed with the reason
+  recorded, rather than silently blanked or stored as garbage.
+- **OCR** — claims exactly those pages, rendering one page at a time to keep memory bounded.
+  Keeping the two paths separate makes each independently measurable.
+- **LAYOUT_ANALYSIS** — last in the content phase, because it reads the finished page text:
+  a table on a scanned page is not there to be found until OCR has filled that page in.
+  Stores the tables an extractor read as cells (verified like any other), finds the ones it
+  could not by whitespace layout, and locates figures; see
+  [Structure and multi-part questions](#structure-and-multi-part-questions-113-25-phase-12).
+- **CLASSIFICATION** — reads the persisted `DocumentContent`, never the original file.
+- **EXTRACTION** — likewise; see [Information extraction](#information-extraction-112-fr-10).
+- **INDEXING** — chunks and embeds the content; see [Search](#search-114-122-fr-11--fr-13).
+
+### DOCX, and what a page means there
+
+Two things about DOCX need stating, because both are easy to get quietly wrong.
+
+**A DOCX has no page count.** Pagination in Word is a *rendering* result — it depends on the
+fonts, page size and printer metrics of whoever opens the file — so there is no page number
+to read out of the bytes. What the file does record is where the author asked for a page
+break. Those are the boundaries used, and `metadata.pagination` says `explicit_breaks` (or
+`none`) so a reader can tell an author-declared boundary from a rendered one. Claiming
+anything more precise would be inventing structure the file does not contain.
+
+**A DOCX is a ZIP archive**, and archives from untrusted users can be decompression bombs.
+The size checked at VALIDATION is the *compressed* size, which says nothing about what it
+expands to, so the uncompressed total and compression ratio are checked before any parsing
+happens.
+
+The body is walked as XML in document order, because `python-docx`'s `paragraphs` and
+`tables` skip most of what carries content in an institutional document: content controls
+(the fill-in fields of a form), tracked insertions, text boxes (read once — each is stored
+twice for old and new Word), nested tables, headers, footers, footnotes and endnotes. A
+merged cell holds its text once rather than once per column it spans. List numbers are
+*generated* from `numbering.xml` — "2.3.1" is not in the paragraph's text, so without
+them "see clause 2.3.1" refers to nothing. A DOCX with no text and nothing legible in
+its pictures fails with `EMPTY_EXTRACTION`.
+
+### How each format is read
+
+| Format | Read with | A page is | Tables |
+|---|---|---|---|
+| PDF | pdfplumber; Tesseract for scanned pages | a PDF page | ruled grids cell by cell as a reader sees them (invisible cell backgrounds are not rulings, touching tables are split, merged cells and two-row headers resolved); borderless tables inferred from aligned text |
+| Scan or photo — PNG, JPEG, TIFF, WebP, BMP | Tesseract, with word positions | an image, or one TIFF frame | inferred from word positions |
+| DOCX | python-docx, walking the XML | the author's page breaks | the document's own cells |
+| XLSX | openpyxl | a visible sheet, in 500-row parts with the header repeated | a table per run of non-blank rows |
+| CSV, TSV | `csv`, encoding and delimiter detected | the file, in 500-row parts | the whole file |
+| PPTX | python-pptx | a slide | slide tables; a chart becomes a table of its categories and series |
+| DOC, XLS, PPT (old Office) | LibreOffice converts to DOCX / XLSX / PPTX, then read as those | as the modern form | as the modern form |
+| ODT, ODS, ODP (OpenDocument) | `content.xml` walked as XML | the file (ODT), a sheet (ODS), a slide (ODP) | the document's own cells; a chart becomes a table of the numbers stored beside it |
+| RTF | built-in reader (groups, code pages, Unicode escapes) | the file | the format's own table rows |
+| HTML, XHTML | lxml (broken markup is read, not refused) | the file | `<table>`, with colspan and rowspan expanded |
+| JSON, JSON Lines, XML | built in | the file, or a sheet | a list of alike records is a table; anything else is `path: value` lines |
+| TXT, Markdown, log, YAML, INI... | built in; UTF-8, UTF-16, UTF-32 and Windows ANSI detected | the file | whitespace layout detector |
+
+**Figures - charts, flowcharts, diagrams.** What a picture *shows* is not in its words: which
+bar a number belongs to, where an arrow goes. Three layers read it, cheapest first.
+A chart in a Word, PowerPoint or OpenDocument file is read **exactly**, as the table of
+numbers stored beside it - no model, no key. A picture (pasted, embedded in a PDF, or an
+image file with few words in it) and a diagram drawn with a PDF page's own shapes (an Excel
+chart, a Word flowchart) are shown to a **vision model**, which writes down every label,
+data point and arrow; its reading goes into the page text between `[Figure: ...]` and
+`[End of figure]` markers, where search and chat find it and where it is plainly marked as
+machine-written. It runs on its own chain of vision models (`FIGURE_DESCRIBER_CHAIN`), never
+spending chat's allowance, with a per-document budget of figures and seconds; a figure past
+it stays recorded as an unread figure, as before. Switched off (`FIGURE_DESCRIPTIONS=False`)
+or with no key set, nothing changes and no picture leaves the server.
+
+The same reasoning runs through all of them. **Extractors that can see real cells hand
+them over as structure** instead of flattening them to text for a detector to rediscover:
+a blank cell otherwise leaves no trace, and the number after it silently moves into the
+wrong column. Every table is first written into the page text as one `a | b | c` row per
+line (blank cells kept) with its exact span, and verified against it cell by cell.
+
+**Tables are kept as text, not as grids** (since `ingestion-v4`). Once verified, each
+table's span is rewritten as one line per row, every value beside the name of its column,
+the line opening with the table's number in the document and the row's number in it:
+
+    Table 2, row 1: Course Code: 23CS101; Course Title: Engineering Mathematics; Credits: 4
+    Table 3 (IIIrd Year - Semester II / Practical), row 7: Course Code: 23CS3L1; ...
+
+No grid is stored (no `DocumentTable` rows, no Tables tab); the text is the table. That is
+what makes a reference valid: a chunk of a long table, a quoted row and a citation each
+carry the table, the row and every column's name, so "85000" in the fourth chunk of a fee
+table still says it is the CSE tuition. A citation of table rows names them
+("Syllabus, p. 5, Table 2, row 1"), narrowed to the rows the answer's sentence was taken
+from when that can be told. A long sheet split over pages keeps one table number and goes
+on counting rows. A wrong label would be worse than none, so labels are given only on
+evidence. A header the source declared (HTML `<th>`, a Markdown rule, JSON/XML keys, a
+chart's series, a ruled PDF's merged header) is used as it is. A guessed one must show
+positive evidence: column-naming words in two thirds of its cells ("Programme | Fee",
+"Command | Description | Syntax"), or - for three or more short cells - half of them naming
+columns over rows with numbers, or capitals over plain words, or names without digits over
+cells with digits, or short names over sentences; and it must not hold a value, a person's
+name, a clause, a cell repeated in its own column, a column mixing words with figures, or
+(for a table read from layout alone) leave a column unnamed. Otherwise rows are written
+without labels, every cell in its place ("23CS104; Workshop; ; ; 2"). A form - labels with
+their values beside them ("Roll No: 21A91A0501") - is written as pairs only on evidence too
+(colons, field-name words, values of different kinds), so "Student | Ravi Kumar" over
+"Tuition Fee | 85000" is a form and never a header. A row with only its first cell filled is a
+section (named in the reference of the rows under it) only if it reads as one ("Semester II",
+"Theory", "Monday", "Undergraduate", capitals, a colon); it keeps its column's label only if
+it is a value of that column ("CS102" among course codes); a note, a total or a legend is
+written as it is, under no label. A long sheet split over pages goes on under the same
+number, labels and columns. Field extraction reads a table written as text as a form
+(`text_rows.field_view`, a same-length view like the one that turns cell pipes into spaces):
+the rows of a table whose labels recur are not read - a course code in row 1 of twelve is not
+the syllabus's - while the rows of a form are, each pair ending where its cell ends.
+`processing/tables/text_rows.py` writes and reads the form; `DocumentTable` stays only for
+passes made before `ingestion-v4`. One thing to know: "Table N" is this system's own
+numbering, in reading order, and may differ from a document's own captions.
+Pages are read in **reading order** — a two-column page is read one column after the other,
+and a numbered-clause list is left as the lines it is, never cut into cells.
+
+**Ruled PDF tables are read as drawn, not as encoded.** Word exports paint a rectangle
+behind every cell and every paragraph in it, in the cell's own colour; a filled rectangle
+in the colour already behind it is not a ruling (lines and stroked rectangles always are),
+so those backgrounds no longer turn a three-column table into seven columns or a wrapped
+description into one row per line. Each rule was narrowed until the case it gets wrong
+cannot occur, because an independent review found the first version reading ordinary
+layouts worse than the code it replaced:
+
+- Two tables drawn touching are split where their columns conflict, but borders a few
+  points off (a Word table edited row by row) are one table.
+- A table's title row ("IIIrd Year - Semester II") stays its first row, inside the table's
+  span; written as text, it is named in every row of the table ("Table 3 (IIIrd Year -
+  Semester II), row 4: ..."), so every chunk of a long table carries its semester.
+- A border drawn as a thin rectangle is a ruling in whatever colour it is - a browser
+  prints a dark header bar's cell borders in the bar's own colour, and they are all that
+  says where its cells end. Only a rectangle as large as a cell, in the colour behind
+  it, is paint.
+- A table ruled only around its columns, each of whose cells stacks a list of names or
+  figures (a faculty list, a nominal roll), is not stored as a table with one row of six
+  people: its rows are read from the text, as the code before this one read them. A few
+  questions with sub-parts among single ones (a question paper) are rows of a table, and
+  so is a body of fewer than four cells - one record with a list in each cell.
+- A header split over two rows ("Periods/Week" over L, T, P) becomes one ("Periods/Week L")
+  only when it is laid out as a header: every cell below lies under a cell merged across.
+  A form's first rows (a photo merged down beside "Name") stay as drawn.
+- A label merged down a group of rows ("Pool-I") is written into each record it spans -
+  never a figure or a measure ("9 Hrs", "5 x 2 = 10M", "Rs. 5,000/-"): a part's total marks
+  or an elective slot's credits stays once, so a sum over the column stays right. Text that
+  starts with a number is a measure unless its shape says otherwise ("1st Year", "3 Sem",
+  "10A"); not filling is what the code before this one did, so a doubt is settled that way.
+- A cell printed sideways is read in its own direction; a box that holds a table of its
+  own (a statement body, a precinct bulletin) is left to the layout reader, a bulleted
+  cell or two short lists in one cell are not.
+
+**What the PDF itself gets wrong is put right** (`extractors/wording.py`), and only where
+the repair cannot make a correct text worse:
+
+- A word broken across lines by a hyphen is joined ("inspira-" / "tion"), keeping the
+  hyphen where the hyphenated form is the word ("AI-powered"). Where a join could change
+  what is said — "vis-" / "a-vis", "go-" / "to", "short-" / "but" — the lines are left as
+  drawn.
+- A converter that dropped the spaces between words ("Adieselenginehasafuelinjectionsystem")
+  has those runs split into common words. Evidence comes first: a run of 20+ letters that
+  splits into four or five common words with a function word among them cannot be a real
+  word, and only a page that has one gets its shorter runs split, under stricter rules
+  (every content word common, at least four letters, a strong function word such as "the",
+  "of" or "and", no derivational suffix at the end). A page with no such run is left exactly
+  as drawn, whatever words on it the list lacks; names, codes, links, paths, identifiers and
+  CamelCase are never touched. The false-positive rate was measured on the 77,000 dictionary
+  words the list lacks (0.007%) and on names, places and terms, not assumed.
+- A symbol-font bullet (Wingdings, Symbol) at the start of a line is written as "•"; the
+  same glyphs elsewhere (Greek letters, arrows, ticks) stay.
+- Contents lines — a dot leader, then a page number — stay lines instead of becoming
+  tables, when most lines of a band are such entries; a table with one dotted total row
+  stays a table.
+
+The word list (126,000 English words by frequency) is wordninja's, MIT-licensed, and ships
+inside the repository (`extractors/data/`) with its licence: no package is fetched at image
+build time, and if the file is ever missing the repairs switch off and the miss is logged.
+
+Work is **bounded**: a spreadsheet stops at 200,000 filled cells (and says so in its last
+page), a blank-row run ends a sheet, pictures are OCR'd up to a per-file budget, and a
+failure in the PDF engine on one page falls back to the previous engine for that page
+only. A `.docx`-named workbook is still read as a workbook: the bytes decide.
+
+**Re-extracting what is already uploaded.** Every extraction records the pipeline version
+that wrote it (`ingestion-v3` now). `python manage.py reprocess_documents --dry-run` lists
+the documents an older pipeline read; run it without `--dry-run`, in batches with
+`--limit`, to queue them. It uses the same path as the Reprocess button, so a run already
+in progress is never doubled, and the previous text stays live until the new extraction is
+indexed. `--all`, `--file-type` and `--department` narrow or widen the selection.
+
+### Versioning and evidence
+
+Each upload becomes a new immutable `DocumentVersion` with its own storage path, SHA-256
+checksum and size. Reprocessing writes a **new** `DocumentContent` row rather than
+overwriting the previous one, so a better extractor can be compared against what the old
+pipeline produced. Classification verdicts are stored per run with the model name and
+version that produced them.
+
+### Failure handling (§17.1, §18)
+
+`StageError` is **permanent by default** — a corrupt, oversized or unsupported document
+fails identically on every attempt, so retrying it only burns worker capacity and writes a
+dishonest attempt history. Only `TransientError` (dropped connections, temporarily
+unreachable services) is retried, up to 3 retries — four attempts in total, since
+Celery's `max_retries` counts retries and not the first run — with exponential backoff. Every failure
+carries a structured `ErrorCode`: `UNSUPPORTED_FILE_TYPE`, `FILE_TOO_LARGE`,
+`TOO_MANY_PAGES`, `CORRUPT_DOCUMENT`, `OCR_FAILED`, `EMPTY_EXTRACTION`, and others.
+
+Retrying is **idempotent per job**. Every stage creates rather than updates, so the pipeline
+deletes whatever a previous attempt at the *same* `ProcessingJob` wrote before it starts
+(§10.2). History *across* jobs is untouched — a reprocess creates a new job, so its output
+sits beside the old rather than replacing it, which is what keeps two pipeline versions
+comparable. `ProcessingEvent` rows from failed attempts are deliberately preserved.
+
+---
+
+## Information extraction (§11.2, FR-10)
+
+The `EXTRACTION` stage reads the persisted `DocumentContent` and matches a per-document-type
+schema against it, producing one `ExtractedField` row per declared field.
+
+**Schemas are data, not code.** The spec's worked example is an invoice, but this platform's
+document types are institutional (`REGULATION`, `CIRCULAR`, `SYLLABUS`, `POLICY`, `FORM`).
+Adding an `INVOICE` type would be fiction about what the platform ingests. Instead the
+bundled `institutional-v1.json` covers the real types, and `invoice-v1.json` satisfies §11.2
+as a second pack — same mechanism, zero code change.
+
+**A value that cannot be pointed at is not evidence.** The service refuses to persist any
+span whose offsets do not re-slice out of the stored `PageContent.text` to the claimed text.
+That makes fabrication structurally impossible rather than merely discouraged, and the stored
+offsets are what the §12.3 citation model will need.
+
+Five outcomes, all distinguishable in stored data:
+
+| Outcome | How it is recorded |
+|---|---|
+| Nothing configured | stage `SKIPPED`, no result row |
+| No schema for this document type | stage `SKIPPED`, message names the type |
+| Field genuinely absent | `ExtractedField` with status `NOT_FOUND` |
+| Matched but failed validation | status `INVALID`, with the rule it failed |
+| Two different values found | status `CONFLICTED`, value empty, every candidate recorded |
+
+The last one matters most: a silent first-wins pick is exactly the confident wrong answer
+this project refuses to produce. The matching core is a pure function over
+`(page_number, text)` pairs with no Django import, so the same code can be scored offline
+against an evaluation set later.
+
+---
+
+## Search (§11.4, §12.2, FR-11 – FR-13)
+
+### Chunking
+
+Chunks **never span pages**. A chunk that straddles a page boundary cannot answer "which
+page did this come from", and page number is half of the §12.3 citation model. Every chunk
+stores `page_number`, `character_start` and `character_end`, and the service refuses to
+write a chunk whose offsets do not re-slice out of the stored page text — the same
+invariant field extraction enforces.
+
+### Embeddings — read this before trusting a result
+
+The bundled `HashingEmbeddingProvider` is **deterministic, offline, and NOT semantic**. It
+hashes word and character n-grams, so two texts are close when they share *vocabulary*, not
+*meaning* — "car" and "automobile" are orthogonal to it.
+
+It is the offline, zero-cost baseline - the default in tests and CI. Real providers (a local
+sentence-transformer, or Bedrock Titan) are one `DOCUMENT_EMBEDDING_PROVIDER` setting and a
+re-index away; this one needs no keys, no download and no network, and never varies.
+What it buys is the entire mechanism — chunking, vector storage, the pgvector HNSW index,
+fusion with the lexical half, the permission filter — built and measurable against a
+baseline that costs nothing and never varies.
+
+`semantic = False` travels with every batch, is stored on every embedding row, and is
+returned in every search response. Swapping in a real model is a settings change plus the
+re-indexing §11.4 already requires.
+
+### Hybrid retrieval
+
+Lexical and vector search answer different questions: vector finds passages *about* the
+query, lexical finds the ones that literally contain `REG/2024/117`. They are fused with
+reciprocal-rank fusion over **ranks**, not raw scores — a `SearchRank` value and a cosine
+distance are not on a comparable scale, and normalising them against each other would
+invent a relationship neither claims.
+
+The lexical query OR-s the whole-query form with each individual term. Each rescues a case
+the other loses: Postgres tokenizes `REG/2024/117` as one compound lexeme (so splitting it
+finds nothing), while the whole-query form AND-s a natural sentence into oblivion.
+
+**Authorization runs before similarity, always.** §14: *"Similarity alone is never an
+authorization mechanism."* Ranking an unauthorized chunk and then dropping it would still
+let its content influence the results, and would leak its existence through counts and
+scores. Candidate counts for an unauthorized caller are zero, not filtered-after-the-fact.
+
+If no embedding provider is configured, chunks are still written and still **lexically**
+searchable — half a search is more useful than none, and the vectors can be backfilled.
+
+---
+
+### Retrieval answers from the live content only
+
+Chunks hang off the version and the extraction pass that produced them, and neither is ever
+deleted — that is what makes two pipeline versions comparable. It also meant retrieval could
+see a document's entire history. Two filters now bound it to the current version's current
+extraction pass, and both were load-bearing:
+
+**Superseded versions.** Measured on a two-version regulation, the answerer replied:
+
+```
+Attendance minimum is 75 percent [1] ... Attendance minimum is 60 percent [2]
+```
+
+— the **withdrawn** rule quoted beside the one in force, same citation formatting, nothing
+to tell a reader which is current. For a regulations platform that is the worst failure
+available: not a missing answer, but a confidently cited wrong one.
+
+**Superseded extraction passes.** A reprocess writes a full second set of chunks. One
+reprocess took search from 2 hits to 3, of which 2 were unique — the same passage retrieved
+twice, spending the context budget on a duplicate and letting one piece of evidence count as
+two.
+
+`DocumentVersion.current_content` mirrors `Document.current_version` and is set inside the
+same transaction that writes the content, so a half-written pass is never reachable. The
+migration backfills it; without that, every chunk already indexed would have silently dropped
+out of search while the migration reported success. Verified on the live database: **0 of 46
+existing chunks were excluded** by either filter.
+
+History is still stored and still served by the version endpoints. It is simply not what a
+question gets answered from.
+
+## RAG (§12, FR-14 – FR-16)
+
+```
+question → permission-filtered hybrid retrieval → rerank → context
+         → LLM gateway → grounding + citation validation
+         → answer + sources, or an abstention
+```
+
+### The bundled answerer quotes; it does not generate
+
+The bundled `ExtractiveAnswerer` selects the sentences from retrieved passages that best
+answer the question and returns them **verbatim** with their markers. It cannot hallucinate,
+because every character it emits was copied from a passage the caller was authorized to
+read. It also cannot synthesise across passages, resolve pronouns or rephrase — it is a
+baseline, not a destination. `generative: false` is in every response, and swapping in a
+real provider is one setting (`RAG_ANSWERER`).
+
+### Generative answers (optional)
+
+```bash
+pip install -r backend/requirements-llm.txt -c backend/constraints.txt
+
+# Either the first-party API...
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# ...or Amazon Bedrock, on ordinary AWS credentials and no Anthropic key
+export RAG_ANSWERER_BACKEND=bedrock
+export AWS_BEDROCK_REGION=us-east-1        # a region with model access granted
+
+export RAG_ANSWERER=documents.rag.claude.ClaudeAnswerer
+```
+
+**The two backends are not the same API surface**, and the differences are not optional:
+Bedrock model ids carry an `anthropic.` prefix (applied automatically - forgetting it is a
+404 that reads like the model does not exist), a region is required rather than defaulted,
+and **server-side refusal fallbacks are unsupported there** - sending that parameter to
+Bedrock is a 400, so the equivalent is client-side middleware registered on the client. The
+answerer selects the right shape per backend rather than sending one and hoping.
+
+The extractive baseline quotes sentences, which reads like a search result rather than a
+reply: it cannot rephrase, cannot combine two clauses, and cannot say *"no, because..."*.
+[`rag/claude.py`](../../backend/documents/rag/claude.py) is the other side of that trade, behind
+the same `LLMProvider` gateway - swapping it in is one setting, and no caller changes.
+
+**No guardrail moves.** A generative model can invent, so everything built to catch
+invention now earns its keep:
+
+- retrieval still runs the **permission filter first**, so the model only ever sees passages
+  this caller may read;
+- injection-flagged passages are still labelled in the prompt as *data to report on, never
+  a directive to follow*;
+- every claim must carry a resolvable marker, and `grounding.validate` checks the answer's
+  content words actually appear in the passages it cited;
+- an answer that fails those checks is **downgraded to an abstention** by the engine, not
+  returned with a warning attached.
+
+The model is checked, not trusted — the same contract the extractive answerer had, applied
+to a component that can actually get it wrong.
+
+Defaults: **Claude Opus 5**, effort `medium` (grounded answering over a handful of short
+passages does not need deep reasoning, and latency is felt directly in a chat box), a 60s
+timeout rather than the SDK's 10-minute default, and server-side refusal fallbacks — a
+disciplinary circular or a safety incident report is exactly the sort of legitimate content
+a classifier can decline on.
+
+**A model outage falls back to the extractive answer rather than returning a 500** (§18
+makes that the gateway's problem), and records `fell_back_from` so a quietly degraded answer
+never passes as a normal one.
+
+**Neither backend has completed a live call from this repository.** The first-party key
+available during development authenticated successfully and was then refused for billing
+(`credit balance is too low`), and no AWS credentials were present, so the request shapes
+have never been validated by a server. They follow the current SDK and are covered by 26
+tests against a stubbed client - hallucination caught by grounding, refusal abstains, outage
+degrades to the extractive answer, empty context never reaches the model, and the
+Bedrock-unsupported parameter is asserted absent on that path - but **treat the first real
+call as the test**.
+
+### Hard-wrapped documents used to get cut off mid-sentence
+
+Newlines are treated as clause boundaries, because institutional documents put one clause
+per line far more often than they write flowing prose. But a document wrapped at the right
+margin puts newlines *inside* sentences too, and the answer came back truncated:
+
+```
+Q: What is the attendance minimum?
+A: A student must maintain a minimum of 75 percent attendance in each course to [1]
+```
+
+which reads as a broken system rather than a terse one. Continuation lines are now rejoined
+before sentence splitting, using the conservative half of the classic hard-wrap heuristic:
+**only a line beginning with a lowercase letter continues the one above it**, and table rows
+are never joined on either side — their newlines are the row separators, and merging two
+rows would produce a row that is not in the table at all.
+
+Under-joining costs a slightly short quote. Over-joining would weld a heading onto a clause
+and present the result as one sentence from the document.
+
+### Abstention is a first-class outcome (§12.4)
+
+Seven distinct reasons, each recorded rather than collapsed into one silence — because "no
+documents matched", "nothing was relevant enough" and "the answer could not be grounded"
+are three different facts about the system:
+
+| Reason | Meaning |
+|---|---|
+| `NO_QUERY` | empty question |
+| `NO_DOCUMENTS` | no authorized document matched |
+| `NO_RELEVANT_PASSAGES` | retrieval found candidates, none beat the relevance floor |
+| `EMPTY_CONTEXT` | no passage survived context construction |
+| `MODEL_ABSTAINED` | passages were relevant but none answered the question |
+| `UNGROUNDED` | the answerer produced text that failed validation |
+| `MAYBE_IN_A_FIGURE` | nothing answered, and a retrieved document has figures the system cannot read |
+
+The wording is exactly what §12.4 specifies: *"I couldn't find enough information in the
+provided documents."*
+
+### Answers are verified, not trusted
+
+Before anything is returned, `grounding.py` asks four questions of the answer:
+
+1. **Does every marker it cites exist?** Citing `[7]` when six passages were supplied is a
+   fabricated reference — the cheapest hallucination to detect, and the most damning.
+2. **Did it cite anything at all?** An uncited claim cannot be checked by its reader.
+3. **Is every figure it states in a passage it cited?** Numbers, percentages, amounts,
+   dates and identifiers, compared formatting-insensitively. This is the hard gate.
+4. **Is its prose drawn from the cited passages at all?** A loose backstop
+   (`RAG_MIN_SUPPORT_RATIO`, 0.25) against answering a different subject, measured against
+   *only the cited* passages - an answer must not borrow credibility from evidence it never
+   referenced. See [docs/ai/pipeline.md](../../docs/ai/pipeline.md#grounding).
+
+A failure downgrades the answer to an abstention. An answer that cannot be grounded is
+indistinguishable from an invention.
+
+### Documents are data, never instructions (§13)
+
+Retrieved text is fenced, labelled, and the prompt says plainly that anything inside it
+which looks like an order is data to report on, not a directive to follow.
+
+Passages that look like injection attempts are **flagged but still retrieved** — dropping
+them would let an attacker hide a document from search. They are excluded from being
+*quoted as answers*, though: a live test showed a hostile document's false claim
+("attendance minimum is 10 percent") being quoted beside the real answer, which launders
+manipulative content into looking authoritative. It stays findable via `/api/search/` and
+is reported in `suspected_injections`; it just does not get to be the answer. If every
+retrieved passage is hostile, the system abstains.
+
+---
+
+## Upload safety, malware scanning and rate limiting (§13)
+
+### What the API refuses before anything is stored
+
+The pipeline has always refused an oversized, empty or unparseable file. What it could not
+do is refuse it *in time*. INGESTION, SCANNING and VALIDATION run in the Celery worker,
+which is after the request returned `202` — and by then a `Document` row, a
+`DocumentVersion` row and the bytes themselves had been committed to `MEDIA_ROOT` or PUT
+into the bucket. The document was marked `FAILED` and every one of those artifacts stayed.
+
+So an authenticated caller could store arbitrary content, of arbitrary size, in the
+institution's object store, indefinitely, and the only trace was a failed job. Nothing the
+platform *read* was ever unrestricted; what it *kept* was.
+
+`documents/uploads.py` is the admission check that now runs first, inside the request:
+
+| Refused | Status | Why here and not only in the worker |
+|---|---|---|
+| empty file | 400 | nothing to process; DRF's `FileField` catches it first in practice |
+| over `MAX_DOCUMENT_SIZE_BYTES` | **413** | the bytes are never written, so a rejected upload costs no storage |
+| extension not one the pipeline parses | 400 | a `.zip` or `.exe` is never stored to be opened later |
+
+Both upload paths go through it — `POST /api/documents/` and
+`POST /api/documents/{id}/versions/` — because a rule on one door is not a rule.
+
+**A `.zip` is opened in the browser, never on the server.** The upload dialog takes one
+file, several, or a zip of them; it reads a zip's directory in the page
+(`frontend/src/lib/zip.ts`) and sends each file inside as an ordinary upload, so each meets
+this check, the malware scan and the audit trail on its own, and the API still refuses a
+`.zip` itself. Folders, OS metadata (`__MACOSX/`, `.DS_Store`), nested zips, encrypted
+entries and unsupported types are listed as skipped, with the reason. Every upload from the
+dialog carries an `Idempotency-Key` derived from the file and its title, type and
+department, so a retry after a lost response, a Stop, or choosing the same zip again after
+half of it went through (within the 24 hours keys are kept) returns the documents already
+made instead of second copies. A key whose document has since been deleted is answered
+404, and the dialog sends that file once more under a fresh key.
+
+**This is deliberately the cheap half of the job.** It reads a client-supplied *name*, so it
+proves nothing about content: a `.pdf` that is not a PDF is admitted here and still fails at
+VALIDATION, which sniffs the actual bytes. The extension check exists to stop the
+obviously-inadmissible from being persisted, not to decide what a file is.
+
+**What it does not bound:** the request body has already been read by the time a serializer
+runs — Django's multipart parser spools it to a temporary file, which is then discarded.
+This bounds what gets *stored*, not what gets *transferred*. Bounding the transfer is
+nginx's `client_max_body_size` (55m, deliberately just above the application limit so the
+application produces the error message rather than the proxy). A deployment without that
+proxy still reads the whole body before rejecting it.
+
+Every refusal is audited as a `DOCUMENT_CREATE`/`DENIED` with the filename and, for an
+oversize, both the size and the limit — an operator needs to recognise a pattern, and needs
+the limit recorded beside the size because the setting changes. The file's *contents* are
+never recorded. `adi_upload_rejections_total{reason}` counts them, labelled from a fixed
+vocabulary rather than from anything the caller chose.
+
+### Scanning runs before validation, and that order is deliberate
+
+Validation answers a *usability* question — "is this a document type we support?" Scanning
+answers a *security* one — "is this hostile?" Running validation first meant an executable
+renamed `.pdf` was rejected as `UNSUPPORTED_FILE_TYPE` and never scanned, throwing away the
+one fact worth escalating: that somebody uploaded a binary. INGESTION bounds the file size
+first, so nothing unbounded reaches the scanner.
+
+### The bundled scanner is NOT an antivirus
+
+`HeuristicScanner` has no signature database and will not catch a novel dropper. It catches
+the realistic file-upload abuse for a document platform — a document that is secretly an
+executable, an Office file carrying a VBA macro, a PDF that runs JavaScript or launches a
+program, and the EICAR test string. `is_antivirus: false` is in every result. Point
+`DOCUMENT_SCANNER` at ClamAV for real coverage.
+
+Three verdicts, and the middle one matters:
+
+| Verdict | Outcome |
+|---|---|
+| `CLEAN` | processing continues |
+| `SUSPICIOUS` | **processing continues**, findings recorded — a macro is a capability, not proof of intent, and blocking every macro-bearing document would make the platform unusable |
+| `INFECTED` | document is **QUARANTINED**, never parsed, never retried |
+
+`QUARANTINED` is deliberately distinct from `FAILED` (§10.1): `FAILED` invites a retry,
+`QUARANTINED` is a decision not to touch the file. An unconfigured scanner records
+**SKIPPED** — saying the file was not scanned rather than implying a clean bill of health —
+and a scanner that is *down* blocks the document rather than letting it through unscanned,
+because that is exactly when the control matters.
+
+### Rate limiting
+
+Per endpoint class, not one global number: a document listing is a cheap indexed query, a
+chat request runs retrieval, reranking and an answerer.
+
+| Scope | Default | Why |
+|---|---|---|
+| `login` | 10/min | Credential guessing |
+| `upload` | 60/hour | Writes bytes, queues worker time. Each file of a batch or zip counts; the dialog stops at the limit and says when the rest can go |
+| `search` | 120/hour | Two retrievers plus fusion |
+| `chat` | 60/hour | The most expensive path in the system |
+| `signup` | 100/hour | Per address, anonymous: bounds probing for taken usernames while letting a class behind one campus NAT sign up |
+
+Login is keyed on **IP *and* username**: keying on IP alone lets a botnet spread a guessing
+run across addresses; keying on username alone lets anyone lock a known account out by
+failing logins against it. Counters live in **Redis**, not the default per-process cache —
+with several API workers each would otherwise keep its own counter and the effective limit
+would silently become N times what was configured.
+
+---
+
+## Evaluation (§19, FR-17)
+
+The project's rule is that nothing claims a number without a scored set. This is the
+machinery that makes the rule enforceable.
+
+```bash
+python manage.py evaluate --load dataset.json --dataset institutional-qa     --as-user alice --label baseline
+python manage.py evaluate --dataset institutional-qa --as-user alice     --compare-to 1      # against an earlier run, locally
+python manage.py evaluate --dataset institutional-qa --as-user alice     --baseline baseline.json --fail-on-regression   # for CI
+```
+
+### What is measured
+
+| Layer | Metrics |
+|---|---|
+| Retrieval | Recall@K, Precision@K, MRR, MAP, nDCG@K |
+| Generation | groundedness, coverage, abstention accuracy |
+| Citations | citation accuracy, source coverage |
+| System | latency mean / p50 / p95 / max |
+
+### The regression gate (§19.2)
+
+```bash
+python manage.py seed_evaluation          # ingest the corpus, resolve the benchmark
+python manage.py evaluate --load evaluation/benchmark.json \
+  --dataset institutional-seed --dataset-version v1 \
+  --as-user ci-evaluator \
+  --baseline evaluation/baseline.json --fail-on-regression
+```
+
+**This gate could not fail, for two separate reasons.** The first was known: no dataset
+existed, so the CI step skipped. The second was not, and it would have survived fixing the
+first — `--fail-on-regression` only does anything alongside `--compare-to <run id>`, and a
+fresh CI database has no previous run. The job would have run the benchmark and passed
+whatever the scores were. A gate that cannot fail is worse than no gate: it occupies the
+slot, and everyone downstream believes quality is being checked.
+
+So the comparison is now against a **committed baseline file**, and the baseline records the
+configuration beside the scores — a baseline set with a semantic embedder is not a baseline
+for a lexical one.
+
+**Why the benchmark is generated, not committed.** Cases name `relevant_documents`, and those
+are database ids. A committed benchmark with hardcoded ids would score retrieval against rows
+a fresh database does not have and report a confident zero. What is governed is
+`benchmark.template.json`, which refers to documents by slug (`@fee-structure`);
+`seed_evaluation` ingests the corpus **through the real pipeline** — so the score covers
+extraction, chunking, table detection and retrieval as configured — and substitutes the ids
+it created. Document ids stay stable across re-seeds, because a dataset is immutable once
+loaded and a recreated corpus would leave it pointing at rows that no longer exist.
+
+**The corpus is part of the dataset**, and that is not a detail. A benchmark is scored
+through `rag.ask`, which retrieves everything the evaluator user is authorized to read — so
+the exam is not the 13 questions, it is those questions *asked of a particular set of
+documents*. Adding a file to `evaluation/corpus/` changes every benchmark scored under that
+user, whether or not any case mentions it.
+
+That happened, and the gate caught it. A second benchmark version added four documents to
+the shared corpus directory; `seed_evaluation` ingested the whole directory; and v1 — whose
+cases were written against five documents — was suddenly being scored against nine. The
+committed baseline stopped matching and the gate failed:
+
+```
+DOWN generation.citation_accuracy: -0.0740
+DOWN retrieval.precision_at_k.10:  -0.0889
+```
+
+Nothing about retrieval had got worse. `recall@1`, `MRR` and `MAP` were all still 1.0 — the
+right document came back first for every question. What had changed was the denominator:
+more documents means more candidates at k=10 that no case lists as relevant, and answers
+that cite passages from documents v1 never knew about. **The exam had changed**, which is
+precisely what the immutability rule exists to prevent — applied to the half of the dataset
+that lives on disk rather than in the JSON.
+
+So `seed_evaluation` now ingests the documents *the template it is resolving* declares, and
+nothing else: an explicit `corpus` list if the template has one, otherwise the slugs its own
+cases reference. Because two corpora under one evaluator produce a third, unnamed exam,
+seeding a second version under the same user is **refused** rather than silently scored —
+the message names `--user` and `--prune`. After the fix, v1 scores against its five
+documents again and `citation_accuracy` returns to its baseline 0.9444.
+
+The lesson generalises: a governed dataset is not just the questions file. It is the
+questions, the corpus, the user they are asked as, and the configuration they are scored
+under — and the first three of those were only half-governed.
+
+Current baseline, lexical retrieval and the extractive answerer:
+
+| | |
+|---|---|
+| recall@1, MRR, MAP | 1.0 |
+| groundedness | 0.9709 |
+| citation accuracy | 0.9444 |
+| abstention accuracy | 0.9231 |
+| coverage | 0.6923 |
+| false abstentions | **1** |
+| missed abstentions | 0 |
+
+**The benchmark earned its keep on the first run** by finding that false abstention:
+*"What is the deadline for applying for revaluation?"* The clause says "within 15 days of the
+publication of results" — `deadline` appears nowhere in it, and no stemmer unifies
+`applying` with `application`, so one query term of three matches: 0.33 coverage against a
+0.34 floor. Retrieval finds the right document; the answerer will not quote from it.
+
+That case is **kept and documented rather than fixed**, because the fix would be to lower a
+threshold until the benchmark passes, which is fitting the system to the exam. It is the
+lexical-matching limit this README already describes, and it is exactly what a real semantic
+embedding model would resolve — so leaving it in means that improvement will register as
+one.
+
+**Latency is excluded from the gate by default.** Found by proving the gate could fail:
+inflating one quality metric in the baseline correctly failed the run — and so did four
+latency metrics, on an otherwise identical system, because wall-clock timing differs every
+run. A gate that fails every time gets disabled, taking the real check with it. Latency
+still lands in the run record and on the dashboard; `--gate-latency` opts back in.
+
+### Choices that keep the numbers honest
+
+**Evaluation runs through `rag.ask`, not a parallel path.** An evaluation that reimplements
+retrieval measures the reimplementation. It therefore also inherits the permission filter —
+a benchmark is scored *as a user*, and one without access scores zero rather than quietly
+escalating.
+
+**Abstention is not a wrong answer.** Scoring "I couldn't find enough information" as
+incorrect would punish exactly the behaviour §12.4 requires. Abstentions are counted
+separately, and the two failure modes are kept apart: `false_abstentions` (refused a
+question the corpus answers) and `missed_abstentions` (answered one it cannot). A benchmark
+of only answerable questions cannot tell a calibrated system from one that never abstains,
+so `expect_abstention` cases are first-class.
+
+**Answer quality is averaged over answered cases only.** Folding abstentions in at 0.0 would
+make a cautious system look inaccurate rather than cautious.
+
+**`token_overlap` is named for what it measures.** It is *not* answer correctness — a fluent
+paraphrase scores badly and a wrong answer built from the right vocabulary scores well. It
+is reported as a weak signal beside groundedness, never as a correctness claim.
+
+**Recall over no relevant items is 0.0, not 1.0.** "Found everything there was to find" is
+vacuous when there was nothing, and scoring it perfect inflates every average it lands in.
+
+**Regression checks know which direction is good.** Falling latency is an improvement;
+rising `false_abstentions` is a regression even though the number went up. Getting that
+backwards would report a quality regression as a win — which makes the check worse than
+having none.
+
+**Datasets are immutable.** Editing questions would make last month's score and this month's
+describe different exams, so a change is a new version. Every run stores the full
+configuration — embedder, reranker, answerer, chunking version, relevance floor — because a
+metric without what produced it is a number, not a measurement (§19.2).
+
+---
+
+## Observability (§20, NFR-06)
+
+Structured JSON logs on stdout, Prometheus metrics on `/metrics`, and a correlation id
+threading both.
+
+### Document content never reaches the logs (§13)
+
+A convention cannot deliver this — one `logger.info(f"answering {question}")` written in a
+hurry undoes it, and the failure is invisible until someone reads the logs. So it is
+enforced at the formatter, on every record, whatever the caller passed:
+
+- fields named for content (`question`, `answer`, `text`, `password`, …) are replaced
+  **wholesale**;
+- any other string over 120 characters is **replaced, not truncated** — the first version
+  of this trimmed to a prefix, and a test showed what that actually emits: the opening 120
+  characters of a confidential document, which is a leak with extra steps. The length is
+  reported, the content is not;
+- for `adi.*` loggers the message is a single-token event name, so anything after that token
+  is interpolated data and is dropped — closing the careless-f-string case completely;
+- numbers pass through whatever they are called, because a count cannot carry a document.
+
+Verified live: a question and a document both containing a confidential marker produced
+**zero** occurrences of it across all container logs.
+
+### Correlation ids (§16)
+
+Every response carries `X-Request-ID`; a caller-supplied one is adopted, but sanitised
+first — the header lands in JSON lines other tools parse, so a caller must not be able to
+smuggle quotes or newlines into them.
+
+### Monitoring stack (§20)
+
+Prometheus and Grafana are part of the production overlay. Grafana is bound to **loopback
+only** — a Grafana on the open internet with a default password is a bigger hole than
+anything it monitors:
+
+```bash
+ssh -L 3000:localhost:3000 <host>     # then http://localhost:3000
+```
+
+Prometheus discovers backend replicas by **DNS**, not a static host list, so
+`--scale backend=3` is picked up without editing anything. A static target would resolve to
+whichever container the resolver felt like and silently monitor a third of the fleet.
+
+### `/metrics` under gunicorn
+
+`prometheus_client` keeps one registry per process, and gunicorn runs several. A scrape was
+answered by whichever worker accepted the connection and reported roughly **1/N** of the
+traffic. That is not noise — it is wrong in the flattering direction: every error count and
+latency read low while nothing appeared broken.
+
+`PROMETHEUS_MULTIPROC_DIR` makes each worker write its samples to a shared directory that the
+scrape aggregates across. Two hooks in
+[`backend/gunicorn.conf.py`](../../backend/gunicorn.conf.py) keep that correct over time, and both
+are easy to omit:
+
+- **dead workers are reaped** (`child_exit`), or a worker recycled by `--max-requests` leaves
+  its counters behind forever and its traffic is counted twice;
+- **the directory starts empty** (`on_starting`), or a restarted container serves the
+  previous run's samples — including counters for a build no longer deployed.
+
+Proven with real subprocesses rather than mocks, since process boundaries are the entire
+point: two processes incrementing by 3 and 4 produce **7**, not 3 or 4.
+
+The Celery workers are a different matter and deliberately so — they are separate
+*containers*, and the right answer there is a scrape target per container, which is what
+Prometheus already does. Their pipeline telemetry is also on stdout as structured JSON.
+
+### Label cardinality is bounded on purpose
+
+Labels are stage names, statuses, error codes and models — never a document id or a raw
+path. `/api/documents/7/` and `/api/documents/8/` are one series (`/api/documents/{pk}/`).
+Per-document labels are how instrumentation takes down the backend it reports to. Ids go in
+logs, where they are cheap and searchable.
+
+---
+
+## Production deployment (§21)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+The overlay is **not** auto-loaded — it has to be named, so a developer never gets
+production behaviour by accident and a deploy never inherits a developer's override. It
+swaps `runserver` for gunicorn, puts nginx in front, unpublishes the Postgres and Redis
+ports, bakes in the ML layer, and drops the source bind-mount so the image is the artifact.
+
+### The gate
+
+`python manage.py check --deploy` goes from **1 error + 5 warnings** to **zero issues**
+with production values set. CI runs it with `--fail-level WARNING`, and a test asserts it,
+so "clean except the ones we got used to seeing" cannot creep back.
+
+HSTS is **off by default even in production**. It is close to irreversible — a browser that
+has seen the header refuses plain HTTP for the full duration — so it is an explicit decision
+by whoever owns the domain, not a framework default.
+
+`SECURE_PROXY_SSL_HEADER` pairs with nginx's `X-Forwarded-Proto`. Without both, Django sees
+plain HTTP on the internal hop and `SECURE_SSL_REDIRECT` loops forever.
+
+**nginx does not serve `/media/`.** A `location /media/` alias would hand every uploaded
+document to anyone who guesses a path, bypassing every access decision in
+`documents/authorization.py`. Originals stay behind the authenticated, audited
+`/api/documents/{id}/download/`.
+
+### TLS (§21.1)
+
+```bash
+NGINX_SERVER_NAME=docs.example.edu CERTBOT_EMAIL=ops@example.edu \
+  STAGING=1 sh infrastructure/init-letsencrypt.sh
+```
+
+**The production stack previously could not start at all.** `nginx.conf` hard-requires a
+certificate; nothing in the repository ever created one, the certificate directory was empty
+and untracked (so a clone did not even have it), and there was no certbot service — the ACME
+location block and the `certbot_www` volume were plumbing with nothing behind them.
+
+There is a chicken-and-egg problem here that the bootstrap script exists to resolve: nginx
+will not start without a certificate, and Let's Encrypt will not issue one until it can fetch
+a challenge over HTTP — which needs nginx running. So the script writes a throwaway
+self-signed pair at the exact path nginx expects, starts nginx, requests the real certificate
+over the webroot, and reloads. Afterwards the `certbot` service renews on a 12-hour timer and
+nginx reloads every 6 hours to pick a renewal up.
+
+**Run it with `STAGING=1` first.** That uses Let's Encrypt's staging CA, which issues an
+untrusted certificate and cannot burn the rate limit. This flow has **not been exercised
+against a real domain** — there is no public hostname pointing at this checkout — so treat
+the first real issuance as the test.
+
+### The production overlay is checked, not trusted
+
+```bash
+python infrastructure/check_deployment_config.py
+```
+
+Compose **merges** sequences across files: a key re-declared in an overlay is appended to the
+base file's list, not substituted for it. This has silently undone a production guarantee
+twice in this repository, and neither was visible by reading the overlay:
+
+- `ports: []` left the API published on 8000 — reachable with no TLS, no edge rate limiting,
+  and free to assert its own `X-Forwarded-Proto`.
+- the `volumes:` list left `./backend:/app/backend` in place, so **production ran the working
+  tree instead of the built image** — directly underneath a comment reading *"No source bind
+  mount: the image is the artifact."*
+
+`!override` fixes both. The gate asserts the merged **outcome** rather than the tag, by
+parsing `docker compose config` — Compose's own merge, not a reimplementation of its rules.
+It was verified by reverting the fix and confirming it fails. It runs in CI after the image
+build.
+
+### Object storage (§15)
+
+```bash
+pip install -r backend/requirements-s3.txt -c backend/constraints.txt   # in the image: INSTALL_S3=true
+export AWS_STORAGE_BUCKET_NAME=adi-documents      # switches every FileField
+export AWS_S3_ENDPOINT_URL=https://minio.internal # for MinIO or Ceph; omit for AWS
+```
+
+Local disk is the default and is genuinely sufficient for one node. It stops being
+sufficient the moment there are two: `--scale backend=3` writes an upload to whichever
+container answered the request, and the other two — and every worker — get a
+`FileNotFoundError` for a document that plainly exists.
+
+**The blocker was not configuration, it was a single line.** `run_pipeline` read
+`document_version.file.path`, and `Storage.path()` raises `NotImplementedError` on S3, GCS,
+Azure and every other remote backend. So the platform could not be pointed at object storage
+*at all*, however it was configured: the first stage raised before any document was looked
+at, and §15's "S3-compatible object storage" was unreachable from the code rather than
+merely unconfigured.
+
+Every extractor genuinely needs a filesystem path — poppler, tesseract and python-docx are
+subprocesses, not Python file objects — so the fix is not to abstract that away.
+[`documents/storage.py`](../../backend/documents/storage.py) materializes the object **once per
+job**: on local storage it hands back the real path and copies nothing; on a remote one it
+streams the object to a temporary file and deletes it afterwards, including when a stage
+raises. A pipeline that fails mid-OCR must not leave a confidential document in `/tmp`.
+
+Tested against a storage that refuses `path()` — which is what S3 is — so the seam is
+proven without a bucket, credentials or a network. One of those tests asserts the object is
+fetched **once**, not once per stage; it is also what caught the first version of these tests
+passing vacuously, because `run_pipeline` re-fetches the job and rebuilt the default storage.
+
+### Backups (§21.3)
+
+```bash
+python manage.py backup --include-media --prune
+python manage.py restore backups/db-....dump --yes
+```
+
+`pg_dump` custom-format archives rather than `dumpdata`: JSON has to round-trip through the
+ORM to restore, so it depends on the models still matching — exactly the assumption that
+fails when you are restoring *because* a migration went wrong.
+
+**Every dump is verified before it is reported as a success** by reading its own table of
+contents back. An unverified backup is a belief, not a backup. The manifest records the
+sha256, the table count and the migration it was taken at; restore checks the checksum
+before dropping anything, and refuses without an explicit `--yes`.
+
+Restore judges success by **both** the exit status and the database: a non-zero exit with a
+`pg_restore` message that is not on a known-benign list fails it, and so does an empty
+database afterwards. Benign notices alone never fail it. The
+first version reported a completely successful restore as a failure because of a
+`SET transaction_timeout` notice — emitted whenever the `pg_dump` client is newer than the
+server. Telling an operator their restore failed, during the incident that made them
+restore, is how a bad situation becomes worse.
+
+Proven end to end here: backup → restore into a separate database → 12 documents, 7 users,
+46 chunks recovered, live data untouched, and a tampered archive correctly refused.
+
+### CI/CD (§21.2)
+
+`.github/workflows/ci.yml` implements the specified chain as separate jobs, so a failure
+names the gate that caught it:
+
+```
+lint → tests → security → ai-regression → build → staging → smoke → production
+```
+
+Tests run against **real** Postgres-with-pgvector and Redis; a sqlite stand-in would pass
+while proving nothing about the HNSW query that actually runs. `makemigrations --check`
+catches a model change without a migration, which otherwise passes every test and fails on
+deploy. The smoke test asserts an endpoint **refuses** anonymous access — one that only
+checks for a 200 cannot tell a working deploy from one with authentication switched off.
+
+**This workflow has still never executed in GitHub Actions**, and that remains the thing to
+verify first. What has changed is that every gate in it has now been run locally, with the
+workflow's own commands and environment — and five of them failed.
+
+A pipeline whose first job cannot pass is not a pipeline. `tests` and `security` need
+`lint`, `e2e` and `ai-regression` need `tests`, and every deploy hangs off `build`, so each
+failure below silently disabled everything downstream of it:
+
+| Gate | What it did | Fix |
+|---|---|---|
+| `ruff check` | no configuration and no pinned version, so the rule set was whatever ruff shipped that morning: **245 findings** | `pyproject.toml` states the rules; the workflow pins `ruff==0.16.8`; the real findings were fixed, not suppressed |
+| `ruff format --check` | **76 files** would be reformatted | formatted once; the test suite is the proof it changed no behaviour |
+| `manage.py check --deploy --fail-level WARNING` | the workflow's own placeholder `DJANGO_SECRET_KEY` was 48 characters, and `security.W009` wants 50 | lengthened the placeholder — the check was working exactly as intended |
+| `manage.py test` | the workflow sets `DJANGO_DEBUG=False` on purpose, which turns on `SECURE_SSL_REDIRECT`, so every one of the suite's requests got a `301` and read `.data` off an `HttpResponsePermanentRedirect` | the redirect — and *only* the redirect — is lifted under the test runner; `TransportSecurityTests` asserts the exemption stays that narrow |
+| `check_deployment_config.py` | `docker compose config` exited 2 before reading a service: `GRAFANA_PASSWORD` is correctly declared `${...:?}` and CI has no `.env` | the check supplies its own placeholders, so it is hermetic — it asks about the merge, not about anyone's credentials |
+| `bandit -ll` | exited 1 on three `/tmp` string literals in tests, none of which is ever opened | `# nosec B108` with the reason beside it |
+
+Two more were wrong without failing. The AI-regression job seeded the corpus with **no**
+embedding provider and then evaluated with the hashing one, so the query was embedded and
+matched against vectors that were never written — the benchmark measured lexical retrieval
+alone while recording `hashing-baseline` beside the score. The seed step now sets the same
+provider. And the corpus itself had drifted; see
+[the regression gate](#the-regression-gate-192).
+
+Locally, all seven gates and both test suites now pass. That is **locally verified, not
+deployment verified** — a GitHub Actions runner is a different machine with different
+package versions, and the first real run is still the test.
+
+---
+
+## Scale (§22, NFR-02)
+
+§22 says scaling decisions are driven by **measured workload, queue depth, latency and
+cost** — not by technology fashion. So this phase is mostly measurement, and the one
+architectural change it makes (splitting the queues) is the one the measurements justified.
+
+### The listing endpoint was O(documents)
+
+`GET /api/documents/` issued **one extra query per document**, because the serializer nests
+`current_version` with no join — 14 queries for 12 documents, and a little over a thousand
+for a thousand. A `select_related("current_version")` on the list action makes it **2
+queries, flat at every corpus size**.
+
+The regression test does not pin a magic number; it measures at two corpus sizes and fails
+if the count *grew*. A fixed number would either break on an unrelated change or quietly
+accept a slope that starts above it.
+
+### Ingestion and indexing are separate queues
+
+```
+ingest  →  the whole pipeline for new uploads: OCR, parsing, classification,
+           extraction, and chunking + embedding   (CPU-bound, low concurrency)
+index   →  bulk re-indexing of existing content   (network-bound with a hosted
+           embedder, CPU-bound with the local one)
+```
+
+NFR-02 calls for independently scalable components, and on one shared queue they are not:
+the only way to make a bulk re-index finish sooner would be to add workers that also pick
+up ingestion. Proven live — with the worker stopped, depth read `ingest=5, index=0`; an
+index-only worker then drained `index` 8→0 while `ingest` stayed at 5, untouched.
+
+`acks_late` with `prefetch_multiplier=1`: a worker that dies with a task in hand (a stopped
+container, a host reboot) leaves the message in Redis to be redelivered after the visibility
+timeout (`INGEST_MAX_TASK_SECONDS` + 1 h, 7 h by default, so that a long document is not
+redelivered while it is still being read), no worker sits on a minute-long OCR job another could have started, and queue depth
+reflects what is actually waiting rather than what has been quietly reserved. A pool *child*
+killed by the hard time limit or the OOM killer is acknowledged as failed by Celery, not
+redelivered; `recover_stalled_jobs` reclaims that job (see the runbook).
+
+### Queue depth is read from the broker
+
+The gauge was declared in phase 9 and never set — worse than absent, because a panel that
+always reads zero looks like an idle system. It now reads Redis `LLEN` per queue rather
+than Celery's `inspect`, which asks the *workers* and therefore reports nothing when every
+worker is dead — the moment the number matters most. If the broker is unreachable, or is
+not Redis, `collect()` returns `{}` rather than a comfortable zero, and never takes the
+scrape down with it.
+
+### Load balancing
+
+nginx resolves the `backend` service through Docker's DNS, so `--scale backend=3` needs no
+config edit. `least_conn`, not round-robin: request cost here is wildly uneven — a document
+listing is milliseconds and a chat request runs retrieval, reranking and an answerer — so
+distributing by connection count tracks real load.
+
+Measured in an isolated project: 3 instances served 9/8/13 of 30 requests, and **12 of 12
+requests still succeeded with one instance stopped mid-run**.
+
+Two bugs in the production overlay only appeared under `--scale`, and both had been sitting
+there looking correct:
+
+- **`ports: []` does not unpublish a port.** Compose *merges* sequences across files, so the
+  empty list appended nothing and the backend stayed published on 8000 — reachable with no
+  TLS, no edge rate limiting, and free to assert its own `X-Forwarded-Proto`. Fixed with
+  `ports: !override []`.
+- **Migrations raced.** Three replicas each ran `migrate` on start; the losers died with
+  `column "name" of relation "django_content_type" does not exist`. A schema change is a
+  deploy step, so it is now a one-shot `migrate` service that the replicas wait on via
+  `service_completed_successfully`.
+
+### Controlled re-indexing (§11.4)
+
+```bash
+python manage.py reindex --dry-run
+python manage.py reindex
+```
+
+Changing the embedding model invalidates every stored vector. Re-indexing is one task per
+document on the `index` queue — not one long task for the corpus, which cannot be
+parallelised, loses all progress when a worker restarts, and makes queue depth meaningless
+because the work is one item deep no matter how much is left.
+
+The task checks for an embedding provider **before** chunking, rather than catching an
+exception from it. This is not defensive tidiness: `chunk_content` handles a missing
+provider internally and returns a summary instead of raising — correct for first-time
+indexing, where chunks with no vector are still lexically searchable, and wrong for a
+re-index, because chunking deletes the existing chunks first and the embeddings cascade
+away with them. A re-index with no provider configured **destroyed working vectors and
+wrote none back**. The regression test asserts the embeddings survive, not merely that the
+task reported that it skipped.
+
+
+### Services were deliberately not extracted
+
+§25 lists "service extraction" under this phase and §22 sets the condition for it:
+scaling follows measured workload. Nothing measured here justifies it. The queue split
+already gives OCR and embedding independent worker pools on independent machines, which is
+the actual requirement in NFR-02; carving the same code into separately deployed services
+would add network hops, partial failure and a distributed transaction across the pipeline's
+delete-then-create, and buy no scaling property the current shape lacks.
+
+The seam is kept ready rather than cut: every capability sits behind a Protocol with its own
+exception taxonomy, so a provider can move out of process without the pipeline noticing.
+Extraction becomes justified when one stage's resource profile stops fitting the worker it
+shares — a GPU embedding model is the obvious candidate — and that is a measurement, not a
+decision to take in advance.
+
+---
+
+## Structure and multi-part questions (§11.3, §25 phase 12)
+
+Three capabilities, each built because something measurable was wrong without it.
+
+### Tables
+
+Flattening a document to text destroys the one thing that makes a fee table answerable:
+which number belongs to which label. `85000` on its own is not an answer to "what is the
+tuition for CSE".
+
+Tables are detected **in the stored page text**, not by re-parsing the original file, and
+that one decision drives the rest. A table found in page text has real offsets into it, so
+`page_text[start:end]` returns the table verbatim and every cell is a substring of the page.
+**A cell the document does not contain cannot be stored** — the stage verifies every table
+on every run and rejects any table with a cell the page does not contain, so a detector that fabricates is refused at the
+boundary rather than trusted not to. A separate PDF table parser would emit cells with no
+checkable relationship to the text that every chunk, citation and extracted field is already
+grounded in.
+
+It also means one implementation covers a PDF text layer, an OCR pass, a DOCX and a plain
+text file, because by then they are all just text. Since then extractors that can see real
+cells (Word, a ruled PDF grid, a spreadsheet, a slide) hand their tables over as structure
+rather than leave them to be rediscovered — but they write them into the page text first
+and are verified by the same check, so the span invariant above is what they are held to
+too. This detector remains the one for everything else.
+
+The first version of the space-aligned detector found **nothing**, because it compared the
+left edges of columns and real tables right-align numbers under left-aligned headers —
+`Present` starts at column 14 and `38` at column 18. What actually holds, for left, right and
+centre alignment alike, is that the *gap* between columns is blank in every row. Counting
+those corridors tests the thing that makes a layout a table instead of one alignment
+convention out of three.
+
+A header is only recorded when the first row is clearly not data. A table of labels against
+labels gets none, because guessing would relabel somebody's data.
+
+### Tables in retrieval — what changed, measured
+
+A 120-row table split across chunks by an ordinary splitter produces 17 chunks, of which
+**exactly one contains the header row**. The other 16 are columns of numbers with nothing to
+say what they count. Keeping the table as a region gives 11 non-overlapping parts, **every one
+carrying its column labels**.
+
+A first attempt at this claimed table-awareness prevents rows being cut in half. Measured, it
+does not and never did — the splitter already prefers a line break as a boundary, and mid-row
+cuts were zero either way. That test was rewritten to assert the benefit that exists.
+
+The header is **not** spliced into the chunk text. It cannot be: chunk text must equal
+`page_text[start:end]`, and a prefix that is not on the page would break every citation. It
+travels in metadata, and the answer appends it as a labelled aside:
+
+```
+B.Tech CSE  85000  2500  60000 [1] (table columns: Programme | Tuition | Exam Fee | Hostel)
+```
+
+Two failures found by asking real questions against a live stack, both fixed:
+
+- "What is the hostel fee for MECH?" returned the right row **and then the header row**
+  beside it as a second answer.
+- "What is the exam fee?" returned the header row **alone** — the only text in the table
+  containing those words. The reader was told an exam-fee column exists and never told what
+  it says.
+
+So a header is never quoted on its own. When a question matches the labels rather than one
+row, the answer is the table itself — labels and rows, verbatim, bounded by size, because a
+120-row table pasted into an answer makes the reader do the retrieval.
+
+### Figures are located, not read
+
+A bar chart with no axis labels survives extraction as nothing at all. Figures are recorded
+as a **fact** — "page 4 embeds a 640x480 image" — and never as an interpretation. There is no
+`kind` column saying CHART, because nothing here can tell a chart from a photograph and such a
+column would be read downstream as a measurement. The image dictionary is inspected, never
+decoded; decoding is where a hostile PDF gets to allocate memory.
+
+`description` stays empty until a describer is configured, and that empty string is the useful
+part. It lets an abstention say where to look:
+
+```
+Q: What does the enrolment chart show for 2024?
+   abstained: true
+   reason:    no passage answered the question, and the documents retrieved
+              contain figures this system cannot read
+   note:      'Enrolment Chart' has 1 image(s) on page 1; only text found
+              inside them was extracted, not the images themselves
+```
+
+The wording is deliberately narrower than "cannot read images": OCR *did* run and *did*
+extract any text inside them. What was never interpreted is the image as an image.
+
+The hint is scoped to documents **retrieval already surfaced**, which have passed the
+permission filter inside search. It adds no new path to a document a caller cannot see — an
+"unreadable figure" hint about a document you are not allowed to know exists is still a
+disclosure. Figures on a superseded version are never pointed at either.
+
+### Query planning — built because it was measured
+
+§22 says architecture follows measured workload rather than technology fashion, and a
+"planning agent" is exactly the component that gets added because it sounds advanced. So it
+was measured first, against a five-document corpus containing every answer:
+
+| Question | Single-shot | Planned |
+|---|---|---|
+| 2 parts | **2 of 2** | 2 of 2 |
+| 3 parts | 1 of 3 | **3 of 3** |
+| 4 parts | **0 of 4 — a flat abstention** | **4 of 4** |
+
+The four-part case is the one that justifies the module. The answerer scores a sentence by
+what share of the *question's* terms it covers, so every part added raises the bar for every
+sentence answering any one of them. Past three parts nothing clears it and the system reports
+that it cannot find information it holds.
+
+**Two-part questions are deliberately left unplanned.** They already work, and splitting them
+would spend a second retrieval to reach the same answer.
+
+There is no synthesis step. Each part is answered by the ordinary engine — same permission
+filter, same reranking, same grounding, same abstention rules — and the composed answer is
+those answers with their own citations. Markers are renumbered into one sequence as they are
+composed, in a single pass, because step two's `[1]` and step one's `[1]` are different
+passages and a marker resolving to the wrong one looks checkable and is not. An unanswered
+part is reported, never dropped: two paragraphs in reply to a three-part question otherwise
+read as a complete answer.
+
+`RAG_MAX_PLAN_STEPS` (default 4) is a bound, not a budget — each step is a full retrieval.
+
+### Two bugs this phase surfaced elsewhere
+
+Neither was in the new code.
+
+**A NUL byte still killed the pipeline.** Stripping was added to the page rows and the very
+next line wrote the raw text into `DocumentVersion.extracted_text`, so a document containing a
+NUL processed every stage successfully and died on the last write of the transaction — the
+exact failure the stripping existed to prevent, moved down three lines. Found by a test that
+fed a NUL through the real pipeline instead of through the helper.
+
+**One common word was enough to answer a question.** Coverage is a ratio and a ratio is blind
+to how many terms it is over, so on a two-term question a single generic word scores 50% and
+clears the threshold:
+
+```
+Q: What is the parking policy?
+A: TRANSPORT POLICY          <- a document heading, on the strength of "policy"
+```
+
+Requiring two *matched* terms as well as the ratio costs real questions nothing — "attendance
+minimum", "hostel curfew" and "B.Tech CSE" all match on two or more — and removes the
+coincidence. The rule is skipped when the question itself has only one content term, where one
+match is all there is to find. Planning surfaced this: shorter sub-questions let one common
+word reach a far higher coverage than it deserves.
+
+---
+
+## Security model
+
+Implemented today:
+
+- **Browser sessions and expiring API tokens**, authenticated-by-default DRF permissions.
+  The full, current model is [docs/security/model.md](../../docs/security/model.md); this
+  section is the history of how it got there.
+- **Department as the tenant boundary.** Read access: owner, same department, or system
+  admin. Manage (update / delete / reprocess / new version): owner, department admin of that
+  department, or system admin. A non-admin's upload is pinned to their own profile's
+  department regardless of what the client sent.
+- **An unset department is not a tenant.** `UserProfile.department` defaults to `""`, so
+  plain equality once made every freshly registered user a colleague of every other one.
+  `shares_department()` returns False for an empty department, and `visible_documents()`
+  mirrors `can_view_document()` exactly — a listing that showed more than `retrieve` allows
+  would itself be the leak.
+- **Access rules are plain functions** in `documents/authorization.py`, not buried in a view
+  — so search and RAG can call the identical rules later. Similarity is never an
+  authorization mechanism (§14).
+- **Media is deliberately not served statically.** Django's `static()` helper serves files
+  with no authentication at all; original bytes are reachable only through the
+  authenticated, audited `/download/` endpoint.
+- **Audit log** for view, create, update, delete, download, reprocess and version upload —
+  recording denials as well as approvals.
+- **Deleting a document reclaims its bytes.** Django deletes rows, never files, so deletion
+  used to remove every trace from the database and leave the uploaded document on disk
+  permanently — readable to anyone with filesystem access, invisible to every listing, and
+  recorded in the audit log as a completed deletion. A `post_delete` receiver removes the
+  file, deferred through `transaction.on_commit`: unlinking inside the transaction would mean
+  a rollback restores the row and loses the file, which is the one outcome worse than an
+  orphan. A storage failure is logged, never raised — the row is gone either way.
+- Content sniffing at ingestion, so a mislabelled file is not handed to the wrong extractor.
+
+Roles currently modelled (`accounts.UserProfile`): `SYSTEM_ADMIN`, `DEPARTMENT_ADMIN`,
+`FACULTY`, `STAFF`, `STUDENT`. The specification (§14) describes an organization-scoped
+`SUPER_ADMIN` / `ORG_ADMIN` / `MANAGER` / `USER` / `VIEWER` model; the current implementation
+uses department-scoped roles, and migrating to organization tenancy is an open item.
+
+Added since this section was first written, and documented in full further down:
+**malware scanning** (heuristic, not an antivirus — see
+[the bundled scanner](#the-bundled-scanner-is-not-an-antivirus)), **rate limiting** at both
+DRF and nginx, and **prompt-injection defenses** (flagged passages are retrieved and
+reported but never quoted as an answer).
+
+Still not implemented: **encryption at rest**, and organization-scoped tenancy.
+
+---
+
+## AI workspace (`ai/`)
+
+Training and evaluation live outside Django. **The `ai/` package does not import Django, and
+Django does not import it.** The only handoff is a versioned model artifact:
+
+```
+ai/  training + evaluation
+        │  model artifact (name + version)
+        ▼
+backend/documents/processing/classification/   inference adapter
+        │
+        ▼
+   Django pipeline → ClassificationResult
+```
+
+An adapter implements the `DocumentClassifier` protocol and is named by the
+`DOCUMENT_CLASSIFIER` setting. While that setting is empty, the CLASSIFICATION stage records
+`SKIPPED` — a fabricated label is worse than no label.
+
+### Datasets
+
+Every adapter emits the same `DatasetSample` and the same manifest CSV
+(`sample_id,split,label,input_type,input_path`), so training code never learns where the data
+came from. Subsets are selected by hash of `(seed, sample_id)`, not a PRNG over input order,
+so the same subset comes back on any platform.
+
+| Source | Modality | Size | Notes |
+|---|---|---|---|
+| `qs_ocr` | text | 252 MB | Tesseract OCR of all 400k RVL-CDIP pages |
+| `rvl_cdip` | image | 38.76 GB | Single tarball; split files fetched separately |
+
+```bash
+export PYTHONPATH=.
+
+# Download QS-OCR and build a balanced 500/class subset
+python -m ai.classification.datasets.qs_ocr --per-class 500
+
+# Integrity gate — runs BEFORE anything is trained
+python -m ai.classification.datasets.integrity \
+    ai/classification/data/manifests/qs_ocr --sample-limit 0
+```
+
+The integrity check fails loudly on split leakage, duplicates, missing or unreadable files,
+unknown labels and degenerate class counts — a silent leak produces a number that looks like
+a result and isn't one.
+
+### Training
+
+- **Text baseline** (`configs/text_baseline.yaml`): TF-IDF + logistic regression. Chosen
+  because it is the only tier that trains to completion on this hardware and has a directly
+  comparable published anchor.
+- **Vision baseline** (`configs/vision_baseline.yaml`): ImageNet-pretrained ResNet-50,
+  fine-tuned on **Kaggle's free GPU** — this machine has no CUDA device. The submitter
+  vendors the shared modules into a single kernel script, pushes, polls to completion, and
+  downloads `model.pt`, `metrics.json`, `metadata.json` and `labels.json`.
+
+```bash
+export KAGGLE_USERNAME=... KAGGLE_KEY=...            # or ~/.kaggle/kaggle.json
+
+python -m ai.classification.training.submit_kaggle --smoke --dry-run   # inspect, don't push
+python -m ai.classification.training.submit_kaggle --smoke             # 1 epoch, 20 img/class
+python -m ai.classification.training.submit_kaggle --epochs 5          # real run
+```
+
+### Reporting rules
+
+**No vision accuracy is claimed.** The only vision artifact is `v0.1.0-smoke` — 1 epoch over 20
+images per class, 12.5% accuracy. (The *text* baseline does have a trained artifact,
+`document-classifier` v0.1.0, test accuracy 0.7185 on public RVL-CDIP pages - see
+[docs/data/datasets.md](../../docs/data/datasets.md).) That is proof the submit → train → download path works end
+to end, not a result.
+
+Any number produced here is **benchmark performance on the public dataset used**, never a
+claim about real institutional documents; those require a separate, governed evaluation set.
+Subset-trained numbers are also not comparable to published RVL-CDIP figures, which use the
+official 320k/40k/40k split. Published anchors for that split — 82.23% text
+bag-of-words, 90.24% VGG16, 92.69% DiT-large — are quoted here for orientation only.
+They are recorded under `reference:` in the two configs for sanity-checking, and nothing
+in the code compares against them.
+
+---
+
+## Evaluation and benchmarking
+
+The extraction harness compares approaches on a real evaluation set instead of assuming the
+initial `pypdf` / `tesseract` wiring was the right technology choice. The previous engines
+are kept as named baselines (`pypdf_text`, `ocr_plain`) so a change in extraction can be
+measured against what it replaced:
+
+```bash
+cd backend
+python manage.py benchmark_extraction ../eval_set \
+    --approach pypdf_text --approach pdf_text --approach ocr_plain --approach ocr \
+    --json ../extraction_report.json
+```
+
+Expected layout — any `.txt` beside a document with the same stem is treated as ground truth:
+
+```
+eval_set/
+  born_digital/invoice.pdf
+  born_digital/invoice.txt      ← optional ground truth
+  scanned/report.pdf
+  image/receipt.png
+```
+
+It reports pages, characters, wall time, peak child memory, failure rate, and — where ground
+truth exists — similarity and word accuracy. Without ground truth the quality columns stay
+blank and the command says so; accuracy is not quoted from an unscored set.
+
+Classification metrics (`ai/classification/evaluation/metrics.py`) are implemented in pure
+Python with no numpy/sklearn dependency, so the definitions every result is reported against
+are readable and runnable anywhere. Macro averages weight each class equally, which is the
+point for a 16-class problem whose interesting failures are the small, low-text classes.
+
+---
+
+## Testing
+
+```bash
+# Backend: ~890 tests on real PostgreSQL + pgvector (run inside the image)
+docker compose run --rm -T -e LOG_LEVEL=ERROR backend python manage.py test --noinput
+
+# AI workspace: datasets, metrics, preprocessing, thresholds, Kaggle path
+export PYTHONPATH=.
+python -m unittest discover -s ai/classification/tests -t .
+
+# Web application: typecheck, unit/component tests, production build
+cd frontend && npm run typecheck && npm test && npm run build
+
+# Browser end-to-end against a live stack (see docs/development/testing.md)
+cd frontend && E2E_PASSWORD=... npx playwright test
+```
+
+What each layer pins, how to prepare the disposable database the browser suite needs, and
+the last recorded results are in [docs/development/testing.md](../../docs/development/testing.md).
+
+---
+
+## Technology stack
+
+| Layer | Choice |
+|---|---|
+| Language | Python 3.12 |
+| Backend | Django 6.1 + Django REST Framework |
+| Database | PostgreSQL 16 |
+| Cache / broker | Redis 7 |
+| Async jobs | Celery |
+| Parsing / OCR | pdfplumber (pypdf for page counts), python-docx, openpyxl, python-pptx, pdf2image + poppler, pytesseract + Tesseract, Pillow, a bundled word list (hyphenation and glued-word repair) |
+| Search | PostgreSQL full-text + pgvector (HNSW), reciprocal-rank fusion |
+| ML | scikit-learn (text classifier), sentence-transformers on CPU PyTorch (bge-small embeddings, bge-reranker-base cross-encoder), PyTorch on a remote GPU (vision training path) |
+| LLM providers (optional) | Anthropic API / Amazon Bedrock, any OpenAI-compatible endpoint |
+| Web application | React 19 + Vite 6 + TypeScript; Vitest + Testing Library; Playwright |
+| Containerization | Docker + Docker Compose; non-root application images |
+
+Also in use: **Nginx** (TLS termination and load balancing, `docker-compose.prod.yml`)
+and **GitHub Actions** (`.github/workflows/ci.yml`, written but never executed).
+
+Also in use: **S3-compatible object storage** (opt-in, `AWS_STORAGE_BUCKET_NAME`) and
+**Prometheus + Grafana** in the production overlay.
+
+Not built, by decision: separate FastAPI AI services and a Next.js frontend — the
+modular monolith and a Vite SPA served by nginx meet every requirement measured so far,
+and the reasons are in [docs/architecture](../../docs/architecture/overview.md#why-one-service).
+Not built yet: OpenTelemetry tracing (correlation ids and per-stage timings exist; spans
+do not).
+
+LLM and embedding providers remain model-agnostic by design — provider clients are to be
+isolated behind gateway interfaces so models stay replaceable (§26).
+
+---
+
+## Roadmap
+
+All twelve phases of the §25 roadmap have been worked through, but "implemented" is
+not the same as "complete", and three items inside them are **not built**:
+
+- **Phase 12 lists multimodal RAG and charts.** Tables, figure *location* and query
+  planning are built. Nothing in this system reads an image, so there is no multimodal
+  retrieval and no chart understanding.
+- **Phase 9 lists traces.** There are correlation ids on every log line and no tracing
+  backend, no spans and no OpenTelemetry.
+- **Phase 8's benchmark is synthetic.** The regression gate now runs and can fail, over a
+  governed 13-case dataset — but the corpus is five documents written for it. A score there
+  says the pipeline works, not that it works on your regulations.
+
+What each phase does **not** claim is stated in its own section rather than left to be
+discovered.
+
+| Phase | Name | State |
+|---|---|---|
+| 0 | Architecture & environment | ✅ |
+| 1 | Identity — users, auth, roles | ✅ |
+| 2 | Document platform — upload, versions, lifecycle | ✅ |
+| 3 | Async processing — queue, workers, retries, progress | ✅ |
+| 4 | Document AI — parsing, OCR, classification, extraction | ✅ PDF/DOCX/XLSX/PPTX/CSV/TXT/image parsing, OCR, text classification and field extraction all done; vision classifier remains untrained (tracked under phase 12) |
+| 5 | Search — chunking, embeddings, pgvector, hybrid retrieval | ✅ (embedding baseline is lexical, not semantic — see below) |
+| 6 | RAG — reranking, context builder, LLM gateway, citations, abstention | ✅ (answerer is extractive, not generative — see below) |
+| 7 | AI security — prompt/document injection, permission-aware retrieval | ✅ (heuristic scanner, not an antivirus — see below) |
+| 8 | Evaluation — datasets, retrieval + generation metrics, regression | ✅ |
+| 9 | Observability — metrics, logs, traces, AI telemetry | ✅ (metrics aggregated across gunicorn workers, and served by each Celery worker; no distributed tracing) |
+| 10 | Production — deployment, HTTPS, backups, CI/CD | ✅ (CI workflow written but never executed — see below) |
+| 11 | Scale — load balancing, worker scaling, service extraction | ✅ (horizontal scale is proven; service extraction deliberately not done — see below) |
+| 12 | Advanced AI — multimodal RAG, tables, charts, agents | ✅ tables, figures and query planning; figures are located, not read — see below |
+
+Scaling decisions are driven by measured workload, queue depth, latency and cost — not by
+technology fashion (§22).
+
+---
+
+## Design principles
+
+Carried through every module in this repository:
+
+- Design around requirements and **measurable outcomes**, not demonstrations that happen to work.
+- Separate synchronous APIs from long-running AI workloads.
+- Keep tenant and permission boundaries along the whole data path; similarity is not authorization.
+- Treat documents and retrieved content as **untrusted input**.
+- Keep LLM and embedding providers replaceable behind abstractions.
+- Version models, prompts and pipeline configurations; store provenance with every output.
+- Prefer simple infrastructure first; scale only when justified.
+- Build for failure: retries, idempotency, fallback, auditability.
+- **Never fabricate an output** — skip, abstain, or fail honestly instead.
