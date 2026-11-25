@@ -98,6 +98,9 @@ documents and their own uploads, and nothing else unless they are a system admin
   - Answers cite numbered sources. Each source opens the cited passage, highlighted on its page.
   - Follow-ups ("what about MECH?") and multi-part questions work. A model writing the answer is
     shown the last exchanges of the conversation.
+  - Questions about the library itself ("What documents are uploaded?", "Summary of the recently
+    uploaded document") are answered from the list of documents the asker can read and their
+    briefs, with citations and no model call.
   - When the documents do not answer, the system says so and says why.
   - With a generative model configured, answers stream in as they are written, and each answer
     names the model that wrote it. When no model is available the answer is quoted from the
@@ -992,6 +995,8 @@ Why, and how it was measured: [docs/evaluation/search-relevance.md](docs/evaluat
 ```
 question
   → small-talk check          rag/followup.py      greetings and thanks are never rewritten
+  → library question          rag/library.py       "what documents are uploaded", "recent document summary":
+                                                   answered from the catalogue and the briefs, no retrieval
   → follow-up resolution      rag/followup.py      borrows terms from the user's OWN earlier questions
   → planning                  agents/planner.py    for a quoted answer, 3+ part questions are split (max RAG_MAX_PLAN_STEPS = 4)
   → abbreviations             rag/sections.py      "MEFA" is also searched by the full form the documents define
@@ -1017,6 +1022,10 @@ question
 
   More rules:
   - The user's own words remain the **focus**, so the answer addresses what was actually asked.
+  - A question that is dependent only because it is one word long may as well be a new topic
+    ("EUROCONTROL" after questions about GAGAN). It is searched both ways, as typed and with the
+    borrowed terms, and each passage keeps its better reranker score; the model, which sees the
+    conversation, tells which was meant.
   - The resolution is stored in `Message.metadata.followup` and shown in the UI as
     "Read as a follow-up".
   - `RAG_FOLLOWUP_HISTORY_TURNS` (2) controls how many earlier questions may lend terms; `0`
