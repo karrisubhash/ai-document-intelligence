@@ -547,7 +547,7 @@ def _stage_durations(window: Window, department) -> list[dict]:
           AND e.completed_at >= %(start)s AND e.completed_at < %(end)s
           AND e.started_at IS NOT NULL {scope}
         GROUP BY e.stage
-        """,
+        """,  # nosec B608: table names and fixed SQL only; values are params
         params,
     )
     return [
@@ -762,7 +762,7 @@ def _top_cited(window: Window, department) -> list[dict]:
         GROUP BY d.id, d.title
         ORDER BY answers DESC, citations DESC, d.id
         LIMIT %(limit)s
-        """,
+        """,  # nosec B608: table names and fixed SQL only; values are params
         params,
     )
     return rows
@@ -805,7 +805,7 @@ def _most_viewed(window: Window, department) -> list[dict]:
         GROUP BY d.id, d.title
         ORDER BY readers DESC, visits DESC, d.id
         LIMIT %(limit)s
-        """,
+        """,  # nosec B608: table names and fixed SQL only; values are params
         params,
     )
 

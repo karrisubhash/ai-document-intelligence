@@ -240,7 +240,8 @@ def fingerprint(image) -> str:
     picture."""
     small = image.convert("L").resize((24, 24))
     return hashlib.sha1(
-        small.tobytes() + f"{image.width // 8}x{image.height // 8}".encode()
+        small.tobytes() + f"{image.width // 8}x{image.height // 8}".encode(),
+        usedforsecurity=False,
     ).hexdigest()
 
 

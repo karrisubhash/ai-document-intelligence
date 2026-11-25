@@ -51,7 +51,7 @@ class PictureReader:
         if self.budget <= 0:
             return ""
 
-        digest = hashlib.sha1(blob).hexdigest()
+        digest = hashlib.sha1(blob, usedforsecurity=False).hexdigest()
         if digest in self.seen:
             return ""
         self.seen.add(digest)
