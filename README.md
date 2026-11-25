@@ -170,7 +170,7 @@ As of 2026-11-25.
 | **Generative answers** | Built: an LLM gateway that walks a chain of providers (`RAG_ANSWERER_CHAIN`, for example `gemini,groq,openrouter`) with daily limits shared by every process. Presets for Gemini, Groq, OpenRouter, Cerebras, Mistral, Ollama and OpenAI; Claude through the Anthropic API or Amazon Bedrock. Gemini's free tier has answered on a public demonstration site since 2026-10; the Groq and OpenRouter presets were each called with a real key on 2026-11-15; the rest are contract-tested with stub clients only |
 | **Figures** | Charts stored in Office files are read exactly; other charts and diagrams by an optional vision model. Measured on synthetic charts and flowcharts only ([docs/ai/figures.md](docs/ai/figures.md)) |
 | **CI** | A 10-job GitHub Actions workflow. The repository has a GitHub remote, and the workflow runs there on pushes to `main` and `master` and on pull requests. The deploy jobs are placeholders |
-| **Production** | The production compose stack is verified locally: TLS with a self-signed certificate, the browser suite through nginx, and backup, restore and rollback rehearsed. A public demonstration site runs on one 2 vCPU / 8 GB host ([small-server profile](docs/deployment/production.md#small-server-profile)), with demonstration documents only. Let's Encrypt issuance is recorded as unverified |
+| **Production** | The production compose stack is verified locally: TLS with a self-signed certificate, the browser suite through nginx, and backup, restore and rollback rehearsed. A public site has run on one 2 vCPU / 8 GB host since 2026-10-23 ([small-server profile](docs/deployment/production.md#small-server-profile)), with a Let's Encrypt certificate issued and renewed by the certbot service |
 | **Go-live blockers** | None known in the code. The rest is institutional decisions; see [§25](#25-known-limitations-and-open-decisions) |
 
 **Repository state**
@@ -2387,9 +2387,9 @@ The reasoning behind each of these phases, including what went wrong and what wa
 
 ### Unverified
 
-- Let's Encrypt issuance and off-host backups.
+- Off-host backups (Let's Encrypt issuance and renewal run on the public site).
 - S3 or MinIO against a real bucket.
-- Hosted answerers beyond development checks: Gemini answers on the demonstration site, the
+- Hosted answerers beyond development checks: Gemini answers on the public site, the
   Groq and OpenRouter presets were each called with a real key to check the model id and the
   request shape, and the Cerebras, Mistral, OpenAI, Claude and Bedrock answerers have not been
   called with a real key.
