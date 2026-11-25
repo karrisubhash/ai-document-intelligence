@@ -20,10 +20,10 @@
       "quality": {
         "recall_at_5": 0.9036,
         "precision_at_5": 0.2435,
-        "mrr": 0.7924,
-        "ndcg_at_5": 0.8055,
+        "mrr": 0.793,
+        "ndcg_at_5": 0.8012,
         "document_recall_at_5": 0.934,
-        "document_mrr": 0.8402,
+        "document_mrr": 0.8304,
         "pool_recall": 1.0,
         "answerable_with_results": 1.0,
         "answerable_with_a_match": 1.0,
@@ -43,10 +43,10 @@
         "mean_returned_answerable": 10.0,
         "mean_returned_no_relevant": 10.0,
         "mean_distinct_documents_at_5": 4.0,
-        "pool_rank_p95": 6,
+        "pool_rank_p95": 7,
         "pool_rank_max": 17,
-        "latency_p50_ms": 43,
-        "latency_p95_ms": 87
+        "latency_p50_ms": 54,
+        "latency_p95_ms": 80
       }
     },
     "dev": {
@@ -78,18 +78,18 @@
         "mean_distinct_documents_at_5": 3.9375,
         "pool_rank_p95": 2,
         "pool_rank_max": 17,
-        "latency_p50_ms": 41,
-        "latency_p95_ms": 70
+        "latency_p50_ms": 51,
+        "latency_p95_ms": 76
       }
     },
     "test": {
       "quality": {
         "recall_at_5": 0.92,
         "precision_at_5": 0.2333,
-        "mrr": 0.765,
-        "ndcg_at_5": 0.8035,
+        "mrr": 0.7659,
+        "ndcg_at_5": 0.7968,
         "document_recall_at_5": 0.9667,
-        "document_mrr": 0.8383,
+        "document_mrr": 0.8233,
         "pool_recall": 1.0,
         "answerable_with_results": 1.0,
         "answerable_with_a_match": 1.0,
@@ -109,10 +109,10 @@
         "mean_returned_answerable": 10.0,
         "mean_returned_no_relevant": 10.0,
         "mean_distinct_documents_at_5": 4.0333,
-        "pool_rank_p95": 6,
+        "pool_rank_p95": 7,
         "pool_rank_max": 13,
-        "latency_p50_ms": 45,
-        "latency_p95_ms": 87
+        "latency_p50_ms": 55,
+        "latency_p95_ms": 83
       }
     }
   },
@@ -121,8 +121,8 @@
       "quality": {
         "recall_at_5": 0.8129,
         "precision_at_5": 0.64,
-        "mrr": 0.8,
-        "ndcg_at_5": 0.8189,
+        "mrr": 0.9,
+        "ndcg_at_5": 0.8439,
         "document_recall_at_5": 0.8929,
         "document_mrr": 1.0,
         "pool_recall": 1.0,
@@ -134,16 +134,16 @@
         "answerable": 5,
         "no_relevant": 0,
         "outcomes": {
-          "top-k": 2,
-          "top1": 3
+          "top-k": 1,
+          "top1": 4
         },
         "mean_returned_answerable": 10.0,
         "mean_returned_no_relevant": 0.0,
         "mean_distinct_documents_at_5": 4.0,
         "pool_rank_p95": 2,
         "pool_rank_max": 2,
-        "latency_p50_ms": 55,
-        "latency_p95_ms": 82
+        "latency_p50_ms": 57,
+        "latency_p95_ms": 75
       }
     },
     "common-term": {
@@ -171,8 +171,8 @@
         "mean_distinct_documents_at_5": 4.3333,
         "pool_rank_p95": 2,
         "pool_rank_max": 2,
-        "latency_p50_ms": 45,
-        "latency_p95_ms": 51
+        "latency_p50_ms": 50,
+        "latency_p95_ms": 66
       }
     },
     "exact": {
@@ -199,8 +199,8 @@
         "mean_distinct_documents_at_5": 4.0,
         "pool_rank_p95": 1,
         "pool_rank_max": 1,
-        "latency_p50_ms": 39,
-        "latency_p95_ms": 246
+        "latency_p50_ms": 47,
+        "latency_p95_ms": 163
       }
     },
     "identifier": {
@@ -228,8 +228,8 @@
         "mean_distinct_documents_at_5": 4.8,
         "pool_rank_p95": 2,
         "pool_rank_max": 2,
-        "latency_p50_ms": 32,
-        "latency_p95_ms": 39
+        "latency_p50_ms": 56,
+        "latency_p95_ms": 76
       }
     },
     "no-relevant": {
@@ -249,18 +249,18 @@
         "mean_distinct_documents_at_5": 0.0,
         "pool_rank_p95": 0,
         "pool_rank_max": 0,
-        "latency_p50_ms": 40,
-        "latency_p95_ms": 105
+        "latency_p50_ms": 41,
+        "latency_p95_ms": 90
       }
     },
     "paraphrase": {
       "quality": {
         "recall_at_5": 0.7692,
         "precision_at_5": 0.1538,
-        "mrr": 0.5474,
-        "ndcg_at_5": 0.5633,
+        "mrr": 0.511,
+        "ndcg_at_5": 0.5383,
         "document_recall_at_5": 0.8462,
-        "document_mrr": 0.5885,
+        "document_mrr": 0.5538,
         "pool_recall": 1.0,
         "answerable_with_results": 1.0,
         "answerable_with_a_match": 1.0
@@ -271,8 +271,8 @@
         "no_relevant": 0,
         "outcomes": {
           "ranking": 3,
-          "top-k": 5,
-          "top1": 5
+          "top-k": 6,
+          "top1": 4
         },
         "mean_returned_answerable": 10.0,
         "mean_returned_no_relevant": 0.0,
@@ -280,7 +280,7 @@
         "pool_rank_p95": 13,
         "pool_rank_max": 17,
         "latency_p50_ms": 61,
-        "latency_p95_ms": 71
+        "latency_p95_ms": 72
       }
     },
     "repeated-terminology": {
@@ -308,8 +308,8 @@
         "mean_distinct_documents_at_5": 3.0,
         "pool_rank_p95": 3,
         "pool_rank_max": 3,
-        "latency_p50_ms": 37,
-        "latency_p95_ms": 41
+        "latency_p50_ms": 56,
+        "latency_p95_ms": 83
       }
     }
   },
@@ -333,34 +333,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 246,
+      "duration_ms": 163,
       "top": [
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -386,34 +386,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 52,
+      "duration_ms": 50,
       "top": [
         {
-          "chunk": 33,
+          "chunk": 11,
           "document": "library-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 37,
+          "chunk": 15,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -439,35 +439,35 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 40,
+      "duration_ms": 39,
       "top": [
         {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 4,
+          "document": "fee-structure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 26,
-          "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         }
@@ -492,34 +492,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 40,
+      "duration_ms": 34,
       "top": [
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
@@ -545,34 +545,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 37,
+      "duration_ms": 47,
       "top": [
         {
-          "chunk": 32,
+          "chunk": 10,
           "document": "it-acceptable-use",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": false,
           "below_floor": false
@@ -598,35 +598,35 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 32,
+      "duration_ms": 57,
       "top": [
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 39,
-          "document": "placement-policy",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 17,
+          "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         }
@@ -651,34 +651,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 37,
+      "duration_ms": 45,
       "top": [
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 40,
+          "chunk": 18,
           "document": "placement-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 38,
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -704,34 +704,34 @@
       "outcome": "top1",
       "distinct_documents": 2,
       "most_from_one_document": 3,
-      "duration_ms": 39,
+      "duration_ms": 49,
       "top": [
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 32,
+          "chunk": 10,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 51,
+          "chunk": 29,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -757,34 +757,34 @@
       "outcome": "top1",
       "distinct_documents": 3,
       "most_from_one_document": 2,
-      "duration_ms": 38,
+      "duration_ms": 46,
       "top": [
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 40,
+          "chunk": 18,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
@@ -810,34 +810,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 34,
+      "duration_ms": 50,
       "top": [
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 29,
+          "chunk": 7,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -863,34 +863,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 41,
+      "duration_ms": 45,
       "top": [
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 43,
+          "chunk": 21,
           "document": "scan-results-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -916,34 +916,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 32,
+      "duration_ms": 44,
       "top": [
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 25,
+          "chunk": 3,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 33,
+          "chunk": 11,
           "document": "library-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -969,34 +969,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 39,
+      "duration_ms": 76,
       "top": [
         {
-          "chunk": 33,
+          "chunk": 11,
           "document": "library-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 24,
-          "document": "examination-policy",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 29,
+          "chunk": 2,
+          "document": "examination-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 7,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
@@ -1022,34 +1022,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 31,
+      "duration_ms": 56,
       "top": [
         {
-          "chunk": 26,
+          "chunk": 4,
           "document": "fee-structure",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 42,
+          "chunk": 20,
           "document": "scan-register-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 41,
+          "chunk": 19,
           "document": "scan-form-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -1075,34 +1075,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 27,
+      "duration_ms": 57,
       "top": [
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 29,
+          "chunk": 7,
           "document": "grievance-procedure",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": false,
           "below_floor": false
@@ -1128,34 +1128,34 @@
       "outcome": "top-k",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 33,
+      "duration_ms": 43,
       "top": [
         {
-          "chunk": 33,
+          "chunk": 11,
           "document": "library-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
@@ -1172,45 +1172,45 @@
       "matched": 10,
       "recall": 1.0,
       "precision": 0.2,
-      "reciprocal_rank": 0.2,
-      "ndcg": 0.3869,
+      "reciprocal_rank": 0.25,
+      "ndcg": 0.4307,
       "document_recall": 1.0,
-      "document_reciprocal_rank": 0.2,
+      "document_reciprocal_rank": 0.25,
       "pool_recall": 1.0,
-      "pool_rank": 5,
+      "pool_rank": 4,
       "outcome": "top-k",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 43,
+      "duration_ms": 47,
       "top": [
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 41,
-          "document": "scan-form-fragment",
-          "relevant": false,
+          "chunk": 11,
+          "document": "library-rules",
+          "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 33,
-          "document": "library-rules",
-          "relevant": true,
+          "chunk": 19,
+          "document": "scan-form-fragment",
+          "relevant": false,
           "below_floor": false
         }
       ]
@@ -1237,31 +1237,31 @@
       "duration_ms": 47,
       "top": [
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -1287,34 +1287,34 @@
       "outcome": "ranking",
       "distinct_documents": 3,
       "most_from_one_document": 2,
-      "duration_ms": 59,
+      "duration_ms": 80,
       "top": [
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 38,
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -1331,43 +1331,43 @@
       "matched": 10,
       "recall": 1.0,
       "precision": 0.2,
-      "reciprocal_rank": 1.0,
-      "ndcg": 1.0,
+      "reciprocal_rank": 0.5,
+      "ndcg": 0.6309,
       "document_recall": 1.0,
-      "document_reciprocal_rank": 1.0,
+      "document_reciprocal_rank": 0.5,
       "pool_recall": 1.0,
-      "pool_rank": 1,
-      "outcome": "top1",
+      "pool_rank": 2,
+      "outcome": "top-k",
       "distinct_documents": 3,
       "most_from_one_document": 3,
-      "duration_ms": 71,
+      "duration_ms": 63,
       "top": [
         {
-          "chunk": 32,
-          "document": "it-acceptable-use",
-          "relevant": true,
-          "below_floor": false
-        },
-        {
-          "chunk": 34,
-          "document": "machine-design-notes",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 35,
+          "chunk": 10,
+          "document": "it-acceptable-use",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 38,
+          "chunk": 13,
+          "document": "machine-design-notes",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -1393,34 +1393,34 @@
       "outcome": "top-k",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 57,
+      "duration_ms": 52,
       "top": [
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 43,
+          "chunk": 21,
           "document": "scan-results-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
@@ -1446,34 +1446,34 @@
       "outcome": "top-k",
       "distinct_documents": 3,
       "most_from_one_document": 3,
-      "duration_ms": 122,
+      "duration_ms": 64,
       "top": [
         {
-          "chunk": 38,
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 35,
+          "chunk": 13,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -1499,34 +1499,34 @@
       "outcome": "ranking",
       "distinct_documents": 2,
       "most_from_one_document": 4,
-      "duration_ms": 61,
+      "duration_ms": 66,
       "top": [
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 51,
+          "chunk": 29,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -1552,34 +1552,34 @@
       "outcome": "top-k",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 64,
+      "duration_ms": 57,
       "top": [
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
@@ -1605,34 +1605,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 61,
+      "duration_ms": 65,
       "top": [
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 32,
+          "chunk": 10,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
@@ -1658,34 +1658,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 61,
+      "duration_ms": 60,
       "top": [
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 40,
+          "chunk": 18,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
@@ -1711,34 +1711,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 65,
+      "duration_ms": 61,
       "top": [
         {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
@@ -1755,43 +1755,43 @@
       "matched": 10,
       "recall": 0.0,
       "precision": 0.0,
-      "reciprocal_rank": 0.1667,
+      "reciprocal_rank": 0.1429,
       "ndcg": 0.0,
       "document_recall": 1.0,
       "document_reciprocal_rank": 0.2,
       "pool_recall": 1.0,
-      "pool_rank": 6,
+      "pool_rank": 7,
       "outcome": "ranking",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 53,
+      "duration_ms": 72,
       "top": [
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 51,
-          "document": "staff-attendance-leave",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 39,
-          "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
           "chunk": 29,
+          "document": "staff-attendance-leave",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 17,
+          "document": "placement-policy",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 7,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
@@ -1817,34 +1817,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 50,
+      "duration_ms": 57,
       "top": [
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 36,
+          "chunk": 14,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 44,
+          "chunk": 22,
           "document": "scan-table-fragment",
           "relevant": false,
           "below_floor": false
@@ -1861,43 +1861,43 @@
       "matched": 10,
       "recall": 0.6,
       "precision": 0.6,
-      "reciprocal_rank": 0.5,
-      "ndcg": 0.5296,
+      "reciprocal_rank": 1.0,
+      "ndcg": 0.6548,
       "document_recall": 1.0,
       "document_reciprocal_rank": 1.0,
       "pool_recall": 1.0,
-      "pool_rank": 2,
-      "outcome": "top-k",
+      "pool_rank": 1,
+      "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 55,
+      "duration_ms": 75,
       "top": [
         {
-          "chunk": 25,
+          "chunk": 4,
+          "document": "fee-structure",
+          "relevant": true,
+          "below_floor": false
+        },
+        {
+          "chunk": 3,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 26,
-          "document": "fee-structure",
-          "relevant": true,
-          "below_floor": false
-        },
-        {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 41,
+          "chunk": 19,
           "document": "scan-form-fragment",
           "relevant": false,
           "below_floor": false
@@ -1923,34 +1923,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 47,
+      "duration_ms": 68,
       "top": [
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 33,
+          "chunk": 11,
           "document": "library-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": true,
           "below_floor": false
@@ -1976,34 +1976,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 56,
+      "duration_ms": 57,
       "top": [
         {
-          "chunk": 29,
+          "chunk": 7,
           "document": "grievance-procedure",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
@@ -2029,34 +2029,34 @@
       "outcome": "top-k",
       "distinct_documents": 3,
       "most_from_one_document": 3,
-      "duration_ms": 82,
+      "duration_ms": 55,
       "top": [
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -2082,34 +2082,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 42,
+      "duration_ms": 51,
       "top": [
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
@@ -2138,31 +2138,31 @@
       "duration_ms": 45,
       "top": [
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
@@ -2188,34 +2188,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 45,
+      "duration_ms": 50,
       "top": [
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
@@ -2241,34 +2241,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 46,
+      "duration_ms": 47,
       "top": [
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 28,
-          "document": "grievance-procedure",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 25,
+          "chunk": 3,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 6,
+          "document": "grievance-procedure",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -2294,34 +2294,34 @@
       "outcome": "top-k",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 51,
+      "duration_ms": 54,
       "top": [
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 40,
+          "chunk": 18,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 35,
+          "chunk": 13,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
@@ -2347,34 +2347,34 @@
       "outcome": "top1",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 49,
+      "duration_ms": 62,
       "top": [
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 46,
-          "document": "scholarship-rules",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 25,
+          "chunk": 24,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 3,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 35,
+          "chunk": 13,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -2400,34 +2400,34 @@
       "outcome": "top-k",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 39,
+      "duration_ms": 66,
       "top": [
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 32,
+          "chunk": 10,
           "document": "it-acceptable-use",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 35,
+          "chunk": 13,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 36,
+          "chunk": 14,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -2453,35 +2453,35 @@
       "outcome": "top-k",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 41,
+      "duration_ms": 59,
       "top": [
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 39,
-          "document": "placement-policy",
+          "chunk": 9,
+          "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         }
@@ -2506,34 +2506,34 @@
       "outcome": "top-k",
       "distinct_documents": 2,
       "most_from_one_document": 4,
-      "duration_ms": 37,
+      "duration_ms": 46,
       "top": [
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 51,
+          "chunk": 29,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 27,
+          "chunk": 5,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
@@ -2559,34 +2559,34 @@
       "outcome": "top1",
       "distinct_documents": 1,
       "most_from_one_document": 5,
-      "duration_ms": 35,
+      "duration_ms": 50,
       "top": [
         {
-          "chunk": 35,
+          "chunk": 13,
           "document": "machine-design-notes",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 36,
+          "chunk": 14,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 38,
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 37,
+          "chunk": 15,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -2612,34 +2612,34 @@
       "outcome": "top1",
       "distinct_documents": 3,
       "most_from_one_document": 2,
-      "duration_ms": 41,
+      "duration_ms": 56,
       "top": [
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 40,
+          "chunk": 18,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 38,
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -2665,34 +2665,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 40,
+      "duration_ms": 83,
       "top": [
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
@@ -2718,34 +2718,34 @@
       "outcome": "top1",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 31,
+      "duration_ms": 73,
       "top": [
         {
-          "chunk": 33,
+          "chunk": 11,
           "document": "library-rules",
           "relevant": true,
           "below_floor": false
         },
         {
-          "chunk": 37,
+          "chunk": 15,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
@@ -2771,34 +2771,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 3,
       "most_from_one_document": 2,
-      "duration_ms": 30,
+      "duration_ms": 68,
       "top": [
         {
-          "chunk": 34,
+          "chunk": 12,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 51,
+          "chunk": 29,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 35,
+          "chunk": 13,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
@@ -2824,34 +2824,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 30,
+      "duration_ms": 90,
       "top": [
         {
-          "chunk": 30,
+          "chunk": 8,
           "document": "hostel-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 38,
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
@@ -2877,34 +2877,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 3,
       "most_from_one_document": 3,
-      "duration_ms": 26,
+      "duration_ms": 41,
       "top": [
         {
-          "chunk": 51,
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 29,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 48,
+          "chunk": 26,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 32,
+          "chunk": 10,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
@@ -2930,35 +2930,35 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 33,
+      "duration_ms": 36,
       "top": [
         {
-          "chunk": 38,
+          "chunk": 16,
           "document": "machine-design-notes",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 41,
+          "chunk": 19,
           "document": "scan-form-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 42,
+          "chunk": 20,
           "document": "scan-register-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
-          "document": "academic-regulations",
+          "chunk": 27,
+          "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 46,
-          "document": "scholarship-rules",
+          "chunk": 1,
+          "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         }
@@ -2983,34 +2983,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 40,
+      "duration_ms": 33,
       "top": [
         {
-          "chunk": 39,
+          "chunk": 17,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 23,
+          "chunk": 1,
           "document": "academic-regulations",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 40,
+          "chunk": 18,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
@@ -3036,34 +3036,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 49,
+      "duration_ms": 33,
       "top": [
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 44,
+          "chunk": 22,
           "document": "scan-table-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 32,
+          "chunk": 10,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 43,
+          "chunk": 21,
           "document": "scan-results-fragment",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 41,
+          "chunk": 19,
           "document": "scan-form-fragment",
           "relevant": false,
           "below_floor": false
@@ -3089,34 +3089,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 87,
+      "duration_ms": 32,
       "top": [
         {
-          "chunk": 30,
-          "document": "hostel-regulations",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 47,
-          "document": "scholarship-rules",
-          "relevant": false,
-          "below_floor": false
-        },
-        {
-          "chunk": 26,
+          "chunk": 4,
           "document": "fee-structure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 50,
+          "chunk": 8,
+          "document": "hostel-regulations",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 25,
+          "document": "scholarship-rules",
+          "relevant": false,
+          "below_floor": false
+        },
+        {
+          "chunk": 28,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
@@ -3142,34 +3142,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 5,
       "most_from_one_document": 1,
-      "duration_ms": 70,
+      "duration_ms": 42,
       "top": [
         {
-          "chunk": 28,
+          "chunk": 6,
           "document": "grievance-procedure",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 49,
+          "chunk": 27,
           "document": "staff-attendance-leave",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 24,
+          "chunk": 2,
           "document": "examination-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
@@ -3195,34 +3195,34 @@
       "outcome": "results-for-no-relevant",
       "distinct_documents": 4,
       "most_from_one_document": 2,
-      "duration_ms": 105,
+      "duration_ms": 53,
       "top": [
         {
-          "chunk": 46,
+          "chunk": 24,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 40,
+          "chunk": 18,
           "document": "placement-policy",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 52,
+          "chunk": 30,
           "document": "transport-circular",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 47,
+          "chunk": 25,
           "document": "scholarship-rules",
           "relevant": false,
           "below_floor": false
         },
         {
-          "chunk": 31,
+          "chunk": 9,
           "document": "it-acceptable-use",
           "relevant": false,
           "below_floor": false
