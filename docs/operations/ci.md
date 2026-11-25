@@ -26,10 +26,18 @@ deploy instead of stopping it.
 
 ## What has actually been executed
 
-**The workflow has never run on GitHub Actions** — the repository has no remote. Each
-job's commands have been executed locally, which proves the commands, not the YAML.
-actionlint 1.7.7 (with shellcheck) finds no errors in the YAML, only two style warnings
-about an unused loop counter.
+**The workflow runs on GitHub Actions.** The repository's `main` branch was brought up to
+the live code on 2026-11-25, and run 45667470875 passed every job: lint, security, unit and
+integration tests, frontend, the browser suite against a live stack, the AI regression gates
+(v1, v2, v3 and search relevance) and the image builds. The three deploy jobs are
+placeholders. The first run on that code failed three gates, each fixed rather than relaxed:
+bandit 1.9's new findings, a browser spec that used `.xls` as the unreadable file after `.xls`
+became readable, and a quoting regression the v3 gate caught; the search-relevance baseline
+was re-measured after a bisect showed the extraction changes of 2026-11-15..17 had moved it
+(see the commit that re-baselined it).
+
+Before that, the job commands had been executed locally only (below), which proves the
+commands, not the YAML.
 
 Latest local run: 2026-10-12, on `release/pilot` at 9f2772b, each job's steps from a clean
 `git archive` of the commit, with the workflow's environment values, against a disposable

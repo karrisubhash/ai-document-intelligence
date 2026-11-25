@@ -47,7 +47,7 @@ The sections follow that order.
 |---|---|---|
 | Code | **COMPLETE** for a single-host pilot | Nothing is missing for the pilot scope. Multi-host operation, SSO and a hosted answerer are outside it |
 | Local verification | **COMPLETE**, re-run 2026-10-12 | 1,142 backend tests, both in the release image and in CI's environment; 88 AI-suite and 61 frontend tests; both AI gates at their baselines; the migration graph along every upgrade path; the e2e job as CI runs it, 7 passed and 1 skipped by design. Backup, restore and rollback last rehearsed 2026-10-06; browser suite 8/8 through nginx over TLS last run 2026-10-10 |
-| CI | **NOT YET VERIFIED** | There is no GitHub repository, so the workflow has never run. actionlint finds no errors in it, and every job's commands pass locally (2026-10-12) |
+| CI | **VERIFIED** | Every job passed on GitHub Actions on `main` on 2026-11-25 (run 45667470875); before that the job commands had passed locally (2026-10-12) |
 | Staging | **BLOCKED** | It needs a server, a hostname and DNS, and the institution's before-staging decisions. No code change is required |
 | Production | **BLOCKED** | It needs staging to pass, plus the before-pilot decisions |
 | AI | **NEEDS REAL DATA** | The engineering is ready for a pilot: grounded, permission-filtered, and it declines rather than guesses. Quality on the institution's documents is unmeasured |
@@ -224,7 +224,7 @@ history. On a disposable database:
 
 | Item | Needs | How it gets verified |
 |---|---|---|
-| CI on GitHub | a GitHub repository | a first green run of all 10 jobs |
+| CI on GitHub | done | first green run of all jobs on 2026-11-25 (run 45667470875) |
 | Deployment on a real server | a server | [staging runbook](staging-runbook.md), steps 1–19 |
 | Let's Encrypt issuance and renewal | a public hostname, ports 80 and 443 open | the [TLS test plan](staging-runbook.md#tls-test-plan), T1–T11 |
 | Off-host backup | a destination and an encryption key | staging step 16, then restore from the off-host copy |

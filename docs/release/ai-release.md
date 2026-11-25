@@ -11,7 +11,7 @@ were measured on one laptop, on **synthetic** documents ([datasets](../data/data
 |---|---|---|
 | Question | Does the machinery behave as designed? | Are the answers right for *this institution's* documents and questions? |
 | Evidence | Over 2,000 backend tests; a browser suite through nginx over TLS; four evaluation gates (v1, v2, v3 and the Search gate) that fail CI on any regression; a calibration run on a separate development set | Synthetic benchmarks only: v2 (57 questions over 9 documents) and v3 (32 questions over 11 documents), and nothing on the institution's own documents |
-| Status | **Verified locally** (CI itself has never run on GitHub) | **Unknown for real institutional use** |
+| Status | **Verified locally and in CI** (green on GitHub, 2026-11-25) | **Unknown for real institutional use** |
 
 The engineering guarantees hold whatever the documents are:
 
