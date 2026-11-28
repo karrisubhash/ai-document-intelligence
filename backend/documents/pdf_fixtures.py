@@ -27,6 +27,12 @@ FONTS = {
     "F4": "Symbol",
 }
 
+# Fonts no viewer ships, with the widths a file gives for one it expects to
+# embed. A legacy Telugu font's name carries a subset tag, as in a real file.
+UNSHIPPED_FONTS = {
+    "F5": "ABCDEF+Prabhava",
+}
+
 # A spot colour, as a print layout program writes one: a Separation colour
 # space whose single component is the tint, 1 being full ink. For
 # Page(resources=SPOT_COLOUR) and rule(..., colour="/CS0 CS 1 SCN").
@@ -249,6 +255,17 @@ def build(pages) -> bytes:
     font_numbers = {
         name: add(f"<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>".encode())
         for name, base in FONTS.items()
+    }
+    widths = " ".join(["500"] * 95)
+    font_numbers |= {
+        name: add(
+            f"<< /Type /Font /Subtype /Type1 /BaseFont /{base} "
+            f"/FirstChar 32 /LastChar 126 /Widths [{widths}] "
+            f"/FontDescriptor << /Type /FontDescriptor /FontName /{base} /Flags 32 "
+            "/FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 "
+            "/CapHeight 700 /StemV 80 >> >>".encode()
+        )
+        for name, base in UNSHIPPED_FONTS.items()
     }
     font_dict = " ".join(
         f"/{name} {number} 0 R" for name, number in font_numbers.items()

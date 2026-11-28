@@ -412,6 +412,73 @@ class UnusableTextLayerTests(SimpleTestCase):
         self.assertEqual(pdf._garbled(words, []), "")
 
 
+class LegacyFontTests(SimpleTestCase):
+    """Telugu and Hindi fonts made before Unicode draw their glyphs from Latin
+    code points, so the text layer is English-looking gibberish that no
+    unmapped-glyph check can see. Live: a 792-page Telugu PDF in Prabhava."""
+
+    MOJIBAKE = "vkarZ; gS dh lkekU; izfdz;k ds vuqlkj fo|kFkhZ"
+
+    def fake_page(self, *glyphs):
+        chars = [{"text": text, "fontname": font} for text, font in glyphs]
+        return mock.Mock(chars=chars)
+
+    def test_a_page_set_in_a_legacy_telugu_font_is_deferred_to_ocr(self):
+        page = fx.Page().text(72, 100, self.MOJIBAKE, font="F5")
+
+        (result,) = run(page)
+
+        self.assertTrue(result.needs_ocr)
+        self.assertEqual(result.text, "")
+        reason = result.metadata["ocr_reason"]
+        self.assertIn("legacy Telugu font (prabhava)", reason)
+        self.assertIn("needs the tel language", reason)
+
+    def test_an_english_page_with_a_short_legacy_quotation_keeps_its_text(self):
+        page = fx.Page().lines(
+            72,
+            100,
+            [
+                "The committee met on Tuesday and reviewed the attendance policy",
+                "for every course offered in the current academic year.",
+            ],
+        )
+        page.text(72, 140, "gS dh", font="F5")
+
+        (result,) = run(page)
+
+        self.assertFalse(result.needs_ocr)
+        self.assertIn("The committee met on Tuesday", result.text)
+
+    def test_a_page_mostly_in_a_legacy_font_is_deferred_whole(self):
+        page = fx.Page().text(72, 100, "Chapter 1", font="F1")
+        page.text(72, 130, self.MOJIBAKE, font="F5")
+
+        (result,) = run(page)
+
+        self.assertTrue(result.needs_ocr)
+
+    def test_the_font_is_recognised_through_its_subset_tag_and_spacing(self):
+        for font in ("ABCDEF+Prabhava", "Prabhava-Bold", "XYZABC+Kruti Dev 010"):
+            with self.subTest(font=font):
+                page = self.fake_page(*[("a", font)] * 20)
+                self.assertTrue(pdf._legacy_font(page))
+
+    def test_text_already_mapped_to_unicode_is_not_condemned(self):
+        # A legacy-named font with a ToUnicode map yields real Telugu, and
+        # OCR would only read it worse.
+        telugu = [("అ", "ABCDEF+Prabhava")] * 20
+        hindi = [("अ", "KrutiDev010")] * 20
+
+        self.assertEqual(pdf._legacy_font(self.fake_page(*telugu)), "")
+        self.assertEqual(pdf._legacy_font(self.fake_page(*hindi)), "")
+
+    def test_an_ordinary_font_is_not_a_legacy_font(self):
+        page = self.fake_page(*[("a", "ABCDEF+TimesNewRomanPSMT")] * 20)
+
+        self.assertEqual(pdf._legacy_font(page), "")
+
+
 class PictureTests(SimpleTestCase):
     def picture_page(self, *, text_over_it=False):
         page = fx.Page().text(72, 60, "Scanned insert follows", size=12)

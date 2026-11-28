@@ -576,8 +576,11 @@ Stages:  INGESTION → SCANNING → VALIDATION → TEXT_EXTRACTION → OCR
   in a TIFF), proves the PDF parses, and refuses decompression bombs in any Office file.
 - **TEXT_EXTRACTION** — reads the text layer per page (see
   [How each format is read](#how-each-format-is-read)). A page whose layer is absent, or
-  unreadable (unmapped glyphs, replacement characters), is left unclaimed with the reason
-  recorded, rather than silently blanked or stored as garbage.
+  unreadable (unmapped glyphs, replacement characters, or set in a legacy Telugu or Hindi font such
+  as Prabhava or Kruti Dev, whose "text" is Latin gibberish), is left unclaimed with the reason
+  recorded, rather than silently blanked or stored as garbage. Reading such a page needs the
+  matching OCR language (`OCR_LANGUAGES=eng+tel+hin`, built with `TESSERACT_LANGS="tel hin"`);
+  without it the document fails as `EMPTY_EXTRACTION` and says why.
 - **OCR** — claims exactly those pages, rendering one page at a time to keep memory bounded.
   Keeping the two paths separate makes each independently measurable.
 - **LAYOUT_ANALYSIS** — last in the content phase, because it reads the finished page text:

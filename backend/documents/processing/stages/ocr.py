@@ -156,7 +156,8 @@ def _with_figure_reading(context, page, result) -> tuple:
 
 def _require_some_text(context) -> None:
     if not any(page.has_text for page in context.pages):
-        raise StageError(
-            "No text could be extracted from the document.",
-            code=ErrorCode.EMPTY_EXTRACTION,
-        )
+        message = "No text could be extracted from the document."
+        reasons = {str(page.metadata.get("ocr_reason", "")) for page in context.pages}
+        if legacy := next((r for r in sorted(reasons) if r.startswith("legacy")), ""):
+            message += f" Its pages were passed to OCR because of a {legacy}."
+        raise StageError(message, code=ErrorCode.EMPTY_EXTRACTION)

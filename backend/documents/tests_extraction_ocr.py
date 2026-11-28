@@ -23,6 +23,7 @@ from documents.processing.context import (
     IngestionContext,
     PageTable,
 )
+from documents.processing.errors import ErrorCode, StageError
 from documents.processing.extractors import geometry, ocr
 from documents.processing.stages import ingestion, text_extraction
 from documents.processing.stages import ocr as ocr_stage
@@ -675,3 +676,24 @@ class OcrStageTests(SimpleTestCase):
         self.assertEqual(page.metadata["rotation"], 90)
         self.assertEqual(page.metadata["extractor"], "tesseract")
         self.assertEqual(page.metadata["ocr_reason"], "no text layer")
+
+    def test_a_legacy_font_document_ocr_could_not_read_says_why(self):
+        reason = "legacy Telugu font (prabhava): its text layer is not readable text"
+        context = self.context()
+        context.pages[0].metadata = {"ocr_reason": reason}
+
+        with mock.patch.object(ocr, "ocr_pdf_page", return_value=ocr.OcrPage()):
+            with self.assertRaises(StageError) as raised:
+                ocr_stage.run(context)
+
+        self.assertEqual(raised.exception.code, ErrorCode.EMPTY_EXTRACTION)
+        self.assertIn("legacy Telugu font (prabhava)", str(raised.exception))
+
+    def test_a_blank_scan_keeps_the_plain_message(self):
+        with mock.patch.object(ocr, "ocr_pdf_page", return_value=ocr.OcrPage()):
+            with self.assertRaises(StageError) as raised:
+                ocr_stage.run(self.context())
+
+        self.assertEqual(
+            str(raised.exception), "No text could be extracted from the document."
+        )

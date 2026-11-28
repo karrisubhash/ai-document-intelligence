@@ -34,6 +34,7 @@ reading the image dictionary for figure detection.
 """
 
 import dataclasses
+import functools
 import math
 import re
 from collections import Counter
@@ -104,6 +105,20 @@ PRIVATE_USE_SHARE = 0.3
 # bad page); only "nothing readable at all" condemns a page that short.
 MIN_GLYPHS_FOR_SHARE = 8
 _CID = re.compile(r"\(cid:\d+\)")
+
+# Pre-Unicode Telugu and Devanagari fonts draw their glyphs from Latin code points.
+# Each maps to its script and the Tesseract language pack that reads it.
+LEGACY_FONT_FAMILIES = {
+    "prabhava": ("Telugu", "tel"),
+    "vasantha": ("Telugu", "tel"),
+    "krutidev": ("Hindi", "hin"),
+    "devlys": ("Hindi", "hin"),
+    "chanakya": ("Hindi", "hin"),
+}
+# A page is deferred to OCR when this share of its glyphs is such a font's Latin text.
+LEGACY_FONT_SHARE = 0.3
+_FONT_SUBSET_TAG = re.compile(r"^[A-Z]{6}\+")
+_FIRST_INDIC_CODE_POINT = 0x0900
 
 # A picture is worth OCR when it covers this much of the page and almost no
 # text-layer word sits on it. A scanned page that already carries an OCR text
@@ -250,6 +265,14 @@ class _Budget:
 
 def _extract_page(page, region_ocr, budget, dpi, figures=None) -> PdfPage:
     metadata: dict = {}
+
+    if legacy := _legacy_font(page):
+        script, pack = LEGACY_FONT_FAMILIES[legacy]
+        reason = (
+            f"legacy {script} font ({legacy}): its text layer is not readable text, "
+            f"so it is read by OCR, which needs the {pack} language"
+        )
+        return PdfPage(needs_ocr=True, metadata={"ocr_reason": reason})
 
     # A landscape table drawn sideways has its text running down or up the
     # sheet in the file's own coordinates. Its words are turned into the
@@ -685,6 +708,33 @@ def _words(page, table_boxes, direction: str, votes: Counter) -> tuple:
             if group:
                 odd.append(group)
     return upright, odd
+
+
+@functools.cache
+def _legacy_family(fontname: str) -> str:
+    name = re.sub(r"[^a-z0-9]", "", _FONT_SUBSET_TAG.sub("", fontname).lower())
+    return next((family for family in LEGACY_FONT_FAMILIES if family in name), "")
+
+
+def _legacy_font(page) -> str:
+    """The legacy-encoded font most of this page is set in, or "" when it is not.
+
+    Text a font's ToUnicode map already turned into Telugu or Devanagari is
+    readable and is not counted.
+    """
+    glyphs = 0
+    legacy: Counter = Counter()
+    for char in page.chars:
+        text = char["text"]
+        if not text or text.isspace():
+            continue
+        glyphs += 1
+        if ord(text[0]) < _FIRST_INDIC_CODE_POINT:
+            if family := _legacy_family(char.get("fontname") or ""):
+                legacy[family] += 1
+    if not legacy or sum(legacy.values()) < LEGACY_FONT_SHARE * glyphs:
+        return ""
+    return legacy.most_common(1)[0][0]
 
 
 def _garbled(words, ruled) -> str:
