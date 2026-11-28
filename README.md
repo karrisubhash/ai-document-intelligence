@@ -1,37 +1,185 @@
 # AI Document Intelligence Platform
 
-A self-hosted platform for an institution (a college or university organised into departments).
-It lets the institution:
+[![CI](https://github.com/karrisubhash/ai-document-intelligence/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/karrisubhash/ai-document-intelligence/actions/workflows/ci.yml)
+**[Live site](https://adi-docs.koreacentral.cloudapp.azure.com)** ·
+[Architecture](#architecture) · [Key decisions](#key-engineering-decisions) ·
+[Quick start](#quick-start) · [Full documentation](#reference-documentation)
 
-- upload its documents: regulations, policies, syllabi, circulars, forms, spreadsheets, slide
-  decks and scanned pages, in most office formats;
-- have each one read, understood and indexed automatically;
-- search everything a person is allowed to see;
-- **ask questions that are answered with citations to the exact page and passage**, or declined
-  when the documents do not say.
+A self-hosted document search and question-answering platform for an institution organised into
+departments, such as a college or university. People upload regulations, policies, syllabi,
+circulars, forms, spreadsheets, slide decks and scanned pages, in most office formats; a Celery
+pipeline extracts the text (with OCR for scans), detects each document's type, pulls out
+structured fields and indexes every page. Users then **search everything they are allowed to
+see**: PostgreSQL full-text search and, with an embedding model configured, pgvector similarity,
+fused by reciprocal-rank fusion and optionally reranked by a cross-encoder. They can also **ask
+questions in a chat that answers with numbered citations to the exact page and passage**, or
+declines and says why when the documents do not support an answer. Access is scoped to the user's department, and every AI component has an
+offline baseline, so the whole system runs without any external AI service.
 
-The stack:
+## Architecture
 
-- a Django + Celery backend;
-- a React web application;
-- PostgreSQL with pgvector;
-- Redis;
-- Docker Compose behind nginx.
+A modular monolith ([why](#why-one-service)): one Django service, Celery workers on two queues,
+PostgreSQL with pgvector as the only database, Redis, and nginx at the edge. Details:
+[§3 Architecture](#3-architecture), [§8 Search](#8-search),
+[§9 Asking questions](#9-asking-questions-rag-and-chat).
+
+```mermaid
+flowchart LR
+    B["Browser<br/>React + TypeScript SPA"] -->|HTTPS| N["nginx<br/>TLS · CSP · rate limits"]
+    N -->|"/api/v1"| API["Django + DRF<br/>gunicorn"]
+    API -->|enqueue on commit| R[("Redis<br/>broker · cache")]
+    R --> W1["Celery worker · ingest<br/>scan → extract → OCR → classify<br/>→ fields → chunk + embed"]
+    R --> W2["Celery worker · index<br/>briefs · re-embedding · thumbnails"]
+    API <--> DB[("PostgreSQL 16 + pgvector<br/>versions · pages · chunks<br/>vectors (HNSW) · audit log")]
+    W1 --> DB
+    W2 --> DB
+    API -.->|optional| LLM["Hosted LLMs<br/>Gemini · Groq · OpenRouter · Claude"]
+```
+
+How a question is answered:
+
+```mermaid
+flowchart LR
+    Q[Question] --> P["visible_documents(user)<br/>permission filter first"]
+    P --> L["Lexical<br/>Postgres full-text"]
+    P --> V["Vector<br/>pgvector cosine"]
+    L --> F["Reciprocal-rank<br/>fusion, k = 60"]
+    V --> F
+    F --> RR["Rerank<br/>(cross-encoder)"]
+    RR --> AN["Answerer<br/>verbatim quote or LLM"]
+    AN --> G{"Grounded in the<br/>cited passages?"}
+    G -->|yes| OK["Answer + citations<br/>(page, passage)"]
+    G -->|no| AB["Abstain,<br/>with a reason"]
+```
+
+## Screenshots
+
+| Ask: a cited answer | Search: retrieved passages | Documents: uploads and status |
+|---|---|---|
+| [![Ask page: an answer quoting the 75 percent attendance rule, cited to page 1 of Academic Regulations R20](docs/screenshots/ask-answer.png)](docs/screenshots/ask-answer.png) | [![Search page: keyword and semantic results ranked by relevance, grouped by document, matched terms highlighted](docs/screenshots/search-results.png)](docs/screenshots/search-results.png) | [![Documents page: the sample library with type, department, owner and Ready status](docs/screenshots/documents.png)](docs/screenshots/documents.png) |
+
+Captured from a local `docker compose` run of this repository with the bundled sample library
+(16 synthetic documents, loaded by `seed_demo`) and the embedding and reranking settings of the
+[recommended pilot configuration](#recommended-pilot-configuration): local `bge-small-en-v1.5`
+embeddings, the MiniLM cross-encoder, and the default extractive answerer, which quotes the
+documents verbatim. Click an image for full size.
+
+## Live demo
+
+**<https://adi-docs.koreacentral.cloudapp.azure.com>** is the public site: the production Compose
+stack on one 2 vCPU / 8 GB host since 2026-10-23, with the
+[small-server profile](docs/deployment/production.md#small-server-profile), a Let's Encrypt
+certificate renewed by certbot, and Gemini's free tier answering questions.
+
+Signing in needs an account. With self-service sign-up on (the default), visitors can request
+one from the landing page and an administrator approves it. When the one-click demo is switched
+on (`DEMO_ENABLED`), the landing page also offers **Try the live demo**: a read-only guest
+account that is deleted after 3 hours
+([details](docs/deployment/production.md#the-landing-page-the-public-demo-and-sample-content)).
+To see every screen without an account, run it locally with the [quick start](#quick-start).
+
+## Tech stack
+
+| Layer | Technologies |
+|---|---|
+| Backend | Python 3.12, Django 6.1, Django REST Framework 3.18, Celery 5.6, gunicorn |
+| Data | PostgreSQL 16 + pgvector (HNSW index), PostgreSQL full-text search (GIN index), Redis 7 |
+| Document AI | pdfplumber + pypdf, Tesseract OCR, python-docx, openpyxl, python-pptx, LibreOffice (old Office formats) |
+| Retrieval and ML (optional) | sentence-transformers on CPU PyTorch: `bge-small-en-v1.5` embeddings, MiniLM / `bge-reranker-base` cross-encoders; scikit-learn classifier |
+| LLMs (optional) | OpenAI-compatible providers (Gemini, Groq, OpenRouter, Cerebras, Mistral, Ollama, OpenAI) behind one gateway; Claude via the Anthropic API or Amazon Bedrock |
+| Frontend | React 19, TypeScript, Vite 6, React Router 7; Vitest + Testing Library; Playwright |
+| Infrastructure | Docker Compose, nginx, Let's Encrypt, Prometheus + Grafana, OpenTelemetry (optional), GitHub Actions |
+
+Pinned versions: [§23 Technology stack](#23-technology-stack).
+
+## Key engineering decisions
+
+- **Authorization before similarity.** Search builds its candidate set from
+  `visible_documents(user)` before anything is ranked, so search, chat and citations only ever
+  rank passages the user could open; there is no "retrieve, then filter" path for a leak to hide
+  in. A document the caller may not read returns a 404 identical to a missing id's
+  ([§11](#authorization)).
+- **Hybrid retrieval fused by rank, not score.** Full-text and pgvector cosine search each
+  return up to 50 candidates, merged with reciprocal-rank fusion (k = 60), because a text rank
+  and a cosine distance are not on comparable scales. If the query cannot be embedded, search
+  continues lexically and says so ([§8](#hybrid-retrieval)).
+- **Cross-encoder reranking with calibrated floors.** The top 20 fused candidates are reranked
+  and passages under a per-model relevance floor are left out. The small MiniLM cross-encoder was
+  chosen over `bge-reranker-base` after measurement: about 10× faster on CPU and a better ranker
+  on the synthetic v2 benchmark ([§17](#current-results)).
+- **Abstain rather than answer unverified.** Every answer is checked against the passages it
+  cites: each `[n]` must resolve, and every number, date and identifier it states must appear in
+  a cited passage. A model's answer with unsupported figures is sent back once, told which
+  figures it could not support; if any check still fails, the answer becomes an abstention with
+  a recorded reason, never an answer with a warning
+  ([§9](#grounding-answers-are-verified-not-trusted)).
+- **Celery time budgets that follow the document.** Base limits are 900 s soft / 960 s hard; a
+  PDF gets 5 s more per page, up to 6 hours, and is re-queued once with the larger limits after
+  its page count is read. `acks_late` with a prefetch of 1, a Redis visibility timeout longer than
+  any task, and 30-second heartbeats from the OCR and embedding loops let `recover_stalled_jobs`
+  reclaim lost jobs without touching slow ones ([§7](#failure-handling)).
+- **Idempotent processing and reprocessing.** A retried job deletes what its earlier attempt
+  wrote, in the transaction that writes the replacement, so there are no duplicate chunks or
+  embeddings. Reprocessing writes a new extraction pass beside the old one and moves
+  `DocumentVersion.current_content` to it only once it has its chunks and vectors, so search
+  never sees a half-built pass; it answers 409 while a run is active. Uploads accept an
+  `Idempotency-Key` ([§12](#conventions)).
+- **Offline baselines, visible degradation.** Embeddings, rerankers, answerers, scanners and
+  classifiers are selected by a dotted path in settings and sit behind protocols. The default
+  install needs no external AI service: its extractive answerer quotes sentences verbatim.
+  OpenAI-compatible models are called through one gateway with a daily budget shared in Redis,
+  and any hosted-model failure falls back to quoting, with a note on the answer
+  ([§9](#the-llm-gateway)).
+
+## Quick start
+
+Needs Docker with Compose v2 and Node 22.
+
+```bash
+cp .env.example .env              # set DJANGO_SECRET_KEY and POSTGRES_PASSWORD
+docker compose up --build         # db, redis, backend (migrates, serves :8000), worker
+docker compose exec backend python manage.py createsuperuser
+docker compose exec backend python manage.py seed_demo --department Demo   # optional: 16 sample documents
+
+cd frontend && npm install && npm run dev   # http://localhost:5173, proxied to the API
+```
+
+Sign in as the superuser, upload a document or load the samples, then search and ask, for
+example *"What is the attendance minimum?"*. Optional AI layers (local embeddings and
+cross-encoder, hosted LLMs), running without Docker and Windows notes:
+[§5 Getting started](#5-getting-started).
+
+## Testing
+
+| Layer | Runs against | Command |
+|---|---|---|
+| Backend unit + integration (over 2,000 tests) | Real PostgreSQL + pgvector, Celery eager | `docker compose run --rm -T -e LOG_LEVEL=ERROR backend python manage.py test --noinput` |
+| AI workspace | No Django or database | `PYTHONPATH=. python -m unittest discover -s ai/classification/tests -t .` |
+| Frontend unit + component | jsdom, mocked API | `cd frontend && npm run typecheck && npm test` |
+| Browser end-to-end (Playwright) | A live stack | [§16](#the-browser-suite) |
+| Retrieval and answer quality | Synthetic benchmarks vs committed baselines | `python manage.py evaluate … --fail-on-regression` ([§17](#the-regression-gate)) |
+
+CI is a 10-job GitHub Actions workflow: lint, backend and AI tests, frontend, end-to-end,
+security checks, the AI regression gate and the image build, plus three deploy jobs that are
+still placeholders ([§21](#21-cicd)). Regression tests are written to fail without their fix.
+
+## Reference documentation
+
+Everything below is the full technical reference. **New here?** Read sections
+[1](#1-what-the-platform-does) to [4](#4-repository-map), about 20 minutes. Then
+[run it](#5-getting-started). The rest is a reference: use the contents list to find what you
+need.
 
 Every AI component is pluggable and has an offline baseline. That covers OCR, classification,
 field extraction, embeddings, reranking and answering. The whole system therefore runs with no
 external AI service. Two optional hosted layers sit on top and fall back to that baseline: answers
 written by a chain of language-model providers, and figures read by a vision model.
 
-> **New here?** Read sections [1](#1-what-the-platform-does) to [4](#4-repository-map), about
-> 20 minutes. Then [run it](#5-getting-started). The rest of this file is a reference: use the
-> contents list to find what you need.
->
-> Two other places help. [`docs/`](docs/README.md) has a deeper page on each topic.
-> [docs/architecture/design-history.md](docs/architecture/design-history.md) records *why*
-> things are the way they are, and the defects and measurements behind each decision.
+Two other places help. [`docs/`](docs/README.md) has a deeper page on each topic.
+[docs/architecture/design-history.md](docs/architecture/design-history.md) records *why* things
+are the way they are, and the defects and measurements behind each decision.
 
-## Contents
+### Contents
 
 1. [What the platform does](#1-what-the-platform-does)
 2. [Status at a glance](#2-status-at-a-glance)
