@@ -55,6 +55,7 @@ services:
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
         INSTALL_OTEL: "${INSTALL_OTEL:-false}"
+        TESSERACT_LANGS: "${TESSERACT_LANGS:-}"
     command: python manage.py migrate --noinput
     env_file:
       - .env
@@ -78,6 +79,7 @@ services:
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
         INSTALL_OTEL: "${INSTALL_OTEL:-false}"
+        TESSERACT_LANGS: "${TESSERACT_LANGS:-}"
     restart: unless-stopped
 
     # Every flag stays at the SAME indentation as `gunicorn`.
@@ -196,6 +198,7 @@ services:
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
         INSTALL_OTEL: "${INSTALL_OTEL:-false}"
+        TESSERACT_LANGS: "${TESSERACT_LANGS:-}"
     restart: unless-stopped
 
     # --max-tasks-per-child recycles workers so a slow leak in a native
@@ -262,6 +265,7 @@ services:
         INSTALL_LOCAL: "true"
         INSTALL_S3: "${INSTALL_S3:-false}"
         INSTALL_OTEL: "${INSTALL_OTEL:-false}"
+        TESSERACT_LANGS: "${TESSERACT_LANGS:-}"
     restart: unless-stopped
 
     command: >
