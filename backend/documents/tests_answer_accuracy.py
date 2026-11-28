@@ -281,6 +281,44 @@ class GroundingFixTests(Base):
         self.assertIn("99", report.unsupported_facts)
 
 
+class GluedIsbnTests(Base):
+    BOOKS = (
+        "Reference books: Higher Engineering Mathematics, K. A. Stroud, "
+        "ISBN-13: 978-81-203-4567-8, Prentice Hall."
+    )
+
+    def test_an_isbn_with_its_length_label_glued_on_is_that_isbn(self):
+        # Live (2026-11-26): a model wrote "ISBN-13978-81-..." for "ISBN-13:
+        # 978-81-...", the answer was refused twice for a figure no passage
+        # had, and the reader got a bare quote.
+        for written in (
+            "ISBN 13978-81-203-4567-8",
+            "ISBN-13978-81-203-4567-8",
+            "ISBN13978-81-203-4567-8",
+            "ISBN-13:978-81-203-4567-8",
+        ):
+            with self.subTest(written=written):
+                self.accepted(
+                    f"The reference book is Stroud's Higher Engineering Mathematics, "
+                    f"{written} [1].",
+                    self.BOOKS,
+                )
+
+    def test_a_different_isbn_is_still_refused(self):
+        self.rejected(
+            "The reference book is Stroud's, ISBN 13978-81-203-9999-9 [1].",
+            self.BOOKS,
+            figure="978-81-203-9999-9",
+        )
+
+    def test_a_number_that_is_not_an_isbn_stays_whole(self):
+        self.rejected(
+            "The hall seats 13978 students [1].",
+            "The hall seats 978 students.",
+            figure="13978",
+        )
+
+
 # --- Quoting a table of labelled rows ---------------------------------------
 
 FEES = "\n".join(

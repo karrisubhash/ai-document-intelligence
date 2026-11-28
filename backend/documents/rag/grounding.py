@@ -222,6 +222,11 @@ GLUED_UNIT = re.compile(
 )
 # "2nd/3rd": two figures.
 GLUED_ORDINALS = re.compile(r"\d+(?:st|nd|rd|th)(?:/\d+(?:st|nd|rd|th))+")
+# An ISBN-13 with its length label run onto it: "ISBN-13978-81-203-4567-8" for
+# "ISBN-13: 978-81-203-4567-8". The "13" is the label, not a digit of the
+# number, and what is left must be a whole ISBN-13 (978 or 979, then ten more
+# digits), so "13978" on its own stays one figure.
+GLUED_ISBN = re.compile(r"(?:isbn)?-?13[-:]?(97[89](?:-?\d){10})")
 
 
 def _numeric_core(fact: str):
@@ -241,6 +246,8 @@ def _split_glued(raw: str) -> list:
         return [match.group(1)]
     if GLUED_ORDINALS.fullmatch(token):
         return token.split("/")
+    if isbn := GLUED_ISBN.fullmatch(token):
+        return [isbn.group(1)]
     return [token]
 
 
