@@ -305,6 +305,31 @@ class ScanStageTests(TestCase):
         client.force_authenticate(reviewer)
         self.assertEqual(client.get(url).status_code, status.HTTP_200_OK)
 
+    def test_a_file_cannot_be_downloaded_by_a_colleague_until_it_is_scanned(self):
+        """A new upload was downloadable by the whole department while its
+        scan was still queued, so a flagged file could be pulled before the
+        verdict. The uploader and an administrator may still fetch it."""
+        document, _ = self.upload(b"Attendance minimum is 75 percent.\n")
+        url = reverse("document-download", args=[document.id])
+        colleague = make_user("scan_colleague2", department="Registry")
+        client = APIClient()
+
+        for in_flight in (
+            Document.Status.UPLOADED,
+            Document.Status.QUEUED,
+            Document.Status.PROCESSING,
+        ):
+            Document.objects.filter(pk=document.pk).update(status=in_flight)
+            with self.subTest(status=in_flight):
+                client.force_authenticate(colleague)
+                self.assertEqual(client.get(url).status_code, status.HTTP_409_CONFLICT)
+                client.force_authenticate(self.user)
+                self.assertEqual(client.get(url).status_code, status.HTTP_200_OK)
+
+        Document.objects.filter(pk=document.pk).update(status=Document.Status.COMPLETED)
+        client.force_authenticate(colleague)
+        self.assertEqual(client.get(url).status_code, status.HTTP_200_OK)
+
     def quarantine(self):
         document, job = self.upload(EICAR, name="eicar.txt")
         with override_settings(DOCUMENT_SCANNER=SCANNER):

@@ -61,6 +61,12 @@ from .serializers import (
 
 logger = logging.getLogger("adi.documents")
 
+IN_FLIGHT_STATUSES = (
+    Document.Status.UPLOADED,
+    Document.Status.QUEUED,
+    Document.Status.PROCESSING,
+)
+
 
 def _live_content(version):
     """The extraction pass retrieval answers from, for this version.
@@ -856,6 +862,22 @@ class DocumentViewSet(viewsets.ModelViewSet):
                     "cannot be downloaded. An administrator can review it."
                 },
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # The version being processed has no scan verdict yet. Only its
+        # uploader and an administrator may fetch it until the run is over.
+        unscanned = (
+            version.pk == document.current_version_id
+            and document.status in IN_FLIGHT_STATUSES
+        )
+        if (
+            unscanned
+            and version.uploaded_by_id != request.user.id
+            and not authorization.is_system_admin(request.user)
+        ):
+            return Response(
+                {"detail": "This file is still being scanned. Try again shortly."},
+                status=status.HTTP_409_CONFLICT,
             )
 
         return FileResponse(
